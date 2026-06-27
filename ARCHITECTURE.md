@@ -1,0 +1,38 @@
+# IBG Testbed Architecture
+
+## Current system
+
+`IBG/` is a working pure-Python simulation. Its active path is the small-scale, decoupled per-stage IBG: `main.py` constructs flows and replicas, `claude.py` computes per-stage policy/utility grids, `header.py` contains the replica, learning, embedding, and metric logic, and `report.py` writes experiment metrics. The separate budgeted/coupled code is not part of the current migration.
+
+## Target testbed
+
+```text
+Windows 11
+  -> WSL2 Ubuntu + Docker Desktop
+    -> kind cluster
+      -> 1 control-plane node
+      -> 2 worker nodes
+        -> Stage 1 StatefulSet: 30 HTTP CNF Pods
+        -> Stage 2 StatefulSet: 30 HTTP CNF Pods
+        -> Stage 3 StatefulSet: 30 HTTP CNF Pods
+      -> Python IBG controller Pod
+      -> lightweight flow-generator Pod
+```
+
+The three kind nodes are cluster machines; the three stage StatefulSets are workloads scheduled across the two workers. Each StatefulSet uses stable Pod ordinals to map directly to `(stage, replica)` and does not use persistent volumes.
+
+## Runtime flow
+
+1. The controller discovers healthy replica Pods and their stable identities through the Kubernetes API.
+2. A slot admits 15 logical flows in one randomized sequential order.
+3. The unchanged decoupled solver selects one replica at each of the three stages for every flow.
+4. The controller records/applies those assignments.
+5. The flow generator exercises the selected three-Pod paths concurrently through lightweight HTTP requests.
+6. Only selected replicas return per-request signals such as latency and concurrent load.
+7. The controller updates replica beliefs using the existing learning rule and records utility, SLA, fairness, timing, placement, and belief results.
+
+The HTTP Pods are test doubles, not real AMF/SMF/UPF functions. Their `/health` and `/process` behavior supplies real Kubernetes networking and configurable congestion without specialized dataplane hardware.
+
+## Migration boundary
+
+Keep the solver and belief mathematics as pure Python. Add replaceable adapters for replica discovery, placement publication, HTTP traffic/telemetry, and result storage. This keeps the simulation logic testable without a cluster and lets testbed integration be verified separately.
