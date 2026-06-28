@@ -8,7 +8,7 @@ Convert the existing decoupled Indian Buffet Game (IBG) Python simulation into a
 
 ## Guardrails
 
-- The current root-level files under `IBG/` are the reference simulation. The budgeted/coupled path is out of scope unless explicitly requested.
+- The Python files directly under `IBG/` are the reference simulation. The budgeted/coupled path is out of scope unless explicitly requested.
 - Preserve the IBG mathematics and behavior. Isolate Kubernetes, traffic, and telemetry concerns behind adapters instead of embedding them in the solver.
 - Prefer small, reviewable changes. Plan substantial work before implementation.
 - Do not rewrite generated CSV data, pickle files, old copies, or unrelated algorithm variants unless explicitly requested.
