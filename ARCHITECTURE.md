@@ -8,7 +8,7 @@
 
 ```text
 Windows 11
-  -> WSL2 Ubuntu + Docker Desktop
+  -> WSL2 Ubuntu + native Docker Engine
     -> kind cluster
       -> 1 control-plane node
       -> 2 worker nodes
@@ -20,6 +20,8 @@ Windows 11
 ```
 
 The three kind nodes are cluster machines; the three stage StatefulSets are workloads scheduled across the two workers. Each StatefulSet uses stable Pod ordinals to map directly to `(stage, replica)` and does not use persistent volumes.
+
+Development tools, source code, Docker Engine, and cluster state live inside the Ubuntu filesystem. Windows provides the WSL2 host only; Docker Desktop is not part of the testbed.
 
 ## Runtime flow
 

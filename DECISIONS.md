@@ -2,8 +2,10 @@
 
 ## Accepted direction
 
-- Use WSL2 Ubuntu rather than a native-Windows-only workflow.
-- Place the WSL distribution, Docker Desktop application, and Docker/cluster data on a spacious non-C drive where supported; small Windows components may remain on C.
+- Use WSL2 Ubuntu for the development workflow; Windows supplies only the WSL2 host and its resource configuration.
+- Run native Docker Engine inside Ubuntu under `systemd`; do not use Docker Desktop.
+- Keep the Ubuntu distribution, source checkout, Docker data, and cluster data in the E-hosted WSL ext4 filesystem. Do not place Docker's data root on a Windows-mounted `/mnt/*` filesystem.
+- Limit WSL2 to 10 GB RAM and 6 processors, with a 4 GB swap file on E.
 - Use kind with one control-plane node and two worker nodes. kind uses containerd internally.
 - Start with the decoupled IBG only. Preserve its mathematical and learning logic with minimal alterations.
 - Small-scale target: three stages, 30 replicas per stage, and 15 logical flows per slot. Large-scale parameters come later.
