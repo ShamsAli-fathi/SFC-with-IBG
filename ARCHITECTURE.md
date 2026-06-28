@@ -2,7 +2,7 @@
 
 ## Current system
 
-`IBG/` is a working pure-Python simulation. Its active path is the small-scale, decoupled per-stage IBG: `IBG/main.py` constructs flows and replicas, `IBG/claude.py` computes per-stage policy/utility grids, `IBG/header.py` contains the replica, learning, embedding, and metric logic, and `IBG/report.py` writes experiment metrics. The separate budgeted/coupled code is not part of the current migration.
+`IBG/` is a working pure-Python simulation. Its active path is the small-scale, decoupled per-stage IBG: `IBG/main.py` constructs experiments and writes reports, `IBG/runner.py` orchestrates one import-safe decoupled slot, `IBG/claude.py` computes per-stage policy/utility grids, and `IBG/header.py` contains the replica, learning, embedding, and metric logic. The separate budgeted/coupled code is not part of the current migration.
 
 ## Target testbed
 

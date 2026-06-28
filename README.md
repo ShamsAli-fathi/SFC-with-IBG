@@ -13,4 +13,10 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+Run the focused characterization suite with:
+
+```bash
+python -m pytest -q
+```
+
 The files directly under `IBG/` remain the reference simulation. The budgeted/coupled path is outside the current migration scope.

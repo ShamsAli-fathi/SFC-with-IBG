@@ -13,7 +13,9 @@ Updated: 2026-06-28
 - Added a reproducible three-node kind configuration and created cluster `ibg` with Kubernetes 1.35.0.
 - Verified three Ready nodes, Ready system Pods, a two-replica HTTP deployment, Service DNS/networking, and cleanup of the temporary smoke-test namespace.
 - Completed Roadmap Phase 0: created `.venv` with Python 3.12, installed the declared dependencies, verified active IBG imports, and compiled all Python sources without executing `IBG/main.py`.
-- Created the repository handoff documents; no implementation was changed.
+- Completed Roadmap Phase 1: added eight deterministic characterization/equivalence tests and extracted one decoupled slot into an import-safe runner without changing the solver or belief mathematics.
+- Reduced the reference entry point from 48 outer experiments to one by default and verified the existing small configuration (three stages, four replicas per stage, three flows) reaches equilibrium; smoke-test reports were written only under `/tmp`.
+- Created and maintained the repository handoff documents as implementation progressed.
 
 ## Environment facts
 
@@ -29,12 +31,12 @@ Updated: 2026-06-28
 
 ## Current state
 
-Phase 0 is complete. Phases 1-6 in `ROADMAP.md` have not started. The existing simulation remains untouched; no application manifests, container image, HTTP CNF, controller adapter, characterization tests, or testbed-specific refactor has been created yet.
+Phases 0 and 1 are complete. Phases 2-6 in `ROADMAP.md` have not started. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged; orchestration now has a tested single-slot boundary. No application manifests, container image, HTTP CNF, or controller adapter has been created yet.
 
 ## Next action
 
-Begin Phase 1 only when requested: add deterministic characterization tests for the reference decoupled simulation before refactoring its orchestration.
+Begin Phase 2 only when requested: define adapter contracts and prove simulation-backed adapters reproduce the Phase 1 fixtures.
 
 ## New-thread handoff prompt
 
-> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Phase 0 is complete; do not begin a later phase without an explicit request. The next planned work is Phase 1 characterization testing of the reference decoupled simulation.
+> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Phases 0 and 1 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 2 simulation-backed adapter boundaries.
