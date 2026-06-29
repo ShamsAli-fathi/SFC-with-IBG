@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 import os
-import matplotlib.pyplot as plt
 
 
 def SLA_v(embed_dict, replica_list):
@@ -99,6 +98,8 @@ def plot_sla_violations(filename):
     Reads the SLA violations CSV from the current directory,
     averages each row across all columns, and plots it per iteration.
     """
+    import matplotlib.pyplot as plt
+
     # Load data
     df = pd.read_csv(filename)
 

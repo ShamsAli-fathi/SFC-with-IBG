@@ -28,6 +28,7 @@ class SlotResult:
     jain_fairness: float
     equilibrium: int
     elapsed_seconds: float
+    traffic_telemetry: object | None = None
 
 
 def run_decoupled_slot(
@@ -38,6 +39,7 @@ def run_decoupled_slot(
     likelihood=0.8,
     random_source=random,
     adapters: AdapterBundle | None = None,
+    slot_id=1,
 ):
     """Run one reference decoupled IBG iteration without writing reports.
 
@@ -57,6 +59,8 @@ def run_decoupled_slot(
     assignments_by_stage = {}
     utility_grids = {}
     observations_by_stage = {}
+    discovered_by_stage = {}
+    traffic_telemetry = None
     previous_beliefs = [
         copy.deepcopy(replica.belief) for replica in replica_list.values()
     ]
@@ -69,6 +73,7 @@ def run_decoupled_slot(
         )
         if not discovered_replicas:
             raise RuntimeError(f"no replicas discovered for stage {stage}")
+        discovered_by_stage[stage] = discovered_replicas
         policy, utility_grid = br_eibg_exact(
             flow_list,
             discovered_replicas,
@@ -97,13 +102,30 @@ def run_decoupled_slot(
             utility_grid,
             aggregate_per_flow,
         )
-        observations = adapters.observation_collector.collect(
-            stage,
-            last_embed,
-            replica_list,
+        if adapters.slot_traffic_executor is None:
+            observations = adapters.observation_collector.collect(
+                stage,
+                last_embed,
+                replica_list,
+            )
+            observations_by_stage[stage] = tuple(observations)
+            apply_observations(observations, replica_list)
+
+    if adapters.slot_traffic_executor is not None:
+        traffic_telemetry = adapters.slot_traffic_executor.execute_slot(
+            slot_id,
+            assignments_by_stage,
+            discovered_by_stage,
         )
-        observations_by_stage[stage] = tuple(observations)
-        apply_observations(observations, replica_list)
+        for stage in range(1, num_of_stages + 1):
+            observations = adapters.observation_collector.collect(
+                stage,
+                assignments_by_stage[stage],
+                replica_list,
+            )
+            observations_by_stage[stage] = tuple(observations)
+            apply_observations(observations, replica_list)
+        ended_at = time.time()
 
     elapsed_seconds = ended_at - started_at
     violations = SLA_v(embed_dict, replica_list)
@@ -121,6 +143,7 @@ def run_decoupled_slot(
         jain_fairness=fairness,
         equilibrium=equilibrium,
         elapsed_seconds=elapsed_seconds,
+        traffic_telemetry=traffic_telemetry,
     )
     adapters.result_sink.record_slot(result)
     return result

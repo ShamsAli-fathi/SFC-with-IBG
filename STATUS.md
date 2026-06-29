@@ -33,6 +33,13 @@ Updated: 2026-06-29
 - Verified the seeded three-flow/five-replica/three-stage run completes all nine placements and observations; the measured local wall time was approximately 179 ms.
 - Verified the default three-flow/four-replica/three-stage experiment still writes all reference reports and reached equilibrium in 23 iterations in one stochastic smoke run; outputs were isolated under `/tmp`.
 - Removed the scaling phase and fixed the supported exact-testbed target at three stages, five replicas per stage, and three flows.
+- Restored and verified the existing `ibg` kind cluster: all three nodes and system Pods are Ready, and a disposable in-cluster check resolved Service DNS and completed Pod-to-Service HTTP.
+- Completed Roadmap Phase 5: added three headless Services, three two-replica StatefulSets, deterministic shared profiles, the flow-generator Deployment and Service, the controller Job, and namespace-scoped discovery RBAC.
+- Added readiness-filtered Kubernetes discovery that maps StatefulSet ordinals to solver replica IDs and retains stable Pod, node, and endpoint metadata without changing `BR_EIBG`.
+- Added complete-route slot execution through the flow generator and converted its correlated telemetry into the existing observation contract before unchanged belief, equilibrium, metric, and reporting logic.
+- Expanded the suite to 49 passing tests, including deterministic profile loading, ordinal discovery, incomplete-readiness failure, complete-route execution, and Kubernetes telemetry-to-observation coverage.
+- Verified the Phase 5 cluster gate with three stages, two replicas per stage, and three flows. The controller Job completed successfully with nine placements, nine selected observations, complete three-hop telemetry, real replica contention, and updated beliefs and metrics.
+- Verified controller RBAC allows only Pod `get`/`list` for discovery and denies Secret reads and Pod creation.
 - Created and maintained the repository handoff documents as implementation progressed.
 
 ## Environment facts
@@ -43,19 +50,19 @@ Updated: 2026-06-29
 - The active checkout is `/home/shams/projects/SFC-with-IBG`; the previous `/mnt/e/WSL/Ubuntu-24.04/projects/SFC-with-IBG` checkout remains temporarily as a backup.
 - Native Docker Engine is active under `systemd`, normal-user Docker access is configured, and its data root is `/var/lib/docker` inside the E-hosted ext4 filesystem.
 - `%UserProfile%\.wslconfig` is active: WSL reports approximately 10 GB RAM, 6 processors, and 4 GB swap.
-- The `ibg` kind cluster still exists after the WSL restart, but its node containers did not restore the Kubernetes API automatically. The cluster is not required for Phases 0-4 and can remain stopped until cluster work resumes.
+- The `ibg` kind cluster is running with one Ready control-plane node and two Ready workers. The `ibg-testbed` namespace currently has six Ready replica Pods, one Ready flow-generator Pod, and a successfully completed controller Job.
 - C has limited free space; the WSL distribution and its Docker/cluster data are therefore kept on E.
 - The current project root is a Git repository on branch `IBG`, with `origin` configured for `ShamsAli-fathi/SFC-with-IBG`.
 - Docker Hub returned HTTP 403 for the initial Python base-image pull, so the local runtime image uses the official Azure Linux Python 3.12 base from Microsoft Container Registry. This is a packaging workaround, not a change to runtime behavior.
 
 ## Current state
 
-Phases 0-4 are complete. Phases 5-6 in `ROADMAP.md` have not started. Phase 6 is the final supported-size validation phase; the former scaling phase was removed because exact `BR_EIBG` is intentionally a small-instance algorithm. The supported target is three stages, five replicas per stage, and three flows. The surrounding utility, belief update, equilibrium, metric, adapter, and testbed behavior remains in place. The HTTP replica and flow generator complete concurrent controller-selected routes over a local container network, but no Kubernetes application manifests or Kubernetes-backed adapters have been created yet.
+Phases 0-5 are complete. Phase 6 in `ROADMAP.md` has not started. The Phase 5 Kubernetes gate passes at three stages, two replicas per stage, and three flows. Phase 6 is the final comparison and supported-size validation phase at three stages, five replicas per stage, and three flows. The former scaling phase was removed because exact `BR_EIBG` is intentionally a small-instance algorithm.
 
 ## Next action
 
-Begin Phase 5 only when requested: add the small Kubernetes deployment, stable replica discovery, narrow RBAC, and controller integration without changing the solver.
+Begin Phase 6 only when requested: compare controlled simulation-backed and Kubernetes-backed runs, explain discrepancies, and repeat the Kubernetes case at the supported five replicas per stage without changing the solver.
 
 ## New-thread handoff prompt
 
-> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Do not read or edit `Tutorial.md` unless explicitly requested. Phases 0-4 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 5, the small Kubernetes deployment, discovery/RBAC, and one-slot controller integration gate.
+> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Do not read or edit `Tutorial.md` unless explicitly requested. Phases 0-5 are complete; do not begin Phase 6 without an explicit request. The next planned work is controlled simulation/Kubernetes comparison followed by the supported three-stage, five-replica, three-flow validation.

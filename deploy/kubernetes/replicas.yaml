@@ -1,0 +1,269 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: stage-1
+  namespace: ibg-testbed
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ibg-replica
+    ibg.stage: "1"
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: stage-1
+  namespace: ibg-testbed
+spec:
+  serviceName: stage-1
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibg-replica
+      ibg.stage: "1"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibg-replica
+        app.kubernetes.io/part-of: ibg-testbed
+        ibg.stage: "1"
+    spec:
+      automountServiceAccountToken: false
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: ibg-replica
+                    ibg.stage: "1"
+      containers:
+        - name: replica
+          image: ibg-testbed:phase5
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: STAGE
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: REPLICA_PROFILES_PATH
+              value: /etc/ibg/profiles.json
+          volumeMounts:
+            - name: profiles
+              mountPath: /etc/ibg
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+      volumes:
+        - name: profiles
+          configMap:
+            name: replica-profiles
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stage-2
+  namespace: ibg-testbed
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ibg-replica
+    ibg.stage: "2"
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: stage-2
+  namespace: ibg-testbed
+spec:
+  serviceName: stage-2
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibg-replica
+      ibg.stage: "2"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibg-replica
+        app.kubernetes.io/part-of: ibg-testbed
+        ibg.stage: "2"
+    spec:
+      automountServiceAccountToken: false
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: ibg-replica
+                    ibg.stage: "2"
+      containers:
+        - name: replica
+          image: ibg-testbed:phase5
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: STAGE
+              value: "2"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: REPLICA_PROFILES_PATH
+              value: /etc/ibg/profiles.json
+          volumeMounts:
+            - name: profiles
+              mountPath: /etc/ibg
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+      volumes:
+        - name: profiles
+          configMap:
+            name: replica-profiles
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stage-3
+  namespace: ibg-testbed
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ibg-replica
+    ibg.stage: "3"
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: stage-3
+  namespace: ibg-testbed
+spec:
+  serviceName: stage-3
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibg-replica
+      ibg.stage: "3"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibg-replica
+        app.kubernetes.io/part-of: ibg-testbed
+        ibg.stage: "3"
+    spec:
+      automountServiceAccountToken: false
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: ibg-replica
+                    ibg.stage: "3"
+      containers:
+        - name: replica
+          image: ibg-testbed:phase5
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: STAGE
+              value: "3"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: REPLICA_PROFILES_PATH
+              value: /etc/ibg/profiles.json
+          volumeMounts:
+            - name: profiles
+              mountPath: /etc/ibg
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+      volumes:
+        - name: profiles
+          configMap:
+            name: replica-profiles

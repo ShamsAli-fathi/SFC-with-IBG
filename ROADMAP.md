@@ -70,7 +70,7 @@ Gate: a local container-network test completes concurrent three-hop flows and re
 
 ## Phase 5: Connect Kubernetes
 
-Status: not started.
+Status: complete.
 
 Suggested Codex reasoning: `high` — StatefulSet identity, discovery, RBAC, readiness, and controller integration require coordinated infrastructure changes.
 

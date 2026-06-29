@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ibg-controller
+  namespace: ibg-testbed
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibg-controller
+        app.kubernetes.io/part-of: ibg-testbed
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ibg-controller
+      containers:
+        - name: controller
+          image: ibg-testbed:phase5
+          imagePullPolicy: Never
+          command:
+            - python3
+            - -m
+            - testbed.kubernetes_controller
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: EXPECTED_REPLICAS
+              value: "2"
+            - name: NUM_FLOWS
+              value: "3"
+            - name: SLOT_ID
+              value: "1"
+            - name: IBG_SEED
+              value: "2050"
+            - name: FLOW_GENERATOR_URL
+              value: http://flow-generator:8080
+            - name: REPLICA_PROFILES_PATH
+              value: /etc/ibg/profiles.json
+            - name: MPLCONFIGDIR
+              value: /tmp/matplotlib
+          volumeMounts:
+            - name: profiles
+              mountPath: /etc/ibg
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        - name: profiles
+          configMap:
+            name: replica-profiles

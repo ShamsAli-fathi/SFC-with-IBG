@@ -9,7 +9,7 @@
 - Use kind with one control-plane node and two worker nodes. kind uses containerd internally.
 - Start with the decoupled IBG only. Preserve its mathematical and learning logic with minimal alterations.
 - Supported target: three stages, five replicas per stage, and three logical flows per slot.
-- Represent stages with three StatefulSets of 30 Pods. Use stable ordinal identities but no persistent storage.
+- Represent stages with three StatefulSets: two Pods per stage for the Phase 5 bring-up gate, then five Pods per stage for the supported validation target. Use stable ordinal identities but no persistent storage.
 - Use tiny kernel-path HTTP services as CNF stand-ins. They expose health/processing behavior and observable latency/load.
 - Run the Python IBG controller in the cluster with a ServiceAccount and narrowly scoped RBAC.
 - Admit flows sequentially for placement, then exercise their selected paths concurrently to create contention.
@@ -34,6 +34,10 @@
 - Keep the existing belief-driven 30-sample utility grid, utility kernel, learning, embedding, equilibrium, and reporting logic around the corrected solver. “Exact” refers to the SPNE recursion over that sampled grid.
 - Break exact utility ties by lowest replica ID so repeated seeded runs remain deterministic.
 - Keep `BR_EIBG` as the project's exact small-instance policy. A scalable approximation would be a separate future project and is not part of this roadmap.
+- Derive one-based solver replica IDs from zero-based StatefulSet Pod ordinals and require the full expected Ready ordinal set before solving a stage.
+- Store the Phase 5 deterministic replica profiles in one ConfigMap mounted by both replicas and the controller.
+- Use the existing HTTP client with the in-cluster ServiceAccount token and CA for namespace-scoped Pod discovery; grant only Pod `get` and `list` permissions.
+- Keep simulation observations stage-local, but let Kubernetes defer physical traffic until all stage placements form complete routes; convert returned hop telemetry into the existing observation contract before applying unchanged learning logic.
 
 ## Deliberately deferred
 

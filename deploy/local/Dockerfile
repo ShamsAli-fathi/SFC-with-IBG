@@ -3,7 +3,8 @@ FROM mcr.microsoft.com/azurelinux/base/python:3.12
 USER root
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/IBG
 
 WORKDIR /app
 

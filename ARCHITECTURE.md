@@ -2,7 +2,7 @@
 
 ## Current system
 
-`IBG/` is a working pure-Python simulation. Its active path is the small-scale, decoupled per-stage IBG: `IBG/main.py` constructs experiments, `IBG/runner.py` orchestrates one import-safe decoupled slot through adapter contracts, `IBG/claude.py` computes per-stage utility grids and the exact memoized `BR_EIBG` continuation policy, and `IBG/header.py` contains the replica, learning, embedding, and metric logic. Simulation adapters currently provide stage-scoped replica discovery, logical traffic execution, selected-replica observations, and reference CSV result storage. The separate budgeted/coupled code is not part of the current migration.
+`IBG/` is a working pure-Python simulation. Its active path is the small-scale, decoupled per-stage IBG: `IBG/main.py` constructs experiments, `IBG/runner.py` orchestrates one import-safe decoupled slot through adapter contracts, `IBG/claude.py` computes per-stage utility grids and the exact memoized `BR_EIBG` continuation policy, and `IBG/header.py` contains the replica, learning, embedding, and metric logic. Simulation adapters provide stage-scoped discovery, embedding, reference observations, and CSV storage. Kubernetes adapters provide readiness-filtered discovery and complete-route traffic/telemetry while reusing the same solver, embedding, learning, equilibrium, and metric functions. The separate budgeted/coupled code is not part of the current migration.
 
 ## IBG Exact solver contract
 
@@ -58,6 +58,14 @@ The Phase 4 flow generator is a separate FastAPI service. `POST /run-slot` accep
 The generator starts all logical flows concurrently, while each flow awaits its own hops sequentially. It calls only the selected replica endpoints, validates that each response matches the requested slot, flow, stage, and replica, and returns correlated per-hop telemetry containing slot, flow, stage, replica, Pod, endpoint, admitted concurrency, server and client latency, and the unchanged legacy observation fields. A downstream failure, identity mismatch, or correlation mismatch fails the slot request explicitly rather than returning partial results as if the slot had completed.
 
 For local validation, the replica and flow-generator processes share one non-root container image and run on a private Docker Compose network. This exercises real service-to-service HTTP without introducing Kubernetes concerns before Phase 5.
+
+## Kubernetes integration contract
+
+The `ibg-testbed` namespace contains three headless Services and three two-replica StatefulSets for the Phase 5 gate, plus a ClusterIP flow-generator Service, one flow-generator Deployment, and a one-shot controller Job. The StatefulSet ordinal is converted to the one-based solver replica ID. A shared ConfigMap supplies deterministic solver and runtime profiles, so the controller and HTTP replica agree on state, capacity, delay, cost, congestion penalty, and processing delays.
+
+The controller uses its mounted ServiceAccount token and CA with the existing HTTP client to list only namespace-scoped replica Pods. Discovery accepts only Running, Ready Pods and requires the exact ordinal set expected for every stage. Narrow RBAC permits `get` and `list` on Pods but does not permit Secret reads or Pod creation. Pod DNS through each headless Service becomes the selected hop endpoint; node and Pod identities are retained as placement metadata.
+
+Simulation keeps its existing stage-by-stage observation path. For Kubernetes, the runner's optional slot-traffic port defers physical execution until all three stages have been placed. The flow generator then runs all complete routes, and its correlated hop telemetry is converted into the existing `Observation` contract before the unchanged learning and equilibrium logic runs.
 
 ## Migration boundary
 

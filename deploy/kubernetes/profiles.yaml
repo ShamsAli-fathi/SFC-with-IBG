@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: replica-profiles
+  namespace: ibg-testbed
+data:
+  profiles.json: |
+    {
+      "stages": {
+        "1": {
+          "1": {"state": 4, "capacity": 2000, "delay": 25, "cost": 1, "gamma": 0.2, "base_delay_ms": 40, "congestion_delay_ms": 10},
+          "2": {"state": 2, "capacity": 5000, "delay": 25, "cost": 1, "gamma": 0.3, "base_delay_ms": 40, "congestion_delay_ms": 10}
+        },
+        "2": {
+          "1": {"state": 3, "capacity": 2000, "delay": 25, "cost": 1, "gamma": 0.2, "base_delay_ms": 40, "congestion_delay_ms": 10},
+          "2": {"state": 1, "capacity": 5000, "delay": 25, "cost": 1, "gamma": 0.3, "base_delay_ms": 40, "congestion_delay_ms": 10}
+        },
+        "3": {
+          "1": {"state": 4, "capacity": 2000, "delay": 25, "cost": 1, "gamma": 0.2, "base_delay_ms": 40, "congestion_delay_ms": 10},
+          "2": {"state": 3, "capacity": 5000, "delay": 25, "cost": 1, "gamma": 0.3, "base_delay_ms": 40, "congestion_delay_ms": 10}
+        }
+      }
+    }

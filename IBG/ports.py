@@ -47,6 +47,16 @@ class TrafficExecutor(Protocol):
         """Execute the selected stage policy for the logical flows."""
 
 
+class SlotTrafficExecutor(Protocol):
+    def execute_slot(
+        self,
+        slot_id: int,
+        assignments_by_stage: Mapping,
+        discovered_by_stage: Mapping,
+    ) -> Any:
+        """Exercise complete controller-selected routes for one slot."""
+
+
 class ObservationCollector(Protocol):
     def collect(
         self,
@@ -68,3 +78,4 @@ class AdapterBundle:
     traffic_executor: TrafficExecutor
     observation_collector: ObservationCollector
     result_sink: ResultSink
+    slot_traffic_executor: SlotTrafficExecutor | None = None

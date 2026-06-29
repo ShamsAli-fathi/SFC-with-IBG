@@ -2,12 +2,14 @@ import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import os
+import re
 import time
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from IBG.header import Replica
+from testbed.profiles import load_profiles, require_profile
 
 
 LegacyObservation = tuple[int, tuple[float, float, float, float]]
@@ -44,19 +46,43 @@ class ReplicaConfig:
     def from_env(cls, environ: Mapping[str, str] | None = None):
         values = os.environ if environ is None else environ
         stage = int(values.get("STAGE", "1"))
-        replica_id = int(values.get("REPLICA_ID", "1"))
+        pod_name = values.get("POD_NAME", f"stage-{stage}-0")
+        replica_value = values.get("REPLICA_ID")
+        if replica_value is None:
+            ordinal = re.search(r"-(\d+)$", pod_name)
+            if ordinal is None:
+                raise ValueError("POD_NAME must end in a StatefulSet ordinal")
+            replica_id = int(ordinal.group(1)) + 1
+        else:
+            replica_id = int(replica_value)
+
+        profile = None
+        profile_path = values.get("REPLICA_PROFILES_PATH")
+        if profile_path:
+            profile = require_profile(load_profiles(profile_path), stage, replica_id)
+
+        def configured(name, profile_name, default):
+            if name in values:
+                return values[name]
+            if profile is not None:
+                return getattr(profile, profile_name)
+            return default
+
         return cls(
             stage=stage,
             replica_id=replica_id,
-            pod_name=values.get(
-                "POD_NAME",
-                f"stage-{stage}-{replica_id - 1}",
+            pod_name=pod_name,
+            state=int(configured("STATE", "state", 4)),
+            capacity=int(configured("CAPACITY", "capacity", 2000)),
+            base_delay_ms=float(
+                configured("BASE_DELAY_MS", "base_delay_ms", 5)
             ),
-            state=int(values.get("STATE", "4")),
-            capacity=int(values.get("CAPACITY", "2000")),
-            base_delay_ms=float(values.get("BASE_DELAY_MS", "5")),
             congestion_delay_ms=float(
-                values.get("CONGESTION_DELAY_MS", "2")
+                configured(
+                    "CONGESTION_DELAY_MS",
+                    "congestion_delay_ms",
+                    2,
+                )
             ),
         )
 
