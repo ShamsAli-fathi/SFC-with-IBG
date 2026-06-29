@@ -15,6 +15,8 @@
 - Admit flows sequentially for placement, then exercise their selected paths concurrently to create contention.
 - Preserve the existing metric concepts (aggregate utility, SLA violations, Jain fairness, runtime, and beliefs) while adding slot, Pod, node, placement, and latency metadata.
 - Follow the ordered gates in `ROADMAP.md`. Complete and verify one phase before starting the next.
+- Validate simulation/Kubernetes behavior at small scale before beginning target-scale deployment; correctness and scaling have separate acceptance gates.
+- Maintain `Tutorial.md` as part of every phase so working commands, script logic, expected outputs, cleanup, and troubleshooting remain usable by a new reader.
 - Characterize the reference behavior before refactoring, then introduce simulation-backed adapter contracts before Kubernetes implementations.
 - Treat measured HTTP latency and the legacy belief observation as separate fields initially. Replacing the legacy signal with measured latency requires an explicit, validated mathematical decision.
 - Make the slot runner depend on explicit discovery, traffic, observation, and result-sink ports. Keep simulation implementations as the behavioral baseline for future infrastructure adapters.

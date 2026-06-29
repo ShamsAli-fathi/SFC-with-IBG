@@ -1,6 +1,6 @@
 # SFC-with-IBG
 
-Migration of the decoupled Indian Buffet Game simulation into a lightweight Kubernetes testbed. See `ARCHITECTURE.md` for the target design and `ROADMAP.md` for the gated implementation sequence.
+Migration of the decoupled Indian Buffet Game simulation into a lightweight Kubernetes testbed. See [Tutorial.md](Tutorial.md) for the beginner-friendly usage guide, `ARCHITECTURE.md` for the target design, and `ROADMAP.md` for the gated implementation sequence.
 
 ## Python environment
 

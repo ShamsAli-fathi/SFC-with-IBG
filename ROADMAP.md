@@ -1,6 +1,6 @@
 # IBG Testbed Roadmap
 
-Work proceeds in order. A phase starts only after the previous phase's checks pass and `STATUS.md` records the result.
+Work proceeds in order. A phase starts only after the previous phase's checks pass, `STATUS.md` records the result, and `Tutorial.md` explains how a user can operate and understand the completed work.
 
 ## Codex reasoning guidance
 
@@ -79,14 +79,26 @@ Suggested Codex reasoning: `high` — StatefulSet identity, discovery, RBAC, rea
 
 Gate: a small cluster case with three stages, two replicas per stage, and three flows completes one controller slot successfully.
 
-## Phase 6: Validate and scale
+## Phase 6: Validate behavior
 
 Status: not started.
 
-Suggested Codex reasoning: `xhigh` — final validation must explain cross-backend discrepancies and distinguish mathematical, stochastic, telemetry, and Kubernetes effects.
+Suggested Codex reasoning: `xhigh` — cross-backend validation must explain discrepancies and distinguish mathematical, stochastic, telemetry, and Kubernetes effects.
 
 - Compare simulation-backed and Kubernetes-backed runs using controlled seeds and replica profiles.
 - Verify placement, asymmetric observations, belief evolution, utility, SLA, fairness, timing, and result metadata.
-- Scale to three stages, 30 replicas per stage, and 15 logical flows per slot.
+- Repeat the small cluster case and quantify any discrepancies from the reference behavior.
 
-Gate: repeated target-scale runs complete without unsupported dataplane claims, and discrepancies from the reference behavior are measured and documented.
+Gate: repeated controlled small-cluster runs produce complete, comparable results, and discrepancies from the reference behavior are measured and documented.
+
+## Phase 7: Scale to target
+
+Status: not started.
+
+Suggested Codex reasoning: `high` — scaling replica counts and flow concurrency requires careful resource, reliability, and repeatability checks after behavior has been validated.
+
+- Scale to three stages, 30 replicas per stage, and 15 logical flows per slot.
+- Repeat target-scale runs and record completion, timing, placement, telemetry, and resource limitations.
+- Keep the validated solver and learning behavior fixed while addressing scale-specific infrastructure issues.
+
+Gate: repeated target-scale runs complete with the required result metadata and without unsupported dataplane claims.

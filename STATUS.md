@@ -26,6 +26,7 @@ Updated: 2026-06-29
 - Added a shared non-root runtime image, a four-service Docker Compose topology, and a repeatable three-flow container-network smoke test.
 - Expanded the suite to 42 passing tests, including selected-endpoint routing, inter-flow concurrency, intra-flow stage ordering, telemetry correlation, downstream failures, and identity/correlation mismatches.
 - Verified the Phase 4 gate with three concurrent three-hop flows across the local container network; every flow returned stages 1, 2, and 3 in order and the stage-1 service reported admitted concurrency levels 1, 2, and 3.
+- Added `Tutorial.md` as the living beginner-friendly report, operating guide for every completed phase, and “IBG Exact” explanation of the Python reference logic.
 - Created and maintained the repository handoff documents as implementation progressed.
 
 ## Environment facts
@@ -43,7 +44,7 @@ Updated: 2026-06-29
 
 ## Current state
 
-Phases 0-4 are complete. Phases 5-6 in `ROADMAP.md` have not started. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged. The HTTP replica and flow generator now complete concurrent controller-selected routes over a local container network, but no Kubernetes application manifests or Kubernetes-backed adapters have been created yet.
+Phases 0-4 are complete. Phases 5-7 in `ROADMAP.md` have not started. Phase 6 now validates small-scale behavior before the separate Phase 7 target-scale work. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged. The HTTP replica and flow generator now complete concurrent controller-selected routes over a local container network, but no Kubernetes application manifests or Kubernetes-backed adapters have been created yet.
 
 ## Next action
 
@@ -51,4 +52,4 @@ Begin Phase 5 only when requested: add the small Kubernetes deployment, stable r
 
 ## New-thread handoff prompt
 
-> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Phases 0-4 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 5, the small Kubernetes deployment, discovery/RBAC, and one-slot controller integration gate.
+> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, `STATUS.md`, and `Tutorial.md`. Phases 0-4 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 5, the small Kubernetes deployment, discovery/RBAC, and one-slot controller integration gate.
