@@ -18,6 +18,9 @@ Updated: 2026-06-29
 - Completed Roadmap Phase 2: defined discovery, traffic, observation, and result-sink ports; added simulation-backed implementations; and kept measured latency separate from the legacy belief signal.
 - Expanded the suite to 18 passing tests, including explicit-adapter equivalence, legacy observation-update parity, contract validation, empty-discovery failure, and reference CSV sink behavior.
 - Verified an adapter-driven small experiment reaches equilibrium and writes the expected metric and belief row counts under `/tmp`.
+- Completed Roadmap Phase 3: implemented the configurable FastAPI/Uvicorn HTTP replica with `/health` and `/process`, stable identity, real concurrent-request accounting, latency telemetry, and the reference legacy observation model.
+- Expanded the suite to 32 passing tests, including endpoint contracts, three-request overlap, exact tasting parity, request/config validation, and concurrency cleanup after failures.
+- Verified a live localhost Uvicorn process returns HTTP 200 for both endpoints and shuts down cleanly.
 - Created and maintained the repository handoff documents as implementation progressed.
 
 ## Environment facts
@@ -34,12 +37,12 @@ Updated: 2026-06-29
 
 ## Current state
 
-Phases 0-2 are complete. Phases 3-6 in `ROADMAP.md` have not started. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged; the single-slot runner now uses tested simulation-backed adapter boundaries. No application manifests, container image, HTTP CNF, or Kubernetes adapter has been created yet.
+Phases 0-3 are complete. Phases 4-6 in `ROADMAP.md` have not started. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged. A locally verified HTTP replica now implements the observation contract, but no flow generator, container image, application manifest, or Kubernetes adapter has been created yet.
 
 ## Next action
 
-Begin Phase 3 only when requested: implement and locally test the lightweight HTTP replica service against the established observation contract.
+Begin Phase 4 only when requested: implement the concurrent three-hop flow generator and validate it on a local container network.
 
 ## New-thread handoff prompt
 
-> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Phases 0-2 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 3, the locally tested HTTP replica service.
+> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Phases 0-3 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 4, the concurrent three-hop flow generator and local container-network gate.

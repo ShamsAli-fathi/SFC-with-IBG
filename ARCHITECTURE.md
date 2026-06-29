@@ -37,6 +37,12 @@ Development tools, source code, Docker Engine, and cluster state live inside the
 
 The HTTP Pods are test doubles, not real AMF/SMF/UPF functions. Their `/health` and `/process` behavior supplies real Kubernetes networking and configurable congestion without specialized dataplane hardware. Measured request latency and concurrency are recorded as testbed telemetry. The legacy belief-compatible observation remains a separate signal until a validated calibration allows measured latency to replace it without silently changing the IBG mathematics.
 
+## HTTP replica contract
+
+The Phase 3 replica service is a small FastAPI/Uvicorn application. `GET /health` reports readiness, stable stage/replica identity, Pod name, and current concurrency. `POST /process` accepts positive `slot_id` and `flow_id` values and returns the same identity plus admitted concurrency, measured processing latency, `legacy_signal`, and the four-state `legacy_likelihood` vector.
+
+Replica identity, hidden state, capacity, base delay, and congestion delay are deterministic environment configuration. The service increments a shared request counter before simulated work, applies an additional delay for overlapping requests, and decrements the counter in a `finally` block. Its default observation source delegates to the reference `Replica.tasting()` model; it does not update beliefs locally.
+
 ## Migration boundary
 
 Keep the solver and belief mathematics as pure Python. Add replaceable adapters for replica discovery, placement publication, HTTP traffic/telemetry, and result storage. This keeps the simulation logic testable without a cluster and lets testbed integration be verified separately.

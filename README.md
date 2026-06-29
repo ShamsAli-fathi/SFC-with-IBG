@@ -19,4 +19,14 @@ Run the focused characterization suite with:
 python -m pytest -q
 ```
 
+Run one local HTTP replica with:
+
+```bash
+STAGE=1 REPLICA_ID=1 POD_NAME=stage-1-0 \
+  STATE=4 CAPACITY=2000 \
+  python -m uvicorn testbed.cnf_service:app --host 127.0.0.1 --port 8080
+```
+
+The service exposes `GET /health` and `POST /process`.
+
 The files directly under `IBG/` remain the reference simulation. The budgeted/coupled path is outside the current migration scope.

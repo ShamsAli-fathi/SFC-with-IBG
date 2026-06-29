@@ -19,6 +19,9 @@
 - Treat measured HTTP latency and the legacy belief observation as separate fields initially. Replacing the legacy signal with measured latency requires an explicit, validated mathematical decision.
 - Make the slot runner depend on explicit discovery, traffic, observation, and result-sink ports. Keep simulation implementations as the behavioral baseline for future infrastructure adapters.
 - Apply observation likelihoods in the controller learning core; adapters collect observations but do not redefine local belief update or aggregation mathematics.
+- Implement the HTTP replica as a small FastAPI/Uvicorn service with environment-provided stable identity and experiment parameters.
+- Count active requests inside each replica service and report the admitted concurrency and measured server processing latency. Always release the counter on success or failure.
+- Generate `legacy_signal` and `legacy_likelihood` through the reference tasting model while leaving belief mutation exclusively in the controller.
 
 ## Deliberately deferred
 

@@ -45,7 +45,7 @@ Gate: the adapter-driven simulation matches the Phase 1 reference fixtures for t
 
 ## Phase 3: Build the HTTP replica
 
-Status: not started.
+Status: complete.
 
 Suggested Codex reasoning: `medium` — the service is bounded, with clear endpoint contracts and focused local tests.
 
