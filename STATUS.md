@@ -1,6 +1,6 @@
 # Project Status
 
-Updated: 2026-06-28
+Updated: 2026-06-29
 
 ## Completed
 
@@ -15,6 +15,9 @@ Updated: 2026-06-28
 - Completed Roadmap Phase 0: created `.venv` with Python 3.12, installed the declared dependencies, verified active IBG imports, and compiled all Python sources without executing `IBG/main.py`.
 - Completed Roadmap Phase 1: added eight deterministic characterization/equivalence tests and extracted one decoupled slot into an import-safe runner without changing the solver or belief mathematics.
 - Reduced the reference entry point from 48 outer experiments to one by default and verified the existing small configuration (three stages, four replicas per stage, three flows) reaches equilibrium; smoke-test reports were written only under `/tmp`.
+- Completed Roadmap Phase 2: defined discovery, traffic, observation, and result-sink ports; added simulation-backed implementations; and kept measured latency separate from the legacy belief signal.
+- Expanded the suite to 18 passing tests, including explicit-adapter equivalence, legacy observation-update parity, contract validation, empty-discovery failure, and reference CSV sink behavior.
+- Verified an adapter-driven small experiment reaches equilibrium and writes the expected metric and belief row counts under `/tmp`.
 - Created and maintained the repository handoff documents as implementation progressed.
 
 ## Environment facts
@@ -31,12 +34,12 @@ Updated: 2026-06-28
 
 ## Current state
 
-Phases 0 and 1 are complete. Phases 2-6 in `ROADMAP.md` have not started. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged; orchestration now has a tested single-slot boundary. No application manifests, container image, HTTP CNF, or controller adapter has been created yet.
+Phases 0-2 are complete. Phases 3-6 in `ROADMAP.md` have not started. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged; the single-slot runner now uses tested simulation-backed adapter boundaries. No application manifests, container image, HTTP CNF, or Kubernetes adapter has been created yet.
 
 ## Next action
 
-Begin Phase 2 only when requested: define adapter contracts and prove simulation-backed adapters reproduce the Phase 1 fixtures.
+Begin Phase 3 only when requested: implement and locally test the lightweight HTTP replica service against the established observation contract.
 
 ## New-thread handoff prompt
 
-> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Phases 0 and 1 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 2 simulation-backed adapter boundaries.
+> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Phases 0-2 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 3, the locally tested HTTP replica service.

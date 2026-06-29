@@ -33,7 +33,7 @@ Gate: fixed fixtures reproduce the reference results before and after orchestrat
 
 ## Phase 2: Introduce adapter boundaries
 
-Status: not started.
+Status: complete.
 
 Suggested Codex reasoning: `high` — interface boundaries must preserve reference behavior while separating simulation and infrastructure concerns.
 

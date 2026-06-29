@@ -2,7 +2,7 @@
 
 ## Current system
 
-`IBG/` is a working pure-Python simulation. Its active path is the small-scale, decoupled per-stage IBG: `IBG/main.py` constructs experiments and writes reports, `IBG/runner.py` orchestrates one import-safe decoupled slot, `IBG/claude.py` computes per-stage policy/utility grids, and `IBG/header.py` contains the replica, learning, embedding, and metric logic. The separate budgeted/coupled code is not part of the current migration.
+`IBG/` is a working pure-Python simulation. Its active path is the small-scale, decoupled per-stage IBG: `IBG/main.py` constructs experiments, `IBG/runner.py` orchestrates one import-safe decoupled slot through adapter contracts, `IBG/claude.py` computes per-stage policy/utility grids, and `IBG/header.py` contains the replica, learning, embedding, and metric logic. Simulation adapters currently provide stage-scoped replica discovery, logical traffic execution, selected-replica observations, and reference CSV result storage. The separate budgeted/coupled code is not part of the current migration.
 
 ## Target testbed
 
@@ -40,5 +40,7 @@ The HTTP Pods are test doubles, not real AMF/SMF/UPF functions. Their `/health` 
 ## Migration boundary
 
 Keep the solver and belief mathematics as pure Python. Add replaceable adapters for replica discovery, placement publication, HTTP traffic/telemetry, and result storage. This keeps the simulation logic testable without a cluster and lets testbed integration be verified separately.
+
+The adapter boundary uses four ports: replica discovery, traffic execution, observation collection, and result storage. Simulation implementations delegate to the reference embedding and tasting behavior. The learning core applies collected likelihoods through the existing local-update and aggregation methods. Each observation carries the legacy signal separately from optional measured latency so future HTTP telemetry cannot silently alter belief mathematics.
 
 The current `IBG/` files remain the behavioral reference. Migration proceeds through the gated phases in `ROADMAP.md`; cluster-specific code must not be embedded into `IBG/claude.py` or the replica utility and belief functions.

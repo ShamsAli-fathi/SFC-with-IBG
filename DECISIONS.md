@@ -17,6 +17,8 @@
 - Follow the ordered gates in `ROADMAP.md`. Complete and verify one phase before starting the next.
 - Characterize the reference behavior before refactoring, then introduce simulation-backed adapter contracts before Kubernetes implementations.
 - Treat measured HTTP latency and the legacy belief observation as separate fields initially. Replacing the legacy signal with measured latency requires an explicit, validated mathematical decision.
+- Make the slot runner depend on explicit discovery, traffic, observation, and result-sink ports. Keep simulation implementations as the behavioral baseline for future infrastructure adapters.
+- Apply observation likelihoods in the controller learning core; adapters collect observations but do not redefine local belief update or aggregation mathematics.
 
 ## Deliberately deferred
 

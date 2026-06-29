@@ -7,8 +7,10 @@ import uuid
 from budgeted import backward_budgeted_memoized, embedding_budgeted
 from header import Replica, create_belief_csv, delay_gen, is_equilibrium
 from header_b import SLA_v_b, update_b
-from report import csv_gen_SLA, csv_gen_jain, csv_gen_time, csv_gen_util
+from report import csv_gen_SLA
+from result_sinks import CsvResultSink
 from runner import run_decoupled_slot
+from simulation_adapters import make_simulation_adapters
 
 
 DEFAULT_EXPERIMENT_RUNS = 1
@@ -51,6 +53,9 @@ def run_decoupled_experiment(
     hash_value,
 ):
     iteration = 0
+    adapters = make_simulation_adapters(
+        CsvResultSink(hash_value, replica_list)
+    )
     while True:
         result = run_decoupled_slot(
             flow_list=flow_list,
@@ -58,16 +63,12 @@ def run_decoupled_experiment(
             num_of_stages=num_of_stages,
             num_of_replicas=num_of_replicas,
             likelihood=likelihood,
+            adapters=adapters,
         )
         iteration += 1
 
         print("Elapsed:", result.elapsed_seconds, "seconds")
-        csv_gen_time(result.elapsed_seconds, hash_value)
-        csv_gen_SLA(result.sla_violations, hash_value)
-        csv_gen_util(result.aggregate_utility_total, hash_value)
-        csv_gen_jain(result.jain_fairness, hash_value)
         print(f"Current Iteration: {iteration}")
-        create_belief_csv(replica_list)
 
         if result.equilibrium == 1:
             return iteration
