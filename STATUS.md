@@ -13,7 +13,7 @@ Updated: 2026-06-29
 - Added a reproducible three-node kind configuration and created cluster `ibg` with Kubernetes 1.35.0.
 - Verified three Ready nodes, Ready system Pods, a two-replica HTTP deployment, Service DNS/networking, and cleanup of the temporary smoke-test namespace.
 - Completed Roadmap Phase 0: created `.venv` with Python 3.12, installed the declared dependencies, verified active IBG imports, and compiled all Python sources without executing `IBG/main.py`.
-- Completed Roadmap Phase 1: added eight deterministic characterization/equivalence tests and extracted one decoupled slot into an import-safe runner without changing the solver or belief mathematics.
+- Completed Roadmap Phase 1: added eight initial deterministic characterization/equivalence tests and extracted one decoupled slot into an import-safe runner; the later `BR_EIBG` correction is recorded below.
 - Reduced the reference entry point from 48 outer experiments to one by default and verified the existing small configuration (three stages, four replicas per stage, three flows) reaches equilibrium; smoke-test reports were written only under `/tmp`.
 - Completed Roadmap Phase 2: defined discovery, traffic, observation, and result-sink ports; added simulation-backed implementations; and kept measured latency separate from the legacy belief signal.
 - Expanded the suite to 18 passing tests, including explicit-adapter equivalence, legacy observation-update parity, contract validation, empty-discovery failure, and reference CSV sink behavior.
@@ -26,7 +26,13 @@ Updated: 2026-06-29
 - Added a shared non-root runtime image, a four-service Docker Compose topology, and a repeatable three-flow container-network smoke test.
 - Expanded the suite to 42 passing tests, including selected-endpoint routing, inter-flow concurrency, intra-flow stage ordering, telemetry correlation, downstream failures, and identity/correlation mismatches.
 - Verified the Phase 4 gate with three concurrent three-hop flows across the local container network; every flow returned stages 1, 2, and 3 in order and the stage-1 service reported admitted concurrency levels 1, 2, and 3.
-- Added `Tutorial.md` as the living beginner-friendly report, operating guide for every completed phase, and “IBG Exact” explanation of the Python reference logic.
+- Added `Tutorial.md` as a user-directed beginner-friendly report, operating guide, and “IBG Exact” explanation of the Python reference logic.
+- Replaced the provisional myopic policy in `IBG/claude.py` with exact memoized `BR_EIBG` continuation play over the formal one-replica-per-stage action space.
+- Kept the existing sampled utility grid, embedding, observation, belief-update, equilibrium, metric, adapter, and testbed behavior around the corrected solver.
+- Expanded the suite to 45 passing tests, including a non-myopic continuation fixture, a 56-state memoization check, and a three-flow/five-replica/three-stage integration case.
+- Verified the seeded three-flow/five-replica/three-stage run completes all nine placements and observations; the measured local wall time was approximately 179 ms.
+- Verified the default three-flow/four-replica/three-stage experiment still writes all reference reports and reached equilibrium in 23 iterations in one stochastic smoke run; outputs were isolated under `/tmp`.
+- Removed the scaling phase and fixed the supported exact-testbed target at three stages, five replicas per stage, and three flows.
 - Created and maintained the repository handoff documents as implementation progressed.
 
 ## Environment facts
@@ -44,7 +50,7 @@ Updated: 2026-06-29
 
 ## Current state
 
-Phases 0-4 are complete. Phases 5-7 in `ROADMAP.md` have not started. Phase 6 now validates small-scale behavior before the separate Phase 7 target-scale work. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged. The HTTP replica and flow generator now complete concurrent controller-selected routes over a local container network, but no Kubernetes application manifests or Kubernetes-backed adapters have been created yet.
+Phases 0-4 are complete. Phases 5-6 in `ROADMAP.md` have not started. Phase 6 is the final supported-size validation phase; the former scaling phase was removed because exact `BR_EIBG` is intentionally a small-instance algorithm. The supported target is three stages, five replicas per stage, and three flows. The surrounding utility, belief update, equilibrium, metric, adapter, and testbed behavior remains in place. The HTTP replica and flow generator complete concurrent controller-selected routes over a local container network, but no Kubernetes application manifests or Kubernetes-backed adapters have been created yet.
 
 ## Next action
 
@@ -52,4 +58,4 @@ Begin Phase 5 only when requested: add the small Kubernetes deployment, stable r
 
 ## New-thread handoff prompt
 
-> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, `STATUS.md`, and `Tutorial.md`. Phases 0-4 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 5, the small Kubernetes deployment, discovery/RBAC, and one-slot controller integration gate.
+> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Do not read or edit `Tutorial.md` unless explicitly requested. Phases 0-4 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 5, the small Kubernetes deployment, discovery/RBAC, and one-slot controller integration gate.

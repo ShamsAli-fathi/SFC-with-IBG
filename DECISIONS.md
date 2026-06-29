@@ -8,15 +8,15 @@
 - Limit WSL2 to 10 GB RAM and 6 processors, with a 4 GB swap file on E.
 - Use kind with one control-plane node and two worker nodes. kind uses containerd internally.
 - Start with the decoupled IBG only. Preserve its mathematical and learning logic with minimal alterations.
-- Small-scale target: three stages, 30 replicas per stage, and 15 logical flows per slot. Large-scale parameters come later.
+- Supported target: three stages, five replicas per stage, and three logical flows per slot.
 - Represent stages with three StatefulSets of 30 Pods. Use stable ordinal identities but no persistent storage.
 - Use tiny kernel-path HTTP services as CNF stand-ins. They expose health/processing behavior and observable latency/load.
 - Run the Python IBG controller in the cluster with a ServiceAccount and narrowly scoped RBAC.
 - Admit flows sequentially for placement, then exercise their selected paths concurrently to create contention.
 - Preserve the existing metric concepts (aggregate utility, SLA violations, Jain fairness, runtime, and beliefs) while adding slot, Pod, node, placement, and latency metadata.
 - Follow the ordered gates in `ROADMAP.md`. Complete and verify one phase before starting the next.
-- Validate simulation/Kubernetes behavior at small scale before beginning target-scale deployment; correctness and scaling have separate acceptance gates.
-- Maintain `Tutorial.md` as part of every phase so working commands, script logic, expected outputs, cleanup, and troubleshooting remain usable by a new reader.
+- Validate simulation/Kubernetes behavior at the supported small size; no scaling phase is planned for the exact algorithm.
+- Read or update `Tutorial.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
 - Characterize the reference behavior before refactoring, then introduce simulation-backed adapter contracts before Kubernetes implementations.
 - Treat measured HTTP latency and the legacy belief observation as separate fields initially. Replacing the legacy signal with measured latency requires an explicit, validated mathematical decision.
 - Make the slot runner depend on explicit discovery, traffic, observation, and result-sink ports. Keep simulation implementations as the behavioral baseline for future infrastructure adapters.
@@ -29,6 +29,11 @@
 - Validate returned slot/flow correlation and replica identity, then fail the slot request on downstream HTTP, payload, correlation, or identity errors; do not present partial telemetry as a completed slot.
 - Correlate every hop with slot, flow, stage, replica, Pod, and endpoint metadata while retaining server latency, client latency, concurrency, and legacy observation fields separately.
 - Use one non-root runtime image for the local replica and flow-generator services; keep Docker Compose packaging local to Phase 4 and defer Kubernetes manifests to Phase 5.
+- Use exact continuation play for the decoupled IBG: branch over every available replica at each player/load-vector subgame, score choices at their predicted final loads, and memoize subgames.
+- Enforce exactly one replica per stage in `BR_EIBG`; the paper's binary choose/skip pseudocode is generalized to the formal one-of-M SFC action constraint.
+- Keep the existing belief-driven 30-sample utility grid, utility kernel, learning, embedding, equilibrium, and reporting logic around the corrected solver. “Exact” refers to the SPNE recursion over that sampled grid.
+- Break exact utility ties by lowest replica ID so repeated seeded runs remain deterministic.
+- Keep `BR_EIBG` as the project's exact small-instance policy. A scalable approximation would be a separate future project and is not part of this roadmap.
 
 ## Deliberately deferred
 

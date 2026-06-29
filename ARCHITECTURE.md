@@ -2,7 +2,15 @@
 
 ## Current system
 
-`IBG/` is a working pure-Python simulation. Its active path is the small-scale, decoupled per-stage IBG: `IBG/main.py` constructs experiments, `IBG/runner.py` orchestrates one import-safe decoupled slot through adapter contracts, `IBG/claude.py` computes per-stage policy/utility grids, and `IBG/header.py` contains the replica, learning, embedding, and metric logic. Simulation adapters currently provide stage-scoped replica discovery, logical traffic execution, selected-replica observations, and reference CSV result storage. The separate budgeted/coupled code is not part of the current migration.
+`IBG/` is a working pure-Python simulation. Its active path is the small-scale, decoupled per-stage IBG: `IBG/main.py` constructs experiments, `IBG/runner.py` orchestrates one import-safe decoupled slot through adapter contracts, `IBG/claude.py` computes per-stage utility grids and the exact memoized `BR_EIBG` continuation policy, and `IBG/header.py` contains the replica, learning, embedding, and metric logic. Simulation adapters currently provide stage-scoped replica discovery, logical traffic execution, selected-replica observations, and reference CSV result storage. The separate budgeted/coupled code is not part of the current migration.
+
+## IBG Exact solver contract
+
+For each decoupled stage, the solver first builds the existing belief-driven utility grid using 30 Monte Carlo quality samples per replica and one utility value for every possible load from 1 through the number of flows. `BR_EIBG` then solves the sequential one-replica-per-stage game exactly with respect to that sampled grid.
+
+Each subgame is identified by the next player and the full vector of loads already assigned to the stage's replica slots. The solver branches over every active replica, recursively solves the continuation game, evaluates the current player's choice at its predicted final load, and selects the best continuation-consistent action. Subgames are memoized by load vector, and exact ties select the lowest replica ID for deterministic behavior. The former `backward_d_memoized_simple` name remains only as a compatibility wrapper around `br_eibg_exact`.
+
+This one-of-M generalization is intentionally limited to small instances. With `N` flows and `M` active replicas, the number of cached load vectors through the terminal depth is `C(N+M, M)`. The supported three-flow/five-replica case has 56 states. Scaling beyond this exact testbed would require a different approximate algorithm and is outside the current project.
 
 ## Target testbed
 
@@ -12,9 +20,9 @@ Windows 11
     -> kind cluster
       -> 1 control-plane node
       -> 2 worker nodes
-        -> Stage 1 StatefulSet: 30 HTTP CNF Pods
-        -> Stage 2 StatefulSet: 30 HTTP CNF Pods
-        -> Stage 3 StatefulSet: 30 HTTP CNF Pods
+        -> Stage 1 StatefulSet: 5 HTTP CNF Pods
+        -> Stage 2 StatefulSet: 5 HTTP CNF Pods
+        -> Stage 3 StatefulSet: 5 HTTP CNF Pods
       -> Python IBG controller Pod
       -> lightweight flow-generator Pod
 ```
@@ -28,8 +36,8 @@ Development tools, source code, Docker Engine, and cluster state live inside the
 ## Runtime flow
 
 1. The controller discovers healthy replica Pods and their stable identities through the Kubernetes API.
-2. A slot admits 15 logical flows in one randomized sequential order.
-3. The unchanged decoupled solver selects one replica at each of the three stages for every flow.
+2. A slot admits 3 logical flows in one randomized sequential order.
+3. The exact decoupled `BR_EIBG` solver selects one replica at each of the three stages for every flow.
 4. The controller records/applies those assignments.
 5. The flow generator exercises the selected three-Pod paths concurrently through lightweight HTTP requests.
 6. Only selected replicas return per-request signals such as latency and concurrent load.

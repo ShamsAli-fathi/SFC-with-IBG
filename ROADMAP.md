@@ -1,6 +1,6 @@
 # IBG Testbed Roadmap
 
-Work proceeds in order. A phase starts only after the previous phase's checks pass, `STATUS.md` records the result, and `Tutorial.md` explains how a user can operate and understand the completed work.
+Work proceeds in order. A phase starts only after the previous phase's checks pass and `STATUS.md` records the result.
 
 ## Codex reasoning guidance
 
@@ -28,8 +28,9 @@ Suggested Codex reasoning: `high` — preserving stochastic mathematical behavio
 - Add deterministic characterization tests with fixed Python and NumPy seeds.
 - Cover utility calculation, per-stage selection, embedding, belief updates, equilibrium, aggregate utility, SLA, and Jain fairness.
 - Extract one configurable experiment slot from the monolithic runner without changing solver, utility, belief, or equilibrium behavior.
+- Replace the provisional myopic policy with memoized `BR_EIBG` continuation play that enforces one replica per stage.
 
-Gate: fixed fixtures reproduce the reference results before and after orchestration extraction.
+Gate: fixed fixtures reproduce the reference results around orchestration extraction, a non-myopic fixture proves continuation reasoning, and a three-flow/five-replica/three-stage exact run completes successfully.
 
 ## Phase 2: Introduce adapter boundaries
 
@@ -86,19 +87,8 @@ Status: not started.
 Suggested Codex reasoning: `xhigh` — cross-backend validation must explain discrepancies and distinguish mathematical, stochastic, telemetry, and Kubernetes effects.
 
 - Compare simulation-backed and Kubernetes-backed runs using controlled seeds and replica profiles.
+- Use exact `BR_EIBG` in both backends.
 - Verify placement, asymmetric observations, belief evolution, utility, SLA, fairness, timing, and result metadata.
-- Repeat the small cluster case and quantify any discrepancies from the reference behavior.
+- Repeat the supported case with three stages, five replicas per stage, and three flows, then quantify any discrepancies from the reference behavior.
 
-Gate: repeated controlled small-cluster runs produce complete, comparable results, and discrepancies from the reference behavior are measured and documented.
-
-## Phase 7: Scale to target
-
-Status: not started.
-
-Suggested Codex reasoning: `high` — scaling replica counts and flow concurrency requires careful resource, reliability, and repeatability checks after behavior has been validated.
-
-- Scale to three stages, 30 replicas per stage, and 15 logical flows per slot.
-- Repeat target-scale runs and record completion, timing, placement, telemetry, and resource limitations.
-- Keep the validated solver and learning behavior fixed while addressing scale-specific infrastructure issues.
-
-Gate: repeated target-scale runs complete with the required result metadata and without unsupported dataplane claims.
+Gate: repeated supported-size runs produce complete, comparable results, and discrepancies from the Python reference behavior are measured and documented.

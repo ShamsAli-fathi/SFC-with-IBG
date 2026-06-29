@@ -4,7 +4,7 @@ This is the living report and usage guide for the SFC-with-IBG project. It is wr
 
 Updated through: Phase 4, 2026-06-29.
 
-Whenever a phase adds commands, scripts, services, configuration, outputs, or troubleshooting knowledge, this file must be updated with it. A phase is not fully documented until a new reader can use its result from this guide.
+This file is user-directed. Agents must not read or edit it unless the user explicitly requests that action in the current task.
 
 ## 1. What this project is
 
@@ -61,15 +61,14 @@ The project currently has working results through Phase 4.
 | Phase | Status | Main result |
 |---|---|---|
 | 0: Python environment | Complete | Project-local Python 3.12 virtual environment and dependencies. |
-| 1: Protect mathematics | Complete | Deterministic characterization tests and an import-safe one-slot runner. |
+| 1: Protect mathematics | Complete | Exact memoized `BR_EIBG`, deterministic characterization tests, and an import-safe one-slot runner. |
 | 2: Adapter boundaries | Complete | Simulation implementations for discovery, traffic, observations, and result storage. |
 | 3: HTTP replica | Complete | Configurable FastAPI replica with health, processing, concurrency, latency, and legacy observation fields. |
 | 4: Flow generator | Complete | Concurrent logical flows with sequential three-hop execution on a local container network. |
 | 5: Connect Kubernetes | Not started | StatefulSets, Services, discovery, RBAC, and controller integration are still future work. |
-| 6: Validate behavior | Not started | Controlled comparison between simulation and Kubernetes backends. |
-| 7: Scale to target | Not started | Three stages, 30 replicas per stage, and 15 flows per slot. |
+| 6: Validate behavior | Not started | Final controlled comparison at three stages, five replicas per stage, and three flows. |
 
-The most recent full verification passed 42 Python tests. The Phase 4 container gate completed three concurrent flows with three ordered hops per flow. The Stage 1 service reported admitted concurrency values `[1, 2, 3]`, proving that the flows overlapped.
+The most recent full verification passed 45 Python tests. The exact-solver gate completed three flows across three stages with five replicas per stage. The Phase 4 container gate completed three concurrent flows with three ordered hops per flow, and the Stage 1 service reported admitted concurrency values `[1, 2, 3]`, proving that the flows overlapped.
 
 No Kubernetes application manifests or Kubernetes-backed IBG adapters exist yet. The kind cluster configuration exists, but using it as the project backend belongs to Phase 5.
 
@@ -145,7 +144,7 @@ What success looks like:
 
 ### What Phase 1 provides
 
-Phase 1 captured the current mathematical behavior in deterministic tests. It also extracted one simulation slot into `IBG/runner.py`, allowing later infrastructure work to call one iteration without rewriting the solver.
+Phase 1 captured the mathematical behavior in deterministic tests and extracted one simulation slot into `IBG/runner.py`. The original provisional policy was later corrected: `IBG/claude.py` now implements the real memoized `BR_EIBG` continuation algorithm while keeping the surrounding utility, learning, equilibrium, and reporting pipeline intact.
 
 ### Run the mathematical characterization tests
 
@@ -155,6 +154,15 @@ python -m pytest -q tests/test_characterization.py tests/test_runner.py
 ```
 
 These tests check utility, selection, embedding, belief updates, equilibrium, aggregate utility, SLA behavior, Jain fairness, and equivalence between the original orchestration and the extracted runner.
+
+Run the exact-solver size gate directly with:
+
+```bash
+python -m pytest -q tests/test_runner.py \
+  -k three_stages_with_three_flows_and_five_replicas
+```
+
+This gate uses three flows, five replicas in each of three stages, and verifies all nine placements and selected-replica observations.
 
 ### Run the reference simulation safely
 
@@ -388,11 +396,9 @@ The first gate will use three stages, two replicas per stage, and three flows fo
 
 ### Phase 6: Validate behavior
 
-This phase will compare controlled simulation-backed and Kubernetes-backed runs at small scale. It must explain differences in placements, observations, beliefs, metrics, timing, and metadata before scaling begins.
+This is the final planned phase. It will compare controlled simulation-backed and Kubernetes-backed runs with three stages, five replicas per stage, and three flows. It must explain differences in placements, observations, beliefs, metrics, timing, and metadata.
 
-### Phase 7: Scale to target
-
-Only after Phase 6 passes will the testbed scale to three stages, 30 replicas per stage, and 15 flows per slot.
+There is no scaling phase. Exact load-vector `BR_EIBG` is intentionally used only for small instances. Adding an approximate large-scale policy would change the project's algorithmic scope and would need a separate roadmap.
 
 ## 11. IBG Exact: Python scripts and logic
 
@@ -404,7 +410,7 @@ Only after Phase 6 passes will the testbed scale to three stages, 30 replicas pe
 |---|---|
 | `IBG/main.py` | Creates experiments and replicas, repeats slots until equilibrium, and selects the default decoupled path. |
 | `IBG/runner.py` | Runs one complete decoupled slot and returns a structured `SlotResult`. |
-| `IBG/claude.py` | Builds utility grids and supplies the replica-selection policy. |
+| `IBG/claude.py` | Builds sampled utility grids and solves the exact memoized `BR_EIBG` continuation policy. |
 | `IBG/header.py` | Defines `Replica` and the reference utility, embedding, observation, belief, equilibrium, and fairness functions. |
 | `IBG/ports.py` | Defines the four infrastructure-neutral adapter contracts and shared data objects. |
 | `IBG/simulation_adapters.py` | Implements the ports using the original in-process simulation behavior and provides no-op/in-memory result sinks for tests. |
@@ -446,7 +452,7 @@ The current utility kernel is:
 utility = 100 / (q * (1 + gamma * congestion)) - 5
 ```
 
-Higher sampled delay `q`, higher congestion, or higher `gamma` lowers utility. The solver selects the best replica with positive utility for the current load state.
+Higher sampled delay `q`, higher congestion, or higher `gamma` lowers utility. Because every flow must select exactly one replica per stage, the solver chooses the continuation-consistent replica with the highest utility even when every available value is negative.
 
 ### 11.3 What happens inside one slot
 
@@ -468,12 +474,27 @@ The slot result includes placements by stage, complete routes by flow, utility g
 
 ### 11.4 Policy and utility logic
 
-For every replica in the current stage, `backward_d_memoized_simple`:
+For every replica in the current stage, `br_eibg_exact` first:
 
 1. Draws 30 delay-like samples using the replica's current belief.
 2. Calculates expected utility for each possible congestion level from 1 to the number of flows.
 3. Builds a utility table whose rows are replicas and columns are congestion levels.
-4. Creates a policy lookup that chooses the positive-utility replica with the highest value for the current load state.
+4. Creates the sampled utility grid used by the exact game solver.
+
+`BREIBGPolicy` then solves the sequential game:
+
+1. Represent a subgame by the next player and the full vector of replica loads already chosen.
+2. Try every available replica as the current player's action.
+3. Recursively solve how all later players respond to that action.
+4. Evaluate the current player's selected replica using its predicted final load, not its immediate load.
+5. Select the action with the highest continuation-consistent utility.
+6. Cache each load-vector subgame so it is solved only once.
+
+The document's elementary pseudocode describes a binary choose/skip decision for one replica. The SFC model formally requires exactly one of the stage's replicas, so the implementation generalizes the branch to all active replicas. With three flows and five replicas, only 56 distinct load-vector states are solved, instead of repeatedly walking every path in the raw game tree.
+
+The number of cached states grows as the number of possible load vectors, `C(N+M, M)` for `N` flows and `M` replicas through the terminal depth. This is why the supported project size remains three flows and five replicas per stage. Larger approximate algorithms are outside this project.
+
+“Exact” means the recursion finds the exact continuation equilibrium for the utility grid it receives. The grid itself deliberately preserves the existing 30-sample Monte Carlo quality estimate, so it remains a sampled estimate of the paper's belief-weighted utility integral.
 
 `embedding` walks through the shuffled flow list, asks the policy for a replica, updates the current replica loads, and appends the selected replica to that flow's route.
 
@@ -625,7 +646,7 @@ The cluster's node containers did not automatically restore the Kubernetes API a
 
 ## 15. How to maintain this tutorial
 
-Whenever a phase advances, update this file in the same change. At minimum:
+Only update this file when the user explicitly requests it. When an update is requested, check at minimum:
 
 1. Update the date and current phase report.
 2. Add the exact commands a user should run.

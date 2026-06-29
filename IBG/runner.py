@@ -3,7 +3,7 @@ import copy
 import random
 import time
 
-from claude import backward_d_memoized_simple
+from claude import br_eibg_exact
 from learning import apply_observations
 from header import (
     aggregate_utility_per_flow,
@@ -69,7 +69,7 @@ def run_decoupled_slot(
         )
         if not discovered_replicas:
             raise RuntimeError(f"no replicas discovered for stage {stage}")
-        policy, utility_grid = backward_d_memoized_simple(
+        policy, utility_grid = br_eibg_exact(
             flow_list,
             discovered_replicas,
             likelihood,

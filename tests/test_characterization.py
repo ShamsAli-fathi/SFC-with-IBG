@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from claude import backward_d_memoized_simple
+from claude import BREIBGPolicy, br_eibg_exact
 from header import (
     Replica,
     aggregate_utility_per_flow,
@@ -38,7 +38,7 @@ def test_utility_kernel_and_expected_utility_are_characterized():
     assert replica.eval_util(2, [4.0, 5.0, 6.0]) == pytest.approx(9.682539682539684)
 
 
-def test_seeded_solver_and_embedding_are_characterized():
+def test_seeded_br_eibg_and_embedding_are_characterized():
     random.seed(1234)
     np.random.seed(1234)
     replicas = {
@@ -47,7 +47,7 @@ def test_seeded_solver_and_embedding_are_characterized():
     }
     flows = [1, 2, 3]
 
-    policy, utility_grid = backward_d_memoized_simple(flows, replicas, 0.8, 1, 2)
+    policy, utility_grid = br_eibg_exact(flows, replicas, 0.8, 1, 2)
     embed, last_embed = embedding(
         policy,
         2,
@@ -64,6 +64,47 @@ def test_seeded_solver_and_embedding_are_characterized():
     )
     assert embed == {"f_1": [2], "f_2": [1], "f_3": [1]}
     assert last_embed == {1: 2, 2: 1, 3: 1}
+
+
+def test_br_eibg_uses_continuation_play_instead_of_myopic_utility():
+    utility_grid = pd.DataFrame(
+        [[2.0, 1.0, 1.0], [3.0, 2.0, 1.0]],
+        index=[1, 2],
+        columns=[1, 2, 3],
+    )
+    policy = BREIBGPolicy(utility_grid)
+
+    action, predicted_final_loads = policy.solve_state((0, 0))
+
+    assert utility_grid.loc[2, 1] > utility_grid.loc[1, 1]
+    assert action == 1
+    assert predicted_final_loads == (1, 2)
+    assert policy[(1, 0)] == 2
+    assert policy[(1, 1)] == 2
+    assert policy.cache_info().hits > 0
+
+
+def test_br_eibg_memoizes_the_three_flow_five_replica_state_space():
+    utility_grid = pd.DataFrame(
+        [
+            [8.0, 5.0, 2.0],
+            [7.5, 5.5, 2.5],
+            [7.0, 6.0, 3.0],
+            [6.5, 5.0, 4.0],
+            [6.0, 4.5, 3.5],
+        ],
+        index=[1, 2, 3, 4, 5],
+        columns=[1, 2, 3],
+    )
+    policy = BREIBGPolicy(utility_grid)
+
+    action, predicted_final_loads = policy.solve_state((0, 0, 0, 0, 0))
+    cache = policy.cache_info()
+
+    assert action in {1, 2, 3, 4, 5}
+    assert sum(predicted_final_loads) == 3
+    assert cache.misses == 56
+    assert cache.hits > 0
 
 
 def test_belief_update_and_aggregation_are_characterized():

@@ -1,138 +1,213 @@
-def backward_d_memoized_simple(flow_list, replica_list, likelihood, stage, num_of_replicas):
-    import numpy as np
-    import pandas as pd
-    from functools import lru_cache
+from functools import lru_cache
 
-    # ----------------------------------------
-    # 1. Draw q values (unchanged logic)
-    # ----------------------------------------
-    def draw(belief):
-        belief_temp = np.array(belief)
-        belief_temp = belief_temp / belief_temp.sum()
+import numpy as np
+import pandas as pd
+
+
+class BREIBGPolicy:
+    """Exact per-stage BR_EIBG policy for one-of-M replica selection.
+
+    The paper presents the elementary recursion as choose/skip for one
+    replica.  An SFC stage requires exactly one replica, so each subgame here
+    branches over all active replicas.  The continuation game is memoized by
+    its sufficient state: the current load vector (whose sum determines the
+    next player index).
+    """
+
+    def __init__(self, utility_grid, num_replica_slots=None):
+        if utility_grid.empty:
+            raise ValueError("utility_grid must contain at least one replica")
+
+        self.replica_ids = tuple(sorted(int(value) for value in utility_grid.index))
+        if len(self.replica_ids) != len(set(self.replica_ids)):
+            raise ValueError("utility_grid replica IDs must be unique")
+
+        self.num_players = len(utility_grid.columns)
+        if self.num_players < 1:
+            raise ValueError("utility_grid must contain at least one player")
+        if tuple(utility_grid.columns) != tuple(range(1, self.num_players + 1)):
+            raise ValueError("utility_grid columns must be congestion levels 1..N")
+
+        self.num_replica_slots = (
+            max(self.replica_ids)
+            if num_replica_slots is None
+            else num_replica_slots
+        )
+        if self.num_replica_slots < max(self.replica_ids):
+            raise ValueError("num_replica_slots does not cover every replica ID")
+        if any(replica_id < 1 for replica_id in self.replica_ids):
+            raise ValueError("replica IDs must be positive")
+
+        ordered_grid = utility_grid.loc[list(self.replica_ids)]
+        self._utilities = ordered_grid.to_numpy(dtype=float)
+        if not np.isfinite(self._utilities).all():
+            raise ValueError("utility_grid must contain only finite values")
+
+        @lru_cache(maxsize=None)
+        def solve(loads):
+            if sum(loads) == self.num_players:
+                return 0, loads
+
+            best_replica = None
+            best_final_loads = None
+            best_utility = -np.inf
+
+            for row, replica_id in enumerate(self.replica_ids):
+                replica_position = replica_id - 1
+                next_loads = list(loads)
+                next_loads[replica_position] += 1
+                _, final_loads = solve(tuple(next_loads))
+                final_replica_load = final_loads[replica_position]
+                current_utility = self._utilities[row, final_replica_load - 1]
+
+                if (
+                    current_utility > best_utility
+                    or (
+                        current_utility == best_utility
+                        and (
+                            best_replica is None
+                            or replica_id < best_replica
+                        )
+                    )
+                ):
+                    best_replica = replica_id
+                    best_final_loads = final_loads
+                    best_utility = current_utility
+
+            return best_replica, best_final_loads
+
+        self._solve = solve
+
+    def _normalize_loads(self, loads):
+        normalized = tuple(loads)
+        if len(normalized) != self.num_replica_slots:
+            raise ValueError(
+                f"load vector must contain {self.num_replica_slots} entries"
+            )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, np.integer))
+            or value < 0
+            for value in normalized
+        ):
+            raise ValueError("load vector entries must be non-negative integers")
+        if sum(normalized) > self.num_players:
+            raise ValueError("load vector cannot contain more assignments than flows")
+        return tuple(int(value) for value in normalized)
+
+    def solve_state(self, loads):
+        """Return the current SPNE action and predicted terminal load vector."""
+        return self._solve(self._normalize_loads(loads))
+
+    def cache_info(self):
+        return self._solve.cache_info()
+
+    def __getitem__(self, loads):
+        replica_id, _ = self.solve_state(loads)
+        return replica_id
+
+    def get(self, loads, default=0):
+        try:
+            return self[loads]
+        except (TypeError, ValueError):
+            return default
+
+
+def _sample_replica_quality(replica, sample_count=30):
+    belief = np.asarray(replica.belief, dtype=float)
+    belief_total = belief.sum()
+    if belief.shape != (4,) or belief_total <= 0 or (belief < 0).any():
+        raise ValueError(
+            "replica belief must contain four non-negative, positive-total values"
+        )
+    probabilities = belief / belief_total
+
+    def draw():
         return np.random.choice(
-            [np.random.normal(3, np.sqrt(0.5)),
-             np.random.normal(6, np.sqrt(1)),
-              np.random.normal(10, np.sqrt(2)),
-             np.random.normal(15, np.sqrt(4))],
-            p=[belief_temp[3], belief_temp[2], belief_temp[1], belief_temp[0]]
+            [
+                np.random.normal(3, np.sqrt(0.5)),
+                np.random.normal(6, np.sqrt(1)),
+                np.random.normal(10, np.sqrt(2)),
+                np.random.normal(15, np.sqrt(4)),
+            ],
+            p=[
+                probabilities[3],
+                probabilities[2],
+                probabilities[1],
+                probabilities[0],
+            ],
         )
 
-    # ----------------------------------------
-    # 2. Build utility_grid (vectorized)
-    # rows = replicas in this stage
-    # cols = congestion level 1..N
-    # ----------------------------------------
-    replicas_in_stage = []
-    q_values = []
-    for idx, rep in replica_list.items():
-        if rep.stage == stage:
-            replicas_in_stage.append(rep)
-            # 30 MC draws, vectorized mean
-            samples = np.array([draw(rep.belief) for _ in range(30)])
-            q_values.append(samples)
+    return np.asarray([draw() for _ in range(sample_count)])
 
-    R_stage = len(replicas_in_stage)
-    N = len(flow_list)
 
-    # congestion levels 1..N as a numpy array
-    loads = np.arange(1, N + 1)
+def br_eibg_exact(
+    flow_list,
+    replica_list,
+    likelihood,
+    stage,
+    num_of_replicas,
+):
+    """Build the exact memoized BR_EIBG policy for one decoupled stage.
 
-    # build matrix utility_grid_mat shape = (R_stage, N)
-    utility_grid_mat = np.zeros((R_stage, N))
+    ``likelihood`` remains in the public signature for compatibility with the
+    reference runner.  Expected utility is calculated from each replica's
+    current belief and the existing Monte Carlo quality model.
+    """
+    del likelihood
 
-    for r_index, rep in enumerate(replicas_in_stage):
-        q = q_values[r_index]
-        # vectorized eval_util over all loads
-        utility_grid_mat[r_index, :] = np.array([rep.eval_util(load, q) for load in loads])
+    if not flow_list:
+        raise ValueError("flow_list must contain at least one flow")
+    if num_of_replicas < 1:
+        raise ValueError("num_of_replicas must be at least 1")
 
-    # convert to DataFrame to keep your original structure
-    utility_grid = pd.DataFrame(
-        utility_grid_mat,
-        index=[rep.replica for rep in replicas_in_stage],
-        columns=loads
+    replicas_in_stage = sorted(
+        (
+            replica
+            for replica in replica_list.values()
+            if replica.stage == stage
+        ),
+        key=lambda replica: replica.replica,
     )
+    if not replicas_in_stage:
+        raise ValueError(f"stage {stage} must contain at least one replica")
+    if any(replica.replica > num_of_replicas for replica in replicas_in_stage):
+        raise ValueError("replica ID exceeds num_of_replicas")
 
-    # ----------------------------------------
-    # 3. Vectorized backward induction per replica
-    # decisions[j][i][n] = 0 or 1
-    # ----------------------------------------
+    loads = np.arange(1, len(flow_list) + 1)
+    utility_grid_values = np.zeros((len(replicas_in_stage), len(flow_list)))
 
-    # decisions is stored as:
-    # decisions[j] = 2D numpy array of shape (N+1, N)
-    # rows: i (player index) = 1..N
-    # cols: n (congestion)   = 0..N-1
-    # Only entries with n <= i-1 are valid.
+    for row, replica in enumerate(replicas_in_stage):
+        quality_samples = _sample_replica_quality(replica)
+        utility_grid_values[row, :] = [
+            replica.eval_util(load, quality_samples)
+            for load in loads
+        ]
 
-    decisions = {}
+    utility_grid = pd.DataFrame(
+        utility_grid_values,
+        index=[replica.replica for replica in replicas_in_stage],
+        columns=loads,
+    )
+    policy = BREIBGPolicy(
+        utility_grid,
+        num_replica_slots=num_of_replicas,
+    )
+    return policy, utility_grid
 
-    for r_idx, rep in enumerate(replicas_in_stage):
-        j = rep.replica
 
-        # utility_grid_mat[r_idx, :] holds utilities for loads 1..N
-        util = utility_grid_mat[r_idx, :]  # shape (N,)
-
-        # For congestion n, utility is util[n] because util[n] corresponds to load = n+1
-        # Build a matrix of shape (N, N) where each row i uses util[0..i-1], and zeros after that
-        # Then decisions = (util > 0)
-        util_expanded = np.tile(util, (N, 1))  # shape (N,N)
-        n_indices = np.arange(N)
-        i_indices = np.arange(1, N + 1).reshape(-1, 1)
-
-        # mask for valid states (n <= i-1)
-        valid_mask = n_indices <= (i_indices - 1)
-
-        # decision matrix initialized to 0
-        dec_mat = np.zeros((N, N), dtype=int)
-
-        # apply decision only on valid (i,n)
-        dec_mat[valid_mask] = (util_expanded[valid_mask] > 0).astype(int)
-
-        decisions[j] = dec_mat
-
-    # ----------------------------------------
-    # 4. Policy lookup: loads → best replica
-    # Uses memoized function for speed
-    # ----------------------------------------
-    @lru_cache(None)
-    def policy_state(loads_tuple):
-        loads = np.array(loads_tuple)
-        total_assigned = loads.sum()
-
-        if total_assigned >= N:
-            return 0
-
-        # current player index i (1-based)
-        i = total_assigned + 1
-
-        best_replica = 0
-        best_value = -1e18
-
-        # vectorized lookup over all replicas in this stage
-        for r_idx, rep in enumerate(replicas_in_stage):
-            j = rep.replica
-            n = loads[rep.replica - 1]
-
-            # invalid state
-            if n > i - 1:
-                continue
-
-            # decision for this replica
-            if decisions[j][i - 1, n] == 1:
-                u = utility_grid_mat[r_idx, n]   # utility at load = n+1
-                if u > best_value:
-                    best_value = u
-                    best_replica = j
-
-        if best_value <= 0:
-            return 0
-        return best_replica
-
-    # wrapper so embedding() stays unchanged
-    class BRPolicyDict:
-        def __getitem__(self, key):
-            return policy_state(tuple(key))
-
-        def get(self, key, default=0):
-            return policy_state(tuple(key))
-
-    return BRPolicyDict(), utility_grid
+def backward_d_memoized_simple(
+    flow_list,
+    replica_list,
+    likelihood,
+    stage,
+    num_of_replicas,
+):
+    """Compatibility wrapper for the former provisional solver name."""
+    return br_eibg_exact(
+        flow_list,
+        replica_list,
+        likelihood,
+        stage,
+        num_of_replicas,
+    )

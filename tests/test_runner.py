@@ -6,7 +6,7 @@ import sys
 
 import numpy as np
 
-from claude import backward_d_memoized_simple
+from claude import br_eibg_exact
 from header import (
     Replica,
     aggregate_utility_per_flow,
@@ -58,7 +58,7 @@ def run_legacy_slot(flow_list, replica_list):
 
     for stage in range(1, 4):
         random.shuffle(flow_list)
-        policy, utility_grid = backward_d_memoized_simple(
+        policy, utility_grid = br_eibg_exact(
             flow_list,
             replica_list,
             0.8,
@@ -155,3 +155,40 @@ def test_main_is_import_safe_and_defaults_to_one_experiment(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert list(tmp_path.iterdir()) == []
     assert DEFAULT_EXPERIMENT_RUNS == 1
+
+
+def test_exact_solver_completes_three_stages_with_three_flows_and_five_replicas():
+    replicas = {}
+    for stage in range(1, 4):
+        for replica_id in range(1, 6):
+            replicas[(stage, replica_id)] = Replica(
+                stage=stage,
+                replica=replica_id,
+                belief=[0.25, 0.25, 0.25, 0.25],
+                delay=25,
+                cost=1,
+                gamma=0.18 + replica_id * 0.02,
+                state=((stage + replica_id - 2) % 4) + 1,
+                capacity=2000 if replica_id % 2 else 5000,
+            )
+
+    random.seed(3105)
+    np.random.seed(3105)
+    result = run_decoupled_slot(
+        [1, 2, 3],
+        replicas,
+        num_of_stages=3,
+        num_of_replicas=5,
+    )
+
+    assert set(result.assignments_by_stage) == {1, 2, 3}
+    assert all(
+        set(assignments) == {1, 2, 3}
+        and set(assignments.values()).issubset({1, 2, 3, 4, 5})
+        for assignments in result.assignments_by_stage.values()
+    )
+    assert all(len(route) == 3 for route in result.embed_dict.values())
+    assert all(
+        len(observations) == 3
+        for observations in result.observations_by_stage.values()
+    )
