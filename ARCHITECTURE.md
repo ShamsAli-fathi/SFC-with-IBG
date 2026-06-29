@@ -43,6 +43,14 @@ The Phase 3 replica service is a small FastAPI/Uvicorn application. `GET /health
 
 Replica identity, hidden state, capacity, base delay, and congestion delay are deterministic environment configuration. The service increments a shared request counter before simulated work, applies an additional delay for overlapping requests, and decrements the counter in a `finally` block. Its default observation source delegates to the reference `Replica.tasting()` model; it does not update beliefs locally.
 
+## Flow-generator contract
+
+The Phase 4 flow generator is a separate FastAPI service. `POST /run-slot` accepts a slot ID and a nonempty set of complete three-hop routes supplied by the controller. Every route must contain stages 1, 2, and 3 in that order, with an explicit replica identity and HTTP endpoint for each hop.
+
+The generator starts all logical flows concurrently, while each flow awaits its own hops sequentially. It calls only the selected replica endpoints, validates that each response matches the requested slot, flow, stage, and replica, and returns correlated per-hop telemetry containing slot, flow, stage, replica, Pod, endpoint, admitted concurrency, server and client latency, and the unchanged legacy observation fields. A downstream failure, identity mismatch, or correlation mismatch fails the slot request explicitly rather than returning partial results as if the slot had completed.
+
+For local validation, the replica and flow-generator processes share one non-root container image and run on a private Docker Compose network. This exercises real service-to-service HTTP without introducing Kubernetes concerns before Phase 5.
+
 ## Migration boundary
 
 Keep the solver and belief mathematics as pure Python. Add replaceable adapters for replica discovery, placement publication, HTTP traffic/telemetry, and result storage. This keeps the simulation logic testable without a cluster and lets testbed integration be verified separately.

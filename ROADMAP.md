@@ -57,7 +57,7 @@ Gate: local tests verify identity, concurrency accounting, latency telemetry, ob
 
 ## Phase 4: Build the flow generator
 
-Status: not started.
+Status: complete.
 
 Suggested Codex reasoning: `high` — concurrent multi-hop execution, correlation, cleanup, and partial failures create subtle state and timing risks.
 

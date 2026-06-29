@@ -22,6 +22,11 @@
 - Implement the HTTP replica as a small FastAPI/Uvicorn service with environment-provided stable identity and experiment parameters.
 - Count active requests inside each replica service and report the admitted concurrency and measured server processing latency. Always release the counter on success or failure.
 - Generate `legacy_signal` and `legacy_likelihood` through the reference tasting model while leaving belief mutation exclusively in the controller.
+- Make the flow generator accept complete controller-selected routes rather than perform placement itself.
+- Start logical flows concurrently but await the three selected hops of each individual flow in stage order.
+- Validate returned slot/flow correlation and replica identity, then fail the slot request on downstream HTTP, payload, correlation, or identity errors; do not present partial telemetry as a completed slot.
+- Correlate every hop with slot, flow, stage, replica, Pod, and endpoint metadata while retaining server latency, client latency, concurrency, and legacy observation fields separately.
+- Use one non-root runtime image for the local replica and flow-generator services; keep Docker Compose packaging local to Phase 4 and defer Kubernetes manifests to Phase 5.
 
 ## Deliberately deferred
 

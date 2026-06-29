@@ -21,6 +21,11 @@ Updated: 2026-06-29
 - Completed Roadmap Phase 3: implemented the configurable FastAPI/Uvicorn HTTP replica with `/health` and `/process`, stable identity, real concurrent-request accounting, latency telemetry, and the reference legacy observation model.
 - Expanded the suite to 32 passing tests, including endpoint contracts, three-request overlap, exact tasting parity, request/config validation, and concurrency cleanup after failures.
 - Verified a live localhost Uvicorn process returns HTTP 200 for both endpoints and shuts down cleanly.
+- Completed Roadmap Phase 4: implemented a route-driven FastAPI flow generator that runs logical flows concurrently while preserving sequential three-stage execution within each flow.
+- Added strict route, response, and replica-identity validation plus correlated per-hop concurrency, latency, Pod, endpoint, and legacy-observation telemetry.
+- Added a shared non-root runtime image, a four-service Docker Compose topology, and a repeatable three-flow container-network smoke test.
+- Expanded the suite to 42 passing tests, including selected-endpoint routing, inter-flow concurrency, intra-flow stage ordering, telemetry correlation, downstream failures, and identity/correlation mismatches.
+- Verified the Phase 4 gate with three concurrent three-hop flows across the local container network; every flow returned stages 1, 2, and 3 in order and the stage-1 service reported admitted concurrency levels 1, 2, and 3.
 - Created and maintained the repository handoff documents as implementation progressed.
 
 ## Environment facts
@@ -34,15 +39,16 @@ Updated: 2026-06-29
 - The `ibg` kind cluster still exists after the WSL restart, but its node containers did not restore the Kubernetes API automatically. The cluster is not required for Phases 0-4 and can remain stopped until cluster work resumes.
 - C has limited free space; the WSL distribution and its Docker/cluster data are therefore kept on E.
 - The current project root is a Git repository on branch `IBG`, with `origin` configured for `ShamsAli-fathi/SFC-with-IBG`.
+- Docker Hub returned HTTP 403 for the initial Python base-image pull, so the local runtime image uses the official Azure Linux Python 3.12 base from Microsoft Container Registry. This is a packaging workaround, not a change to runtime behavior.
 
 ## Current state
 
-Phases 0-3 are complete. Phases 4-6 in `ROADMAP.md` have not started. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged. A locally verified HTTP replica now implements the observation contract, but no flow generator, container image, application manifest, or Kubernetes adapter has been created yet.
+Phases 0-4 are complete. Phases 5-6 in `ROADMAP.md` have not started. The reference solver, utility, belief update, equilibrium, and metric functions remain unchanged. The HTTP replica and flow generator now complete concurrent controller-selected routes over a local container network, but no Kubernetes application manifests or Kubernetes-backed adapters have been created yet.
 
 ## Next action
 
-Begin Phase 4 only when requested: implement the concurrent three-hop flow generator and validate it on a local container network.
+Begin Phase 5 only when requested: add the small Kubernetes deployment, stable replica discovery, narrow RBAC, and controller integration without changing the solver.
 
 ## New-thread handoff prompt
 
-> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Phases 0-3 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 4, the concurrent three-hop flow generator and local container-network gate.
+> We are continuing the IBG Kubernetes testbed project in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Phases 0-4 are complete; do not begin a later phase without an explicit request. The next planned work is Phase 5, the small Kubernetes deployment, discovery/RBAC, and one-slot controller integration gate.

@@ -29,4 +29,16 @@ STAGE=1 REPLICA_ID=1 POD_NAME=stage-1-0 \
 
 The service exposes `GET /health` and `POST /process`.
 
+## Local three-hop testbed
+
+Build and start one flow generator and one replica for each stage on a private container network:
+
+```bash
+docker compose -f deploy/local/compose.yaml up --build --detach --wait
+.venv/bin/python scripts/phase4_smoke.py
+docker compose -f deploy/local/compose.yaml down --remove-orphans
+```
+
+The smoke test sends three logical flows concurrently. Each flow visits its selected stage 1, 2, and 3 replicas sequentially and returns correlated per-hop telemetry.
+
 The files directly under `IBG/` remain the reference simulation. The budgeted/coupled path is outside the current migration scope.
