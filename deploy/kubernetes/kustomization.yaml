@@ -2,8 +2,13 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
-  - profiles.yaml
   - rbac.yaml
   - replicas.yaml
   - flow-generator.yaml
-  - controller-job.yaml
+configMapGenerator:
+  - name: replica-profiles
+    namespace: ibg-testbed
+    files:
+      - profiles.json
+generatorOptions:
+  disableNameSuffixHash: true

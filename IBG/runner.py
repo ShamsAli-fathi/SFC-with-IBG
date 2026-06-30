@@ -19,6 +19,7 @@ from simulation_adapters import make_simulation_adapters
 @dataclass
 class SlotResult:
     embed_dict: dict
+    flow_order_by_stage: dict
     assignments_by_stage: dict
     utility_grids: dict
     observations_by_stage: dict
@@ -52,10 +53,11 @@ def run_decoupled_slot(
     if adapters is None:
         adapters = make_simulation_adapters()
 
-    started_at = time.time()
+    started_at = time.perf_counter()
     embed_dict = {f"f_{flow}": [] for flow in flow_list}
     aggregate_total = 0
     aggregate_per_flow = {flow: [] for flow in flow_list}
+    flow_order_by_stage = {}
     assignments_by_stage = {}
     utility_grids = {}
     observations_by_stage = {}
@@ -67,6 +69,7 @@ def run_decoupled_slot(
 
     for stage in range(1, num_of_stages + 1):
         random_source.shuffle(flow_list)
+        flow_order_by_stage[stage] = tuple(flow_list)
         discovered_replicas = adapters.replica_discovery.discover(
             stage,
             replica_list,
@@ -89,7 +92,7 @@ def run_decoupled_slot(
         )
         embed_dict = execution.embed_dict
         last_embed = execution.assignments
-        ended_at = time.time()
+        ended_at = time.perf_counter()
         assignments_by_stage[stage] = last_embed
         utility_grids[stage] = utility_grid
         aggregate_total = aggregate_utility_total(
@@ -125,7 +128,7 @@ def run_decoupled_slot(
             )
             observations_by_stage[stage] = tuple(observations)
             apply_observations(observations, replica_list)
-        ended_at = time.time()
+        ended_at = time.perf_counter()
 
     elapsed_seconds = ended_at - started_at
     violations = SLA_v(embed_dict, replica_list)
@@ -134,6 +137,7 @@ def run_decoupled_slot(
 
     result = SlotResult(
         embed_dict=embed_dict,
+        flow_order_by_stage=flow_order_by_stage,
         assignments_by_stage=assignments_by_stage,
         utility_grids=utility_grids,
         observations_by_stage=observations_by_stage,

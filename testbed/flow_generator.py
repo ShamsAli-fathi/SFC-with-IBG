@@ -1,4 +1,5 @@
 import asyncio
+from collections import Counter
 from dataclasses import dataclass
 import os
 import time
@@ -52,6 +53,7 @@ class HopTelemetry(BaseModel):
     pod_name: str
     endpoint: str
     concurrency: int
+    legacy_congestion: int
     processing_latency_ms: float
     request_latency_ms: float
     legacy_signal: int
@@ -101,13 +103,23 @@ class FlowGenerator:
 
     async def run_slot(self, request: RunSlotRequest):
         started_at = time.perf_counter()
+        planned_congestion = Counter(
+            (hop.stage, hop.replica_id)
+            for route in request.routes
+            for hop in route.hops
+        )
         async with httpx.AsyncClient(
             timeout=self.config.request_timeout_seconds,
             transport=self.transport,
         ) as client:
             outcomes = await asyncio.gather(
                 *[
-                    self._run_flow(client, request.slot_id, route)
+                    self._run_flow(
+                        client,
+                        request.slot_id,
+                        route,
+                        planned_congestion,
+                    )
                     for route in request.routes
                 ],
                 return_exceptions=True,
@@ -123,21 +135,38 @@ class FlowGenerator:
             flows=outcomes,
         )
 
-    async def _run_flow(self, client, slot_id, route):
+    async def _run_flow(self, client, slot_id, route, planned_congestion):
         telemetry = []
         for hop in route.hops:
             telemetry.append(
-                await self._run_hop(client, slot_id, route.flow_id, hop)
+                await self._run_hop(
+                    client,
+                    slot_id,
+                    route.flow_id,
+                    hop,
+                    planned_congestion[(hop.stage, hop.replica_id)],
+                )
             )
         return FlowTelemetry(flow_id=route.flow_id, hops=telemetry)
 
-    async def _run_hop(self, client, slot_id, flow_id, hop):
+    async def _run_hop(
+        self,
+        client,
+        slot_id,
+        flow_id,
+        hop,
+        legacy_congestion,
+    ):
         endpoint = f"{str(hop.url).rstrip('/')}/process"
         started_at = time.perf_counter()
         try:
             response = await client.post(
                 endpoint,
-                json={"slot_id": slot_id, "flow_id": flow_id},
+                json={
+                    "slot_id": slot_id,
+                    "flow_id": flow_id,
+                    "legacy_congestion": legacy_congestion,
+                },
             )
             response.raise_for_status()
             replica_response = ProcessResponse.model_validate(response.json())
@@ -166,6 +195,13 @@ class FlowGenerator:
                 f"slot {replica_response.slot_id} flow {replica_response.flow_id}"
             )
 
+        if replica_response.legacy_congestion != legacy_congestion:
+            raise FlowExecutionError(
+                f"flow {flow_id} stage {hop.stage} legacy congestion mismatch: "
+                f"expected {legacy_congestion}, got "
+                f"{replica_response.legacy_congestion}"
+            )
+
         return HopTelemetry(
             slot_id=slot_id,
             flow_id=flow_id,
@@ -174,6 +210,7 @@ class FlowGenerator:
             pod_name=replica_response.pod_name,
             endpoint=str(hop.url),
             concurrency=replica_response.concurrency,
+            legacy_congestion=replica_response.legacy_congestion,
             processing_latency_ms=replica_response.processing_latency_ms,
             request_latency_ms=(time.perf_counter() - started_at) * 1000,
             legacy_signal=replica_response.legacy_signal,

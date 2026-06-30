@@ -2,7 +2,7 @@
 
 This is the living report and usage guide for the SFC-with-IBG project. It is written for readers who know basic Python and terminal commands but may be new to WSL, Docker, Kubernetes, or the Indian Buffet Game implementation.
 
-Updated through: Phase 5, 2026-06-29.
+Updated through: completed Phase 6 and observable equilibrium operation, 2026-06-30.
 
 This file is user-directed. Agents must not read or edit it unless the user explicitly requests that action in the current task.
 
@@ -56,7 +56,7 @@ Some useful terms:
 
 ## 3. Current project report
 
-The project currently has working results through Phase 5.
+The migration roadmap is complete through Phase 6.
 
 | Phase | Status | Main result |
 |---|---|---|
@@ -66,11 +66,13 @@ The project currently has working results through Phase 5.
 | 3: HTTP replica | Complete | Configurable FastAPI replica with health, processing, concurrency, latency, and legacy observation fields. |
 | 4: Flow generator | Complete | Concurrent logical flows with sequential three-hop execution on a local container network. |
 | 5: Connect Kubernetes | Complete | StatefulSets, Services, deterministic profiles, discovery/RBAC, flow generator, and one-slot controller integration. |
-| 6: Validate behavior | Not started | Final controlled comparison at three stages, five replicas per stage, and three flows. |
+| 6: Validate behavior | Complete | Three controlled supported-size Kubernetes runs match the simulation mathematics exactly. |
 
-The most recent full verification passed 49 Python tests. The exact-solver gate completed three flows across three stages with five replicas per stage. The Phase 4 container gate completed three concurrent flows with three ordered hops per flow, and the Stage 1 service reported admitted concurrency values `[1, 2, 3]`, proving that the flows overlapped.
+The most recent full verification passed 63 Python tests. The exact-solver gate completed three flows across three stages with five replicas per stage. The Phase 4 container gate completed three concurrent flows with three ordered hops per flow, and the Stage 1 service reported admitted concurrency values `[1, 2, 3]`, proving that the flows overlapped.
 
-The Phase 5 Kubernetes gate is also complete. The live kind cluster ran three StatefulSets with two replicas each, one flow-generator Deployment, and one Python controller Job. The Job produced all nine placements, exercised all nine selected hops, returned nine observations, updated beliefs and metrics, and recorded real overlapping requests on shared replicas.
+The Phase 5 bring-up gate used two replicas per stage and completed all nine placements and observations. Phase 6 then expanded the live kind testbed to five replicas per stage. For seeds 2050, 2051, and 2052, all 27 placements, sampled utility values, observations, beliefs, utility metrics, SLA results, Jain fairness values, and equilibrium results matched the controlled simulation. Kubernetes averaged about 0.309 seconds per validation slot versus 0.051 seconds in-process; that expected difference is infrastructure overhead, not mathematical drift.
+
+The post-roadmap operator command also runs one evolving Kubernetes experiment until equilibrium. The verified seed-2050 run reached equilibrium in 9 slots, printed every flow order, placement, observation, metric, and belief-change maximum, and saved the initial and final state in an 11-event JSONL trace.
 
 ## 4. Where to work
 
@@ -385,15 +387,15 @@ The Kubernetes application runs in namespace `ibg-testbed`:
 
 | Component | Kubernetes object | Purpose |
 |---|---|---|
-| Stage 1 | Headless Service + two-replica StatefulSet | Stable Stage 1 replica identities and direct Pod DNS. |
-| Stage 2 | Headless Service + two-replica StatefulSet | Stable Stage 2 replica identities and direct Pod DNS. |
-| Stage 3 | Headless Service + two-replica StatefulSet | Stable Stage 3 replica identities and direct Pod DNS. |
+| Stage 1 | Headless Service + five-replica StatefulSet | Stable Stage 1 replica identities and direct Pod DNS. |
+| Stage 2 | Headless Service + five-replica StatefulSet | Stable Stage 2 replica identities and direct Pod DNS. |
+| Stage 3 | Headless Service + five-replica StatefulSet | Stable Stage 3 replica identities and direct Pod DNS. |
 | Flow generator | ClusterIP Service + one-replica Deployment | Receives complete routes and drives concurrent HTTP traffic. |
-| IBG controller | ServiceAccount + one-shot Job | Runs the Python solver, discovers Pods, executes one slot, and prints the result. |
+| IBG controller | ServiceAccount + one-shot Job | Runs controlled validation slots or a bounded experiment until equilibrium. |
 | Profiles | ConfigMap | Gives replicas and the controller the same deterministic parameters. |
 | Discovery permission | Role + RoleBinding | Allows the controller to read Pod identity/readiness without broader cluster access. |
 
-The bring-up gate deliberately uses two replicas per stage and three flows. The supported validation target remains five replicas per stage and belongs to Phase 6.
+The historical Phase 5 bring-up gate deliberately used two replicas per stage and three flows. The current manifests represent the completed Phase 6 target: five replicas per stage and three flows.
 
 ### How the Python-to-container connection actually works
 
@@ -404,7 +406,7 @@ There are three distinct connections. Keeping them separate makes the system muc
 
 repository files
   -> docker build
-  -> local image: ibg-testbed:phase5
+  -> local image: ibg-testbed:phase6
   -> kind load docker-image
   -> containerd image store inside each kind node
 
@@ -495,10 +497,10 @@ Expected baseline:
 ```bash
 cd /home/shams/projects/SFC-with-IBG
 docker build \
-  --tag ibg-testbed:phase5 \
+  --tag ibg-testbed:phase6 \
   --file deploy/local/Dockerfile .
 
-kind load docker-image ibg-testbed:phase5 --name ibg
+kind load docker-image ibg-testbed:phase6 --name ibg
 ```
 
 Run both commands again after changing Python source that must run inside the cluster. Rebuilding without reloading leaves kind using the older image stored in its nodes.
@@ -524,11 +526,15 @@ kubectl rollout status deployment/flow-generator \
   --namespace ibg-testbed --timeout=180s
 ```
 
-The controller waits for all six replicas and the flow generator, so applying the Job in the same Kustomization is safe.
+The base Kustomization intentionally contains only long-running resources. It does not contain the controller Job. Wait for all 15 replicas and the flow generator before applying the Job so validation traffic cannot race a rollout.
 
-### Verify the controller gate
+Apply and verify the controlled Phase 6 Job:
 
 ```bash
+kubectl delete job ibg-controller \
+  --namespace ibg-testbed --ignore-not-found
+kubectl apply -f deploy/kubernetes/controller-job.yaml
+
 kubectl wait --namespace ibg-testbed \
   --for=condition=complete job/ibg-controller --timeout=180s
 
@@ -536,13 +542,13 @@ kubectl get pods --namespace ibg-testbed -o wide
 kubectl logs --namespace ibg-testbed job/ibg-controller
 ```
 
-Success includes one log line beginning with:
+Success includes three log lines beginning with:
 
 ```text
-PHASE5_RESULT=
+PHASE6_RESULT=
 ```
 
-Its JSON contains:
+Each JSON result contains:
 
 - Nine placements: three flows multiplied by three stages.
 - Pod, node, replica, and endpoint metadata for every placement.
@@ -550,7 +556,7 @@ Its JSON contains:
 - Nine selected-replica observations.
 - Updated beliefs, aggregate utility, SLA violations, Jain fairness, equilibrium, and elapsed time.
 
-The verified gate completed the Job with all nine placements and observations. Shared selected replicas reported admitted concurrency of 2, proving that concurrent flows overlapped inside the cluster.
+The verified Job completed seeds 2050, 2051, and 2052 with all nine placements and observations in every slot. Shared selected replicas reported admitted concurrency of 2 in two runs, proving that concurrent flows overlapped inside the cluster.
 
 ### Run the focused tests
 
@@ -560,7 +566,7 @@ python -m pytest -q tests/test_kubernetes_adapters.py
 python -m pytest -q
 ```
 
-The first command covers profile loading, StatefulSet ordinal mapping, readiness rejection, route construction, and telemetry conversion. The full suite currently contains 49 passing tests.
+The first command covers profile loading, StatefulSet ordinal mapping, readiness rejection, route construction, and telemetry conversion. The full suite currently contains 63 passing tests.
 
 ### Inspect the discovery permissions
 
@@ -576,7 +582,7 @@ kubectl auth can-i get secrets \
 
 The first command should say `yes`; the second should say `no`.
 
-### Repeat only the one-slot Job
+### Repeat only the validation Job
 
 A completed Job does not rerun when `kubectl apply` sees it again. Delete and recreate just that Job:
 
@@ -589,7 +595,7 @@ kubectl wait --namespace=ibg-testbed \
 kubectl logs --namespace=ibg-testbed job/ibg-controller
 ```
 
-### Remove the Phase 5 application
+### Remove the Kubernetes application
 
 This removes the project namespace and its application workloads, but leaves the kind cluster itself intact:
 
@@ -599,9 +605,63 @@ kubectl delete -k deploy/kubernetes --wait=true
 
 Do not run `kind delete cluster` unless deleting the whole local cluster is intentional.
 
-### Phase 6: future validation
+### Verify Phase 6 simulation/Kubernetes parity
 
-Phase 6 has not started. It will compare controlled simulation-backed and Kubernetes-backed runs, then repeat the Kubernetes case at three stages, five replicas per stage, and three flows. It must explain differences in placements, observations, beliefs, metrics, timing, and metadata.
+The controller Job emits the detailed Kubernetes summaries consumed by the comparison tool. Compare all three results with controlled simulation runs using:
+
+```bash
+kubectl logs --namespace ibg-testbed job/ibg-controller \
+  | .venv/bin/python scripts/phase6_compare.py --kubernetes-log -
+```
+
+Success prints `PHASE6_COMPARISON=<json>` and exits with status 0. The verified comparison matched all 27 placements and observation signals and reported `mathematical_max_abs: 0.0`. Kubernetes-specific timing, Pod, node, endpoint, admitted-concurrency, and measured-latency fields are validated for completeness but are not required to equal in-process simulation timing.
+
+### Run one observable experiment until equilibrium
+
+For normal operation, use the one-command launcher from the repository root:
+
+```bash
+./scripts/run_experiment.py
+```
+
+It performs the complete sequence:
+
+1. Create the three-node `ibg` kind cluster if it does not exist.
+2. Build `ibg-testbed:phase6` from the current source.
+3. Load the image into every kind node.
+4. Apply the base Kubernetes resources.
+5. Restart and wait for all three StatefulSets and the flow-generator Deployment.
+6. Create a fresh `ibg-experiment` controller Job.
+7. Poll and render the controller log until the Job exits.
+8. Verify Job completion and save the complete structured trace under `runs/`.
+
+The default seed is 2050 and the safety limit is 100 iterations. Change them with:
+
+```bash
+./scripts/run_experiment.py --seed 2051 --max-iterations 50
+```
+
+When the current image is already loaded and the source has not changed, skip the rebuild and workload restart:
+
+```bash
+./scripts/run_experiment.py --skip-build
+```
+
+Do not use `--skip-build` after changing `IBG/` or `testbed/`; the controller would otherwise run the older image already stored in kind.
+
+The live output begins with the static state and initial beliefs of all 15 replicas. Every iteration then prints:
+
+- Flow order at each stage.
+- The selected replica for each flow and stage.
+- Observation congestion, signal, and measured processing latency.
+- Aggregate utility, SLA violations, Jain fairness, slot duration, and maximum belief change.
+- Whether the existing equilibrium rule succeeded.
+
+At equilibrium it prints the final state of every replica, replacing the old need to add a manual `for key, value in replica_list.items()` loop. Slot duration uses a monotonic clock, so a WSL wall-clock adjustment cannot create an impossible elapsed time.
+
+The `runs/ibg-experiment-<timestamp>.jsonl` file contains one `run_started` event, one `iteration_completed` event per slot, and one `run_completed` event. It retains the full placements, observations, utility grids, traffic telemetry, beliefs before and after each slot, and final replica state. `runs/` is intentionally ignored by Git.
+
+The verified seed-2050 run reached equilibrium in 9 iterations. Its final trace contained 11 events, and corrected slot durations ranged from approximately 0.307 to 0.394 seconds.
 
 There is no scaling phase. The exact load-vector solver is intentionally limited to the supported small instance.
 
@@ -623,8 +683,12 @@ There is no scaling phase. The exact load-vector solver is intentionally limited
 | `IBG/result_sinks.py` | Stores a completed slot using the reference CSV reporting layout. |
 | `IBG/report.py` | Calculates SLA violations and writes or plots reference report data. |
 | `testbed/kubernetes_adapters.py` | Discovers Ready Pods, maps stable identities, builds complete routes, calls the flow generator, and converts telemetry to observations. |
-| `testbed/kubernetes_controller.py` | Configures and runs one in-cluster IBG slot, then prints placement, telemetry, belief, and metric results. |
+| `testbed/kubernetes_controller.py` | Runs controlled validation slots or one evolving in-cluster experiment and emits structured results. |
 | `testbed/profiles.py` | Loads and validates the deterministic profile ConfigMap shared by replicas and controller. |
+| `testbed/experiment.py` | Retains replica state across slots, bounds iteration count, measures belief deltas, and emits run lifecycle events. |
+| `testbed/validation.py` | Builds comparable simulation/Kubernetes summaries and checks mathematical parity. |
+| `scripts/phase6_compare.py` | Compares controlled Kubernetes Job results with the simulation backend. |
+| `scripts/run_experiment.py` | Builds, deploys, runs, renders, and saves one Kubernetes experiment through equilibrium. |
 
 The simulation and Kubernetes entry points join at the same slot runner:
 
@@ -643,7 +707,8 @@ IBG/main.py                         testbed/kubernetes_controller.py
        -> IBG/learning.py: update beliefs
        -> IBG/header.py + IBG/report.py: calculate metrics/equilibrium
        -> result sink
-  -> simulation may repeat until equilibrium; the Phase 5 Job runs one slot
+  -> Phase 6 validation runs one independent slot per controlled seed
+  -> observable operation retains one replica set and repeats until equilibrium
 ```
 
 ### 11.2 Replica model
@@ -683,9 +748,9 @@ For simulation, each stage immediately collects the reference in-process observa
 
 For Kubernetes, physical traffic must use complete three-hop routes. The optional slot-traffic executor therefore waits until all stage placements exist, sends the routes to the flow generator, and receives correlated hop telemetry. The observation collector groups that telemetry by stage and converts it into the same `Observation` data class. The same `apply_observations` function then performs local and aggregate belief updates.
 
-After observations are applied, the runner calculates SLA violations, Jain fairness, elapsed time, and equilibrium and sends the structured result to the result sink. Kubernetes results also retain the complete traffic telemetry.
+After observations are applied, the runner calculates SLA violations, Jain fairness, monotonic elapsed time, and equilibrium and sends the structured result to the result sink. Kubernetes results also retain the complete traffic telemetry.
 
-The slot result includes placements by stage, complete routes by flow, utility grids, observations, aggregate utility, SLA violations, Jain fairness, equilibrium, and elapsed time.
+The slot result includes flow order by stage, placements, complete routes by flow, utility grids, observations, aggregate utility, SLA violations, Jain fairness, equilibrium, and elapsed time.
 
 ### 11.4 Policy and utility logic
 
@@ -726,6 +791,10 @@ Only selected replicas produce observations.
 
 Unselected replicas do not receive an observation and therefore do not change through this step.
 
+For controlled Phase 6 runs, simulation and Kubernetes derive the observation noise from the configured replica observation seed plus slot ID, flow ID, and final assigned congestion. This makes a request stable without consuming the solver's NumPy random stream.
+
+The legacy observation model receives final assignment load: the number of flows ultimately assigned to that replica in the slot. The HTTP service also reports actual admitted concurrency, which describes how requests overlapped at runtime. These are deliberately separate fields. Final assignment load preserves the reference learning mathematics; admitted concurrency and measured latency describe Kubernetes execution.
+
 ### 11.6 Equilibrium and metrics
 
 The current equilibrium rule compares every belief component before and after a slot. Equilibrium is reached only when every absolute change is below `0.04`.
@@ -751,7 +820,7 @@ random.seed(2026)
 np.random.seed(2026)
 ```
 
-The tests do this before comparing exact fixtures or old/new orchestration. A normal `IBG/main.py` run is stochastic and can produce different placements, observations, iteration counts, and metrics.
+The tests do this before comparing exact fixtures or old/new orchestration. Controlled testbed profiles additionally provide one observation seed per replica, allowing the two backends to reproduce request observations without changing solver sampling. A normal `IBG/main.py` run remains stochastic and can produce different placements, observations, iteration counts, and metrics.
 
 ### 11.8 Files outside the active IBG Exact migration
 
@@ -799,11 +868,25 @@ It does not contain utility, policy, or belief-update formulas.
 
 ### `testbed/kubernetes_controller.py`
 
-This is the entry point run by the controller Job. It loads profiles, seeds Python and NumPy, waits for all required services, assembles the Kubernetes adapter bundle, calls `run_decoupled_slot`, checks that every placement and observation is present, and prints `PHASE5_RESULT=<json>`.
+This is the entry point run by the controller Job. It loads profiles, seeds Python and NumPy, waits for all required services, assembles the Kubernetes adapter bundle, and checks that every placement and observation is present.
+
+With the base controller manifest, it runs one independent slot for each Phase 6 seed and prints `PHASE6_RESULT=<json>`. When the launcher supplies `MAX_ITERATIONS`, it retains one replica set across slots until equilibrium and emits `IBG_EVENT=<json>` lifecycle records.
+
+### `testbed/experiment.py`
+
+This module owns the backend-neutral outer experiment loop. It snapshots initial beliefs, calls the existing slot runner repeatedly, calculates the maximum belief change, emits iteration events, stops on the unchanged equilibrium result, and raises an explicit error if the maximum iteration count is exhausted.
+
+### `testbed/validation.py` and `scripts/phase6_compare.py`
+
+The validation module converts both backends into the same detailed summary shape. The comparison script reads the controller's three `PHASE6_RESULT` lines, reruns controlled simulation with the same seeds and profiles, and compares placements, utility grids, observations, beliefs, utility, SLA, fairness, and equilibrium. Runtime and infrastructure metadata are reported separately.
+
+### `scripts/run_experiment.py`
+
+This executable operator script coordinates Docker, kind, kubectl, the experiment Job, readable logs, and local JSONL retention. It polls logs instead of using a filesystem watcher, which avoids WSL watcher-limit failures while still updating output approximately every half second.
 
 ### `deploy/kubernetes/`
 
-This directory contains the namespace, shared profile ConfigMap, discovery RBAC, three headless Services and StatefulSets, flow-generator Service and Deployment, controller Job, and the Kustomization that applies them together.
+This directory contains the namespace, deterministic JSON profile ConfigMap, discovery RBAC, three headless Services and five-replica StatefulSets, flow-generator Service and Deployment, controller Job, and Kustomization. The Kustomization applies only long-running resources; `controller-job.yaml` is applied after rollout completion.
 
 ## 13. Test suite map
 
@@ -815,6 +898,9 @@ This directory contains the namespace, shared profile ConfigMap, discovery RBAC,
 | `tests/test_cnf_service.py` | HTTP replica identity, concurrency, latency, configuration, observation parity, and cleanup. |
 | `tests/test_flow_generator.py` | Concurrent flows, ordered hops, selected endpoints, correlation, validation, and failures. |
 | `tests/test_kubernetes_adapters.py` | Profiles, Ready-Pod discovery, StatefulSet ordinals, complete Kubernetes routes, and telemetry-to-observation conversion. |
+| `tests/test_validation.py` | Supported profile coverage, controlled backend parity, metadata completeness, and discrepancy detection. |
+| `tests/test_experiment.py` | Stateful repetition, belief deltas, equilibrium completion, and maximum-iteration failure. |
+| `tests/test_run_experiment.py` | Job environment overrides, readable event rendering, and watcher-free JSONL log polling. |
 
 Run everything before declaring a change complete:
 
@@ -822,6 +908,8 @@ Run everything before declaring a change complete:
 source .venv/bin/activate
 python -m pytest -q
 ```
+
+The current complete suite contains 63 tests.
 
 ## 14. Common troubleshooting
 
@@ -893,9 +981,9 @@ After a WSL or Docker restart, wait for the node containers and API server befor
 The Kubernetes manifests deliberately use `imagePullPolicy: Never`. Build and load the local image into kind:
 
 ```bash
-docker build --tag ibg-testbed:phase5 \
+docker build --tag ibg-testbed:phase6 \
   --file deploy/local/Dockerfile .
-kind load docker-image ibg-testbed:phase5 --name ibg
+kind load docker-image ibg-testbed:phase6 --name ibg
 ```
 
 Then recreate the affected Pod or reapply the workload.
@@ -912,6 +1000,19 @@ kubectl logs --namespace ibg-testbed job/ibg-controller
 
 Common causes are an old image still loaded in kind, incomplete replica readiness, denied RBAC, invalid profile data, or a flow-generator/replica identity mismatch. After fixing the cause, rebuild and reload the image when Python changed, then delete and recreate only the Job as shown in Phase 5.
 
+For an observable run, inspect `ibg-experiment` instead:
+
+```bash
+kubectl describe job ibg-experiment --namespace ibg-testbed
+kubectl logs --namespace ibg-testbed job/ibg-experiment
+```
+
+If the final event says equilibrium was not reached, rerun with a larger explicit bound only after inspecting the belief deltas:
+
+```bash
+./scripts/run_experiment.py --max-iterations 200 --skip-build
+```
+
 ### The controller cannot discover replicas
 
 Check readiness, labels, ordinals, and permissions:
@@ -925,7 +1026,7 @@ kubectl auth can-i list pods \
   --namespace=ibg-testbed
 ```
 
-The adapter intentionally refuses partial stage membership. Both ordinals `0` and `1` must be Ready for the two-replica gate.
+The adapter intentionally refuses partial stage membership. For the current supported deployment, ordinals `0` through `4` must all be Ready in every stage.
 
 ## 15. How to maintain this tutorial
 

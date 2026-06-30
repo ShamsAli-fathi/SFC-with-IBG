@@ -30,7 +30,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: flow-generator
-          image: ibg-testbed:phase5
+          image: ibg-testbed:phase6
           imagePullPolicy: Never
           command:
             - python3

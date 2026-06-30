@@ -41,6 +41,7 @@ class RecordingReplicaNetwork:
         self.mismatch_host = mismatch_host
         self.mismatch_correlation_host = mismatch_correlation_host
         self.calls = []
+        self.payloads = []
         self.active = Counter()
         self.peak = Counter()
 
@@ -48,6 +49,7 @@ class RecordingReplicaNetwork:
         host = request.url.host
         payload = json.loads(request.content)
         self.calls.append((payload["flow_id"], host))
+        self.payloads.append((host, payload))
         self.active[host] += 1
         self.peak[host] = max(self.peak[host], self.active[host])
         concurrency = self.active[host]
@@ -75,6 +77,7 @@ class RecordingReplicaNetwork:
                     "replica_id": response_replica,
                     "pod_name": host,
                     "concurrency": concurrency,
+                    "legacy_congestion": payload["legacy_congestion"],
                     "processing_latency_ms": 10.0,
                     "legacy_signal": 3,
                     "legacy_likelihood": [0.1, 0.2, 0.3, 0.4],
@@ -100,6 +103,10 @@ def test_complete_routes_run_flows_concurrently_and_hops_sequentially():
     assert network.peak["stage-1-1"] == 3
     assert network.peak["stage-2-1"] == 3
     assert network.peak["stage-3-1"] == 3
+    assert all(
+        payload["legacy_congestion"] == 3
+        for _, payload in network.payloads
+    )
     calls_by_flow = defaultdict(list)
     for flow_id, host in network.calls:
         calls_by_flow[flow_id].append(host)
@@ -143,6 +150,7 @@ def test_hop_telemetry_preserves_correlation_and_latency_fields():
         assert hop.slot_id == 4
         assert hop.flow_id == 9
         assert hop.request_latency_ms >= hop.processing_latency_ms
+        assert hop.legacy_congestion == 1
         assert hop.legacy_signal == 3
         assert hop.legacy_likelihood == (0.1, 0.2, 0.3, 0.4)
 

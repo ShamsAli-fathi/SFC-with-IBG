@@ -82,7 +82,7 @@ Gate: a small cluster case with three stages, two replicas per stage, and three 
 
 ## Phase 6: Validate behavior
 
-Status: not started.
+Status: complete.
 
 Suggested Codex reasoning: `xhigh` — cross-backend validation must explain discrepancies and distinguish mathematical, stochastic, telemetry, and Kubernetes effects.
 
@@ -92,3 +92,7 @@ Suggested Codex reasoning: `xhigh` — cross-backend validation must explain dis
 - Repeat the supported case with three stages, five replicas per stage, and three flows, then quantify any discrepancies from the reference behavior.
 
 Gate: repeated supported-size runs produce complete, comparable results, and discrepancies from the Python reference behavior are measured and documented.
+
+## Post-roadmap operation
+
+The completed testbed has a one-command observable experiment runner. It starts or reuses the kind environment, deploys the supported configuration, runs successive Kubernetes slots over one evolving belief state until the existing equilibrium condition is met, prints concise iteration progress and final replica state, and retains a detailed JSONL trace. This is an operating capability, not an additional migration phase.

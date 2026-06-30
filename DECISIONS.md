@@ -38,6 +38,14 @@
 - Store the Phase 5 deterministic replica profiles in one ConfigMap mounted by both replicas and the controller.
 - Use the existing HTTP client with the in-cluster ServiceAccount token and CA for namespace-scoped Pod discovery; grant only Pod `get` and `list` permissions.
 - Keep simulation observations stage-local, but let Kubernetes defer physical traffic until all stage placements form complete routes; convert returned hop telemetry into the existing observation contract before applying unchanged learning logic.
+- Preserve final assigned replica load as the congestion input to the legacy observation model in both backends; keep actual HTTP admission concurrency as separate Kubernetes telemetry.
+- Derive controlled observation samples from a deterministic replica seed plus slot, flow, and final congestion so observation generation does not disturb the solver's NumPy stream.
+- Validate the supported three-stage/five-replica/three-flow case over seeds 2050, 2051, and 2052, requiring mathematical parity while treating Kubernetes timing and infrastructure metadata as backend-specific.
+- Apply the one-shot controller Job only after StatefulSet and flow-generator rollouts complete; do not race validation traffic against endpoint replacement.
+- Provide one post-roadmap experiment launcher that creates/reuses kind, rebuilds and loads the runtime image, deploys and waits for workloads, starts a fresh controller Job, and follows its logs.
+- In observable experiment mode, retain one evolving replica/belief state across slots and stop only on the existing equilibrium test, bounded by an explicit maximum iteration count.
+- Emit compact live iteration output from structured JSONL events, retain the complete local trace under ignored `runs/`, and keep the Phase 6 one-slot comparison output compatible.
+- Measure slot duration with a monotonic clock; wall-clock timestamps are not valid elapsed-time sources under WSL clock correction.
 
 ## Deliberately deferred
 

@@ -180,7 +180,13 @@ class KubernetesSlotTrafficExecutor:
                 f"{self.flow_generator_url}/run-slot",
                 json={"slot_id": slot_id, "routes": routes},
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                raise RuntimeError(
+                    f"flow generator rejected slot {slot_id}: "
+                    f"HTTP {response.status_code} {response.text}"
+                ) from error
             self.telemetry = RunSlotResponse.model_validate(response.json())
         return self.telemetry
 
@@ -216,7 +222,7 @@ class KubernetesObservationCollector:
                     stage=stage,
                     flow_id=flow_id,
                     replica_id=replica_id,
-                    congestion=hop.concurrency,
+                    congestion=hop.legacy_congestion,
                     signal=hop.legacy_signal,
                     likelihood=tuple(hop.legacy_likelihood),
                     measured_latency_ms=hop.processing_latency_ms,

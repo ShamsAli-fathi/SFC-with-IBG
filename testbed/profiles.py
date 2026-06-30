@@ -12,6 +12,7 @@ class ReplicaProfile:
     gamma: float
     base_delay_ms: float
     congestion_delay_ms: float
+    observation_seed: int | None = None
 
     def __post_init__(self):
         if self.state not in (1, 2, 3, 4):
@@ -22,6 +23,8 @@ class ReplicaProfile:
             raise ValueError("profile cost and gamma must not be negative")
         if self.base_delay_ms < 0 or self.congestion_delay_ms < 0:
             raise ValueError("profile delays must not be negative")
+        if self.observation_seed is not None and self.observation_seed < 0:
+            raise ValueError("profile observation_seed must not be negative")
 
 
 def load_profiles(path):

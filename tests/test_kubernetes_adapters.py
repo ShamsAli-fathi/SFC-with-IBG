@@ -1,5 +1,6 @@
 import json
 import random
+from collections import Counter
 
 from httpx import MockTransport, Request, Response
 import numpy as np
@@ -160,6 +161,11 @@ def test_kubernetes_slot_executes_complete_routes_then_applies_telemetry():
     def flow_generator(request: Request):
         payload = json.loads(request.content)
         captured["payload"] = payload
+        planned_congestion = Counter(
+            (hop["stage"], hop["replica_id"])
+            for route in payload["routes"]
+            for hop in route["hops"]
+        )
         flows = []
         for route in payload["routes"]:
             flows.append(
@@ -172,9 +178,12 @@ def test_kubernetes_slot_executes_complete_routes_then_applies_telemetry():
                             "stage": hop["stage"],
                             "replica_id": hop["replica_id"],
                             "pod_name": f"stage-{hop['stage']}-{hop['replica_id'] - 1}",
-                            "endpoint": hop["url"],
-                            "concurrency": 1,
-                            "processing_latency_ms": 40.0,
+                                "endpoint": hop["url"],
+                                "concurrency": 1,
+                                "legacy_congestion": planned_congestion[
+                                    (hop["stage"], hop["replica_id"])
+                                ],
+                                "processing_latency_ms": 40.0,
                             "request_latency_ms": 41.0,
                             "legacy_signal": 3,
                             "legacy_likelihood": [0.1, 0.2, 0.3, 0.4],
@@ -215,3 +224,10 @@ def test_kubernetes_slot_executes_complete_routes_then_applies_telemetry():
         for items in result.observations_by_stage.values()
         for observation in items
     )
+    for stage, observations in result.observations_by_stage.items():
+        assignments = result.assignments_by_stage[stage]
+        congestion = Counter(assignments.values())
+        assert all(
+            observation.congestion == congestion[observation.replica_id]
+            for observation in observations
+        )

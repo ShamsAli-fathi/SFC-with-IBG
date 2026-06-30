@@ -61,16 +61,34 @@ For local validation, the replica and flow-generator processes share one non-roo
 
 ## Kubernetes integration contract
 
-The `ibg-testbed` namespace contains three headless Services and three two-replica StatefulSets for the Phase 5 gate, plus a ClusterIP flow-generator Service, one flow-generator Deployment, and a one-shot controller Job. The StatefulSet ordinal is converted to the one-based solver replica ID. A shared ConfigMap supplies deterministic solver and runtime profiles, so the controller and HTTP replica agree on state, capacity, delay, cost, congestion penalty, and processing delays.
+The `ibg-testbed` namespace contains three headless Services and three five-replica StatefulSets for the supported Phase 6 target, plus a ClusterIP flow-generator Service, one flow-generator Deployment, and a one-shot controller Job. The StatefulSet ordinal is converted to the one-based solver replica ID. A shared ConfigMap supplies deterministic solver and runtime profiles, so the controller and HTTP replica agree on state, capacity, delay, cost, congestion penalty, processing delays, and observation seeds.
 
 The controller uses its mounted ServiceAccount token and CA with the existing HTTP client to list only namespace-scoped replica Pods. Discovery accepts only Running, Ready Pods and requires the exact ordinal set expected for every stage. Narrow RBAC permits `get` and `list` on Pods but does not permit Secret reads or Pod creation. Pod DNS through each headless Service becomes the selected hop endpoint; node and Pod identities are retained as placement metadata.
 
 Simulation keeps its existing stage-by-stage observation path. For Kubernetes, the runner's optional slot-traffic port defers physical execution until all three stages have been placed. The flow generator then runs all complete routes, and its correlated hop telemetry is converted into the existing `Observation` contract before the unchanged learning and equilibrium logic runs.
 
+The flow generator calculates each selected replica's final assignment load from the complete routes and sends it separately as `legacy_congestion`. Replica services use that final load for the preserved belief observation while continuing to report actual admitted concurrency as runtime telemetry. Request-stable observation samples are derived from the configured replica seed plus slot, flow, and final congestion; they do not consume the controller's NumPy stream.
+
+## Validation contract
+
+Phase 6 compares three controlled seeds at three stages, five replicas per stage, and three flows. `scripts/phase6_compare.py` reruns the simulation backend with the same profiles, solver seed, flow order, final-load observation semantics, and request observation seeds, then compares it with controller Job logs.
+
+Placements, sampled utility grids, legacy observations, beliefs, aggregate/per-flow utility, SLA, Jain fairness, and equilibrium must match within numerical tolerance. Kubernetes-only Pod, node, endpoint, admitted concurrency, and measured latency metadata must be complete. Runtime is measured but is not required to match because the Kubernetes result includes API, DNS, HTTP, and telemetry overhead.
+
+The base Kustomization deploys long-running resources only. The controller Job is applied after all StatefulSet and Deployment rollouts complete so discovery and traffic cannot race with endpoint replacement.
+
+## Experiment operation and trace
+
+`scripts/run_experiment.py` is the one-command entry point for an observable Kubernetes experiment. It creates the `ibg` kind cluster when absent, builds and loads the shared runtime image, applies the long-running resources, waits for every rollout, creates a fresh experiment controller Job, and follows that Job until completion. Rebuilding the image also restarts and waits for the long-running workloads before controller traffic begins.
+
+Experiment mode seeds Python and NumPy once, constructs one replica set, and carries that same evolving belief state across successive slots. Each slot still delegates placement, traffic, observations, learning, metrics, and equilibrium detection to `run_decoupled_slot`; the outer experiment loop stops when the existing belief-difference rule reports equilibrium or fails at a configured maximum iteration count. The standard Phase 6 manifest retains its one-slot-per-seed validation behavior when `MAX_ITERATIONS` is not set.
+
+The controller emits newline-delimited `IBG_EVENT` records for run start, each completed iteration, and run completion. Events include initial/final replica snapshots, per-stage flow order and placements, selected observations, utility/SLA/fairness/timing metrics, beliefs before and after the slot, and maximum belief change. Slot durations use a monotonic clock so WSL wall-clock corrections cannot distort elapsed time. The launcher renders those events as concise live text and stores the complete JSONL trace under the ignored local `runs/` directory.
+
 ## Migration boundary
 
 Keep the solver and belief mathematics as pure Python. Add replaceable adapters for replica discovery, placement publication, HTTP traffic/telemetry, and result storage. This keeps the simulation logic testable without a cluster and lets testbed integration be verified separately.
 
-The adapter boundary uses four ports: replica discovery, traffic execution, observation collection, and result storage. Simulation implementations delegate to the reference embedding and tasting behavior. The learning core applies collected likelihoods through the existing local-update and aggregation methods. Each observation carries the legacy signal separately from optional measured latency so future HTTP telemetry cannot silently alter belief mathematics.
+The adapter boundary uses four baseline ports: replica discovery, traffic execution, observation collection, and result storage. An optional complete-slot traffic port supports Kubernetes routes. Simulation implementations delegate to the reference embedding and tasting behavior. The learning core applies collected likelihoods through the existing local-update and aggregation methods. Each observation carries the legacy signal separately from optional measured latency so HTTP telemetry cannot silently alter belief mathematics.
 
 The current `IBG/` files remain the behavioral reference. Migration proceeds through the gated phases in `ROADMAP.md`; cluster-specific code must not be embedded into `IBG/claude.py` or the replica utility and belief functions.

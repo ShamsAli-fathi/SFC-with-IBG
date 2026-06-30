@@ -6,6 +6,7 @@ import re
 import time
 
 from fastapi import FastAPI
+import numpy as np
 from pydantic import BaseModel, Field
 
 from IBG.header import Replica
@@ -25,6 +26,7 @@ class ReplicaConfig:
     capacity: int = 2000
     base_delay_ms: float = 5.0
     congestion_delay_ms: float = 2.0
+    observation_seed: int | None = None
 
     def __post_init__(self):
         if self.stage < 1:
@@ -41,6 +43,8 @@ class ReplicaConfig:
             raise ValueError("base_delay_ms must not be negative")
         if self.congestion_delay_ms < 0:
             raise ValueError("congestion_delay_ms must not be negative")
+        if self.observation_seed is not None and self.observation_seed < 0:
+            raise ValueError("observation_seed must not be negative")
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None):
@@ -68,6 +72,12 @@ class ReplicaConfig:
                 return getattr(profile, profile_name)
             return default
 
+        observation_seed = configured(
+            "OBSERVATION_SEED",
+            "observation_seed",
+            None,
+        )
+
         return cls(
             stage=stage,
             replica_id=replica_id,
@@ -84,12 +94,16 @@ class ReplicaConfig:
                     2,
                 )
             ),
+            observation_seed=(
+                None if observation_seed is None else int(observation_seed)
+            ),
         )
 
 
 class ProcessRequest(BaseModel):
     slot_id: int = Field(ge=1)
     flow_id: int = Field(ge=1)
+    legacy_congestion: int | None = Field(default=None, ge=1)
 
 
 class HealthResponse(BaseModel):
@@ -107,6 +121,7 @@ class ProcessResponse(BaseModel):
     replica_id: int
     pod_name: str
     concurrency: int
+    legacy_congestion: int
     processing_latency_ms: float
     legacy_signal: int
     legacy_likelihood: tuple[float, float, float, float]
@@ -132,6 +147,39 @@ class LegacyObservationSource:
         return int(signal), tuple(float(value) for value in likelihood)
 
 
+class SeededLegacyObservationSource(LegacyObservationSource):
+    """Generate request-stable samples without changing the legacy model."""
+
+    def __init__(self, config: ReplicaConfig):
+        if config.observation_seed is None:
+            raise ValueError("observation_seed is required for seeded observations")
+        super().__init__(config)
+        self.seed = config.observation_seed
+
+    def __call__(
+        self,
+        congestion: int,
+        slot_id: int,
+        flow_id: int,
+    ) -> LegacyObservation:
+        generator = np.random.default_rng(
+            np.random.SeedSequence(
+                [self.seed, slot_id, flow_id, congestion]
+            )
+        )
+        variance = {1: 4, 2: 2, 3: 1, 4: 0.5}
+        sample = -1.0
+        while sample <= 0:
+            sample = float(
+                generator.normal(
+                    loc=0,
+                    scale=np.sqrt(variance[self.replica.state]),
+                )
+            )
+        signal, likelihood = self.replica.tasting(congestion, e=sample)
+        return int(signal), tuple(float(value) for value in likelihood)
+
+
 class ReplicaRuntime:
     def __init__(
         self,
@@ -139,7 +187,15 @@ class ReplicaRuntime:
         observation_source: ObservationSource | None = None,
     ):
         self.config = config
-        self.observation_source = observation_source or LegacyObservationSource(config)
+        if observation_source is not None:
+            self.observation_source = observation_source
+            self._request_seeded_observation = False
+        elif config.observation_seed is not None:
+            self.observation_source = SeededLegacyObservationSource(config)
+            self._request_seeded_observation = True
+        else:
+            self.observation_source = LegacyObservationSource(config)
+            self._request_seeded_observation = False
         self._lock = asyncio.Lock()
         self._active_requests = 0
         self._peak_concurrency = 0
@@ -171,12 +227,20 @@ class ReplicaRuntime:
             self._peak_concurrency = max(self._peak_concurrency, concurrency)
 
         try:
+            legacy_congestion = request.legacy_congestion or concurrency
             delay_ms = (
                 self.config.base_delay_ms
                 + self.config.congestion_delay_ms * (concurrency - 1)
             )
             await asyncio.sleep(delay_ms / 1000)
-            signal, likelihood = self.observation_source(concurrency)
+            if self._request_seeded_observation:
+                signal, likelihood = self.observation_source(
+                    legacy_congestion,
+                    request.slot_id,
+                    request.flow_id,
+                )
+            else:
+                signal, likelihood = self.observation_source(legacy_congestion)
             elapsed_ms = (time.perf_counter() - started_at) * 1000
             return ProcessResponse(
                 slot_id=request.slot_id,
@@ -185,6 +249,7 @@ class ReplicaRuntime:
                 replica_id=self.config.replica_id,
                 pod_name=self.config.pod_name,
                 concurrency=concurrency,
+                legacy_congestion=legacy_congestion,
                 processing_latency_ms=elapsed_ms,
                 legacy_signal=signal,
                 legacy_likelihood=likelihood,

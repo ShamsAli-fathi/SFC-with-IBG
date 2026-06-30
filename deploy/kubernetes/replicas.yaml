@@ -20,7 +20,7 @@ metadata:
   namespace: ibg-testbed
 spec:
   serviceName: stage-1
-  replicas: 2
+  replicas: 5
   podManagementPolicy: Parallel
   selector:
     matchLabels:
@@ -46,7 +46,7 @@ spec:
                     ibg.stage: "1"
       containers:
         - name: replica
-          image: ibg-testbed:phase5
+          image: ibg-testbed:phase6
           imagePullPolicy: Never
           ports:
             - name: http
@@ -110,7 +110,7 @@ metadata:
   namespace: ibg-testbed
 spec:
   serviceName: stage-2
-  replicas: 2
+  replicas: 5
   podManagementPolicy: Parallel
   selector:
     matchLabels:
@@ -136,7 +136,7 @@ spec:
                     ibg.stage: "2"
       containers:
         - name: replica
-          image: ibg-testbed:phase5
+          image: ibg-testbed:phase6
           imagePullPolicy: Never
           ports:
             - name: http
@@ -200,7 +200,7 @@ metadata:
   namespace: ibg-testbed
 spec:
   serviceName: stage-3
-  replicas: 2
+  replicas: 5
   podManagementPolicy: Parallel
   selector:
     matchLabels:
@@ -226,7 +226,7 @@ spec:
                     ibg.stage: "3"
       containers:
         - name: replica
-          image: ibg-testbed:phase5
+          image: ibg-testbed:phase6
           imagePullPolicy: Never
           ports:
             - name: http

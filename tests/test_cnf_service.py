@@ -8,6 +8,7 @@ from IBG.header import Replica
 from testbed.cnf_service import (
     LegacyObservationSource,
     ReplicaConfig,
+    SeededLegacyObservationSource,
     create_app,
 )
 
@@ -67,10 +68,49 @@ def test_process_returns_identity_latency_and_separate_legacy_observation():
     assert body["replica_id"] == 4
     assert body["pod_name"] == "stage-3-3"
     assert body["concurrency"] == 1
+    assert body["legacy_congestion"] == 1
     assert body["processing_latency_ms"] >= 2
     assert body["legacy_signal"] == 3
     assert body["legacy_likelihood"] == [0.1, 0.2, 0.3, 0.4]
     assert app.state.runtime.active_requests == 0
+
+
+def test_legacy_observation_uses_final_assignment_load_not_admission_order():
+    observed_congestion = []
+
+    def observation_source(congestion):
+        observed_congestion.append(congestion)
+        return fixed_observation(congestion)
+
+    app = create_app(
+        ReplicaConfig(base_delay_ms=30, congestion_delay_ms=5),
+        observation_source=observation_source,
+    )
+
+    async def scenario():
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            return await asyncio.gather(
+                *[
+                    client.post(
+                        "/process",
+                        json={
+                            "slot_id": 1,
+                            "flow_id": flow_id,
+                            "legacy_congestion": 3,
+                        },
+                    )
+                    for flow_id in (1, 2, 3)
+                ]
+            )
+
+    responses = asyncio.run(scenario())
+
+    assert sorted(response.json()["concurrency"] for response in responses) == [1, 2, 3]
+    assert {response.json()["legacy_congestion"] for response in responses} == {3}
+    assert observed_congestion == [3, 3, 3]
 
 
 def test_concurrent_requests_report_real_overlapping_load():
@@ -118,6 +158,25 @@ def test_legacy_observation_source_matches_reference_tasting():
 
     assert signal == expected_signal
     np.testing.assert_allclose(likelihood, expected_likelihood)
+
+
+def test_seeded_observation_is_request_stable_and_uses_legacy_model():
+    source = SeededLegacyObservationSource(
+        ReplicaConfig(
+            stage=2,
+            replica_id=3,
+            state=3,
+            capacity=3500,
+            observation_seed=1203,
+        )
+    )
+
+    first = source(congestion=2, slot_id=4, flow_id=1)
+    repeated = source(congestion=2, slot_id=4, flow_id=1)
+    another_flow = source(congestion=2, slot_id=4, flow_id=2)
+
+    assert repeated == first
+    assert another_flow[1] != first[1]
 
 
 def test_request_validation_rejects_invalid_flow_without_leaking_load():
@@ -168,6 +227,7 @@ def test_environment_configuration_is_deterministic():
             "CAPACITY": "5000",
             "BASE_DELAY_MS": "7.5",
             "CONGESTION_DELAY_MS": "1.25",
+            "OBSERVATION_SEED": "1206",
         }
     )
 
@@ -179,6 +239,7 @@ def test_environment_configuration_is_deterministic():
         capacity=5000,
         base_delay_ms=7.5,
         congestion_delay_ms=1.25,
+        observation_seed=1206,
     )
 
 
@@ -192,6 +253,7 @@ def test_environment_configuration_is_deterministic():
         ({"capacity": 0}, "capacity"),
         ({"base_delay_ms": -1}, "base_delay_ms"),
         ({"congestion_delay_ms": -1}, "congestion_delay_ms"),
+        ({"observation_seed": -1}, "observation_seed"),
     ],
 )
 def test_replica_config_rejects_invalid_values(changes, message):
