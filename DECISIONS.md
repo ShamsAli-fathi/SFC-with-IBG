@@ -17,6 +17,7 @@
 - Follow the ordered gates in `ROADMAP.md`. Complete and verify one phase before starting the next.
 - Validate simulation/Kubernetes behavior at the supported small size; no scaling phase is planned for the exact algorithm.
 - Read or update `Tutorial.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
+- Read or update `Report.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
 - Characterize the reference behavior before refactoring, then introduce simulation-backed adapter contracts before Kubernetes implementations.
 - Treat measured HTTP latency and the legacy belief observation as separate fields initially. Replacing the legacy signal with measured latency requires an explicit, validated mathematical decision.
 - Make the slot runner depend on explicit discovery, traffic, observation, and result-sink ports. Keep simulation implementations as the behavioral baseline for future infrastructure adapters.
@@ -46,6 +47,11 @@
 - In observable experiment mode, retain one evolving replica/belief state across slots and stop only on the existing equilibrium test, bounded by an explicit maximum iteration count.
 - Emit compact live iteration output from structured JSONL events, retain the complete local trace under ignored `runs/`, and keep the Phase 6 one-slot comparison output compatible.
 - Measure slot duration with a monotonic clock; wall-clock timestamps are not valid elapsed-time sources under WSL clock correction.
+- Let the experiment launcher accept positive flow, stage, and per-stage replica counts, while retaining three flows, three stages, and five replicas as the default and only Phase 6 parity-validated target.
+- Generate experiment stage Services, StatefulSets, and the shared profile ConfigMap from the requested dimensions; remove stale higher-numbered stage resources between runs.
+- Preserve all validated profiles exactly and deterministically extend new stage/replica identities from the validated profile templates with unique observation seeds. This changes experiment configuration only, not `BR_EIBG` or its mathematics.
+- Require every flow-generator route to contain the same positive contiguous stage sequence beginning at stage 1, rather than embedding a three-stage assumption in the traffic contract.
+- Keep Kubernetes CSV export host-side: `--csv 1` converts the completed structured trace into the five legacy report files under `/mnt/e/WSL/Ubuntu-24.04/CSV`, avoiding cluster volumes and preserving the default JSONL-only behavior when disabled.
 
 ## Deliberately deferred
 

@@ -29,6 +29,8 @@ spec:
                   fieldPath: metadata.namespace
             - name: EXPECTED_REPLICAS
               value: "5"
+            - name: NUM_STAGES
+              value: "3"
             - name: NUM_FLOWS
               value: "3"
             - name: SLOT_ID

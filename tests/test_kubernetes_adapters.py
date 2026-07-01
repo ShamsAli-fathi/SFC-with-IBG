@@ -14,7 +14,7 @@ from testbed.kubernetes_adapters import (
     build_replica_list,
     make_kubernetes_adapters,
 )
-from testbed.profiles import ReplicaProfile, load_profiles
+from testbed.profiles import ReplicaProfile, expand_profiles, load_profiles
 
 
 def profiles():
@@ -139,8 +139,12 @@ def test_discovery_rejects_incomplete_ready_set():
         discovery.discover(1, build_replica_list(profiles(), 3, 2))
 
 
-def test_kubernetes_slot_executes_complete_routes_then_applies_telemetry():
-    replica_list = build_replica_list(profiles(), 3, 2)
+@pytest.mark.parametrize("num_of_stages", [2, 3, 4])
+def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
+    num_of_stages,
+):
+    configured_profiles = expand_profiles(profiles(), num_of_stages, 2)
+    replica_list = build_replica_list(configured_profiles, num_of_stages, 2)
 
     class StaticDiscovery:
         def discover(self, stage, replicas):
@@ -208,7 +212,7 @@ def test_kubernetes_slot_executes_complete_routes_then_applies_telemetry():
     result = run_decoupled_slot(
         [1, 2, 3],
         replica_list,
-        num_of_stages=3,
+        num_of_stages=num_of_stages,
         num_of_replicas=2,
         adapters=adapters,
         slot_id=7,
@@ -216,7 +220,10 @@ def test_kubernetes_slot_executes_complete_routes_then_applies_telemetry():
 
     assert captured["payload"]["slot_id"] == 7
     assert len(captured["payload"]["routes"]) == 3
-    assert all(len(route["hops"]) == 3 for route in captured["payload"]["routes"])
+    assert all(
+        len(route["hops"]) == num_of_stages
+        for route in captured["payload"]["routes"]
+    )
     assert result.traffic_telemetry.slot_id == 7
     assert all(len(items) == 3 for items in result.observations_by_stage.values())
     assert all(

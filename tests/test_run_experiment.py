@@ -1,8 +1,17 @@
 import json
+import csv
 from types import SimpleNamespace
 
 import scripts.run_experiment as launcher
-from scripts.run_experiment import follow_logs, render_event, set_env
+from scripts.run_experiment import (
+    export_legacy_csv,
+    follow_logs,
+    parse_args,
+    remove_stale_stage_resources,
+    render_event,
+    set_env,
+    start_experiment_job,
+)
 
 
 def test_set_env_replaces_field_refs_and_adds_new_values():
@@ -22,6 +31,180 @@ def test_set_env_replaces_field_refs_and_adds_new_values():
         {"name": "POD_NAMESPACE", "value": "ibg-testbed"},
         {"name": "MAX_ITERATIONS", "value": "50"},
     ]
+
+
+def test_dimension_flags_accept_singular_and_plural_names():
+    singular = parse_args(["--flow", "4", "--stage", "2", "--replica", "6"])
+    plural = parse_args(["--flows", "5", "--stages", "4", "--replicas", "2"])
+
+    assert (
+        singular.num_of_flows,
+        singular.num_of_stages,
+        singular.num_of_replicas,
+    ) == (4, 2, 6)
+    assert (
+        plural.num_of_flows,
+        plural.num_of_stages,
+        plural.num_of_replicas,
+    ) == (5, 4, 2)
+
+
+def test_csv_flag_is_disabled_by_default_and_accepts_zero_or_one():
+    assert parse_args([]).csv == 0
+    assert parse_args(["--csv", "0"]).csv == 0
+    assert parse_args(["--csv", "1"]).csv == 1
+
+
+def test_export_legacy_csv_writes_all_reports(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    output_dir = tmp_path / "csv"
+    events = [
+        {
+            "event": "run_started",
+            "initial_replicas": [
+                {"stage": 1, "replica_id": 1, "belief": [0.25] * 4},
+                {"stage": 1, "replica_id": 2, "belief": [0.25] * 4},
+            ],
+        },
+        {
+            "event": "iteration_completed",
+            "summary": {
+                "metrics": {
+                    "elapsed_seconds": 0.3,
+                    "sla_violations": 1,
+                    "aggregate_utility_total": -2.5,
+                    "jain_fairness": 0.9,
+                },
+                "beliefs": {
+                    "1:1": [0.1, 0.2, 0.3, 0.4],
+                    "1:2": [0.4, 0.3, 0.2, 0.1],
+                },
+            },
+        },
+        {
+            "event": "run_completed",
+            "iterations": 1,
+            "reached_equilibrium": True,
+        },
+    ]
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    paths = export_legacy_csv(trace_path, output_dir, "test-run")
+
+    assert {path.name for path in paths} == {
+        "time.csv",
+        "sla_violations.csv",
+        "aggregate_utility.csv",
+        "jain_index.csv",
+        "replica_results.csv",
+    }
+    with (output_dir / "aggregate_utility.csv").open(newline="") as source:
+        assert list(csv.DictReader(source)) == [{"test-run": "-2.5"}]
+    with (output_dir / "replica_results.csv").open(newline="") as source:
+        beliefs = list(csv.DictReader(source))
+    assert len(beliefs) == 2
+    assert json.loads(beliefs[0]["(1, 1)"]) == [0.25] * 4
+    assert json.loads(beliefs[1]["(1, 2)"]) == [0.4, 0.3, 0.2, 0.1]
+
+
+def test_export_legacy_csv_appends_a_new_metric_column(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    output_dir = tmp_path / "csv"
+    events = [
+        {
+            "event": "run_started",
+            "initial_replicas": [
+                {"stage": 1, "replica_id": 1, "belief": [0.25] * 4},
+            ],
+        },
+        {
+            "event": "iteration_completed",
+            "summary": {
+                "metrics": {
+                    "elapsed_seconds": 0.1,
+                    "sla_violations": 0,
+                    "aggregate_utility_total": 1.0,
+                    "jain_fairness": 1.0,
+                },
+                "beliefs": {"1:1": [0.1, 0.2, 0.3, 0.4]},
+            },
+        },
+        {"event": "run_completed", "iterations": 1},
+    ]
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    export_legacy_csv(trace_path, output_dir, "first")
+    export_legacy_csv(trace_path, output_dir, "second")
+
+    with (output_dir / "time.csv").open(newline="") as source:
+        assert list(csv.DictReader(source)) == [
+            {"first": "0.1", "second": "0.1"}
+        ]
+
+
+def test_experiment_job_receives_requested_dimensions(monkeypatch):
+    job = {
+        "metadata": {"name": "ibg-controller"},
+        "spec": {
+            "activeDeadlineSeconds": 180,
+            "template": {"spec": {"containers": [{"env": []}]}},
+        },
+    }
+    applied = {}
+
+    def fake_run(command, **kwargs):
+        if "create" in command:
+            return SimpleNamespace(stdout=json.dumps(job))
+        if command[-1] == "-":
+            applied.update(json.loads(kwargs["input_text"]))
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(launcher, "run", fake_run)
+
+    start_experiment_job(
+        "kind-ibg",
+        2050,
+        50,
+        600,
+        num_of_stages=4,
+        num_of_replicas=6,
+        num_of_flows=5,
+    )
+
+    container = applied["spec"]["template"]["spec"]["containers"][0]
+    environment = {item["name"]: item["value"] for item in container["env"]}
+    assert environment["NUM_STAGES"] == "4"
+    assert environment["EXPECTED_REPLICAS"] == "6"
+    assert environment["NUM_FLOWS"] == "5"
+
+
+def test_stale_stage_cleanup_removes_only_stages_above_request(monkeypatch):
+    calls = []
+    items = [
+        {"kind": "StatefulSet", "metadata": {"name": "stage-1"}},
+        {"kind": "StatefulSet", "metadata": {"name": "stage-4"}},
+        {"kind": "Service", "metadata": {"name": "stage-4"}},
+        {"kind": "Service", "metadata": {"name": "flow-generator"}},
+    ]
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(stdout=json.dumps({"items": items}))
+
+    monkeypatch.setattr(launcher, "run", fake_run)
+
+    remove_stale_stage_resources("kind-ibg", 3)
+
+    delete = next(command for command in calls if "delete" in command)
+    assert "statefulset/stage-4" in delete
+    assert "service/stage-4" in delete
+    assert "statefulset/stage-1" not in delete
 
 
 def test_render_event_prints_iteration_details(capsys):

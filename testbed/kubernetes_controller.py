@@ -36,11 +36,21 @@ def wait_for_flow_generator(url, timeout_seconds=120.0):
 
 def main():
     namespace = os.environ.get("POD_NAMESPACE", "ibg-testbed")
-    num_of_stages = 3
+    num_of_stages = int(os.environ.get("NUM_STAGES", "3"))
     num_of_replicas = int(os.environ.get("EXPECTED_REPLICAS", "2"))
     num_of_flows = int(os.environ.get("NUM_FLOWS", "3"))
     first_slot_id = int(os.environ.get("SLOT_ID", "1"))
     max_iterations = int(os.environ.get("MAX_ITERATIONS", "1"))
+    if min(
+        num_of_stages,
+        num_of_replicas,
+        num_of_flows,
+        first_slot_id,
+        max_iterations,
+    ) < 1:
+        raise ValueError(
+            "stages, replicas, flows, slot ID, and max iterations must be positive"
+        )
     seeds = [
         int(value.strip())
         for value in os.environ.get(

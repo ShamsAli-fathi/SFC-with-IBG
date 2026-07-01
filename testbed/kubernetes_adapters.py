@@ -151,8 +151,10 @@ class KubernetesSlotTrafficExecutor:
 
     def execute_slot(self, slot_id, assignments_by_stage, discovered_by_stage):
         stages = sorted(assignments_by_stage)
-        if stages != [1, 2, 3]:
-            raise RuntimeError("Kubernetes traffic requires stages 1, 2, and 3")
+        if stages != list(range(1, len(stages) + 1)):
+            raise RuntimeError(
+                "Kubernetes traffic requires contiguous stages starting at 1"
+            )
         flow_ids = set(assignments_by_stage[1])
         if any(set(assignments_by_stage[stage]) != flow_ids for stage in stages):
             raise RuntimeError("stage assignments contain different flow IDs")

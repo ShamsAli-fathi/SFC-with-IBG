@@ -1,6 +1,6 @@
 # Project Status
 
-Updated: 2026-06-30
+Updated: 2026-07-01
 
 ## Completed
 
@@ -54,6 +54,17 @@ Updated: 2026-06-30
 - Switched slot-duration measurement to a monotonic clock after the first observable run exposed a WSL wall-clock jump in one iteration.
 - Expanded the suite to 63 passing tests, including equilibrium-loop state retention, iteration bounds, belief-delta tracing, launcher environment overrides, readable rendering, and watcher-free log polling.
 - Verified the final one-command launcher live with seed 2050: all 15 replica Pods and the flow generator rolled out, the fresh controller Job reached equilibrium in 9 iterations, corrected slot durations ranged from approximately 0.307 to 0.394 seconds, and an 11-event JSONL trace captured run start, every iteration, and final state.
+- Added `--flow`, `--stage`, and `--replica` launcher dimensions with plural aliases, dynamic deterministic profiles, generated stage Services/StatefulSets, stale-stage cleanup, and matching controller configuration.
+- Generalized complete-route execution from exactly three hops to any shared positive contiguous stage sequence beginning at stage 1.
+- Expanded the suite to 73 passing tests, including generated four-stage/seven-replica resources, deterministic profile extension, singular/plural CLI flags, dimension propagation, stale-stage cleanup, and two-/three-/four-stage Kubernetes routes.
+- Verified a live non-default run with two flows, four stages, and two replicas per stage. The launcher generated eight replica Pods and a new Stage 4 Service/StatefulSet, completed all eight placements and observations per slot, and reached equilibrium in 4 iterations.
+- Restored the default three-flow/three-stage/five-replica topology through the same CLI, verified stale Stage 4 resources were removed, and reproduced equilibrium in 9 iterations with the validated final beliefs.
+- Added `Report.md`, a repository-evidence-based comparison of the paper draft's hybrid container testbed and the implemented lightweight HTTP/Kubernetes testbed.
+- Made `Report.md` opt-in-only: it must not be read or edited unless the user explicitly requests it in the current task.
+- Added optional `--csv 1` host-side export to `scripts/run_experiment.py`. A completed Kubernetes JSONL trace is converted into `time.csv`, `sla_violations.csv`, `aggregate_utility.csv`, `jain_index.csv`, and `replica_results.csv` under `/mnt/e/WSL/Ubuntu-24.04/CSV`; omitting the option retains JSONL-only behavior.
+- Expanded the suite to 76 passing tests, including CSV option parsing, complete legacy report generation, initial/per-iteration belief snapshots, and appending a new experiment column to existing metric reports.
+- Recreated the disposable `ibg` kind cluster after its stopped node containers returned with an unusable API following a WSL interruption, then reloaded the existing local runtime image.
+- Verified `./scripts/run_experiment.py --csv 1 --flow 4 --stage 3 --replica 3 --max-iterations 100 --skip-build` live. All nine replica Pods and the flow generator became Ready, the controller Job reached equilibrium in 8 iterations, the JSONL trace completed, and all five requested CSV files were written successfully.
 - Created and maintained the repository handoff documents as implementation progressed.
 
 ## Environment facts
@@ -64,19 +75,19 @@ Updated: 2026-06-30
 - The active checkout is `/home/shams/projects/SFC-with-IBG`; the previous `/mnt/e/WSL/Ubuntu-24.04/projects/SFC-with-IBG` checkout remains temporarily as a backup.
 - Native Docker Engine is active under `systemd`, normal-user Docker access is configured, and its data root is `/var/lib/docker` inside the E-hosted ext4 filesystem.
 - `%UserProfile%\.wslconfig` is active: WSL reports approximately 10 GB RAM, 6 processors, and 4 GB swap.
-- The `ibg` kind cluster is running with one Ready control-plane node and two Ready workers. The `ibg-testbed` namespace currently has 15 Ready replica Pods, one Ready flow-generator Pod, and a successfully completed three-seed controller Job.
+- The `ibg` kind cluster is running with one Ready control-plane node and two Ready workers. The `ibg-testbed` namespace currently has nine Ready replica Pods, one Ready flow-generator Pod, and a successfully completed four-flow/three-stage/three-replica experiment Job.
 - C has limited free space; the WSL distribution and its Docker/cluster data are therefore kept on E.
 - The current project root is a Git repository on branch `IBG`, with `origin` configured for `ShamsAli-fathi/SFC-with-IBG`.
 - Docker Hub returned HTTP 403 for the initial Python base-image pull, so the local runtime image uses the official Azure Linux Python 3.12 base from Microsoft Container Registry. This is a packaging workaround, not a change to runtime behavior.
 
 ## Current state
 
-Phases 0-6 are complete. The supported exact testbed target is verified at three stages, five replicas per stage, and three flows over three controlled seeds. Mathematical outputs match the simulation backend exactly; only expected infrastructure timing and Kubernetes-specific metadata differ. The former scaling phase was removed because exact `BR_EIBG` is intentionally a small-instance algorithm. The post-roadmap experiment launcher now exposes the full start-to-equilibrium progression without changing the solver or learning mathematics.
+Phases 0-6 are complete. The supported exact testbed target is verified at three stages, five replicas per stage, and three flows over three controlled seeds. Mathematical outputs match the simulation backend exactly; only expected infrastructure timing and Kubernetes-specific metadata differ. The former scaling phase was removed because exact `BR_EIBG` is intentionally a small-instance algorithm. The post-roadmap experiment launcher exposes the full start-to-equilibrium progression, accepts runtime dimensions, and optionally exports the five legacy CSV reports without changing the solver or learning mathematics; non-default dimensions are operational configurations, not additional Phase 6 validation claims.
 
 ## Next action
 
-Use `./scripts/run_experiment.py` for observable supported-size experiments and retain selected JSONL traces outside Git when needed for analysis. No later roadmap phase is planned; any new capability requires explicit scope.
+Use `./scripts/run_experiment.py --flow 3 --stage 3 --replica 5` for the validated default or select other positive runtime dimensions for exploratory experiments. Add `--csv 1` to also write the five legacy reports under `/mnt/e/WSL/Ubuntu-24.04/CSV`. Retain selected JSONL traces outside Git when needed for analysis. No later roadmap phase is planned; any new capability requires explicit scope.
 
 ## New-thread handoff prompt
 
-> We are continuing the completed IBG Kubernetes testbed roadmap in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Do not read or edit `Tutorial.md` unless explicitly requested. Phases 0-6 are complete. The supported three-stage, five-replica, three-flow case matches controlled simulation mathematics over three seeds; no later roadmap phase is planned.
+> We are continuing the completed IBG Kubernetes testbed roadmap in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Do not read or edit `Tutorial.md` or `Report.md` unless explicitly requested. Phases 0-6 are complete. The supported three-stage, five-replica, three-flow case matches controlled simulation mathematics over three seeds; no later roadmap phase is planned.

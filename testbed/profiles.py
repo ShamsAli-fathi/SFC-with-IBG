@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
@@ -55,3 +56,51 @@ def require_profile(profiles, stage, replica_id):
         raise ValueError(
             f"missing deterministic profile for stage {stage} replica {replica_id}"
         ) from error
+
+
+def _extension_observation_seed(stage, replica_id):
+    total = stage + replica_id
+    pairing = (total * (total + 1) // 2) + replica_id
+    return 1_000_000_000 + pairing
+
+
+def expand_profiles(profiles, num_of_stages, num_of_replicas):
+    """Select or deterministically extend profiles to the requested dimensions."""
+    if num_of_stages < 1 or num_of_replicas < 1:
+        raise ValueError("stage and replica counts must be positive")
+    if not profiles:
+        raise ValueError("at least one template profile is required")
+
+    stage_ids = sorted({stage for stage, _ in profiles})
+    replica_ids_by_stage = {
+        stage: sorted(
+            replica_id
+            for profile_stage, replica_id in profiles
+            if profile_stage == stage
+        )
+        for stage in stage_ids
+    }
+    expanded = {}
+    for stage in range(1, num_of_stages + 1):
+        template_stage = stage_ids[(stage - 1) % len(stage_ids)]
+        template_replicas = replica_ids_by_stage[template_stage]
+        for replica_id in range(1, num_of_replicas + 1):
+            key = (stage, replica_id)
+            if key in profiles:
+                expanded[key] = profiles[key]
+                continue
+            template_replica = template_replicas[
+                (replica_id - 1) % len(template_replicas)
+            ]
+            expanded[key] = replace(
+                profiles[(template_stage, template_replica)],
+                observation_seed=_extension_observation_seed(stage, replica_id),
+            )
+    return expanded
+
+
+def profiles_document(profiles):
+    stages = {}
+    for (stage, replica_id), profile in sorted(profiles.items()):
+        stages.setdefault(str(stage), {})[str(replica_id)] = asdict(profile)
+    return {"stages": stages}

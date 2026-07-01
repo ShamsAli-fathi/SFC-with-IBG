@@ -14,8 +14,8 @@ from testbed.flow_generator import (
 )
 
 
-def route(flow_id, replica_by_stage=None):
-    replica_by_stage = replica_by_stage or {1: 1, 2: 1, 3: 1}
+def route(flow_id, replica_by_stage=None, stages=(1, 2, 3)):
+    replica_by_stage = replica_by_stage or {stage: 1 for stage in stages}
     return {
         "flow_id": flow_id,
         "hops": [
@@ -24,7 +24,7 @@ def route(flow_id, replica_by_stage=None):
                 "replica_id": replica_by_stage[stage],
                 "url": f"http://stage-{stage}-{replica_by_stage[stage]}",
             }
-            for stage in (1, 2, 3)
+            for stage in stages
         ],
     }
 
@@ -172,13 +172,28 @@ def test_hop_telemetry_preserves_correlation_and_latency_fields():
                     }
                 ],
             },
-            "stages 1, 2, and 3 in order",
+            "contiguous stages starting at 1 in order",
+        ),
+        (
+            {
+                "slot_id": 1,
+                "routes": [route(1, stages=(1, 2)), route(2)],
+            },
+            "same stages",
         ),
     ],
 )
 def test_route_contract_rejects_ambiguous_input(payload, message):
     with pytest.raises(ValueError, match=message):
         RunSlotRequest.model_validate(payload)
+
+
+def test_route_contract_accepts_configurable_stage_count():
+    request = RunSlotRequest.model_validate(
+        {"slot_id": 1, "routes": [route(1, stages=(1, 2, 3, 4))]}
+    )
+
+    assert [hop.stage for hop in request.routes[0].hops] == [1, 2, 3, 4]
 
 
 @pytest.mark.parametrize(

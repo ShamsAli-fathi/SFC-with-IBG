@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -10,9 +11,22 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from testbed.kubernetes_resources import build_runtime_resources
+from testbed.profiles import expand_profiles, load_profiles
+
+
 IMAGE = "ibg-testbed:phase6"
 NAMESPACE = "ibg-testbed"
 JOB_NAME = "ibg-experiment"
+CSV_OUTPUT_DIR = Path("/mnt/e/WSL/Ubuntu-24.04/CSV")
+CSV_METRICS = {
+    "time.csv": "elapsed_seconds",
+    "sla_violations.csv": "sla_violations",
+    "aggregate_utility.csv": "aggregate_utility_total",
+    "jain_index.csv": "jain_fairness",
+}
 
 
 def command_text(command):
@@ -70,8 +84,89 @@ def build_and_load_image(cluster_name):
     run(["kind", "load", "docker-image", "--name", cluster_name, IMAGE])
 
 
-def deploy_workloads(context, timeout, restart):
-    run(["kubectl", "--context", context, "apply", "-k", "deploy/kubernetes"])
+def remove_stale_stage_resources(context, num_of_stages):
+    response = run(
+        [
+            "kubectl",
+            "--context",
+            context,
+            "get",
+            "statefulsets,services",
+            "--namespace",
+            NAMESPACE,
+            "--output",
+            "json",
+        ],
+        capture=True,
+    )
+    stale = []
+    for item in json.loads(response.stdout).get("items", []):
+        name = item.get("metadata", {}).get("name", "")
+        if not name.startswith("stage-"):
+            continue
+        try:
+            stage = int(name.removeprefix("stage-"))
+        except ValueError:
+            continue
+        if stage <= num_of_stages:
+            continue
+        resource = {
+            "Service": "service",
+            "StatefulSet": "statefulset",
+        }.get(item.get("kind"))
+        if resource is not None:
+            stale.append(f"{resource}/{name}")
+    if stale:
+        run(
+            [
+                "kubectl",
+                "--context",
+                context,
+                "delete",
+                *sorted(stale),
+                "--namespace",
+                NAMESPACE,
+                "--wait=true",
+            ]
+        )
+
+
+def deploy_workloads(
+    context,
+    timeout,
+    restart,
+    *,
+    num_of_stages,
+    num_of_replicas,
+    profiles,
+):
+    for manifest in ("namespace.yaml", "rbac.yaml", "flow-generator.yaml"):
+        run(
+            [
+                "kubectl",
+                "--context",
+                context,
+                "apply",
+                "--filename",
+                str(ROOT / "deploy/kubernetes" / manifest),
+            ]
+        )
+    resources = build_runtime_resources(
+        profiles,
+        num_of_stages=num_of_stages,
+        num_of_replicas=num_of_replicas,
+        namespace=NAMESPACE,
+        image=IMAGE,
+    )
+    run(
+        ["kubectl", "--context", context, "apply", "--filename", "-"],
+        input_text=json.dumps(resources),
+    )
+    remove_stale_stage_resources(context, num_of_stages)
+    stage_resources = [
+        f"statefulset/stage-{stage}"
+        for stage in range(1, num_of_stages + 1)
+    ]
     if restart:
         run(
             [
@@ -80,15 +175,13 @@ def deploy_workloads(context, timeout, restart):
                 context,
                 "rollout",
                 "restart",
-                "statefulset/stage-1",
-                "statefulset/stage-2",
-                "statefulset/stage-3",
+                *stage_resources,
                 "deployment/flow-generator",
                 "--namespace",
                 NAMESPACE,
             ]
         )
-    for stateful_set in ("stage-1", "stage-2", "stage-3"):
+    for stage in range(1, num_of_stages + 1):
         run(
             [
                 "kubectl",
@@ -96,7 +189,7 @@ def deploy_workloads(context, timeout, restart):
                 context,
                 "rollout",
                 "status",
-                f"statefulset/{stateful_set}",
+                f"statefulset/stage-{stage}",
                 "--namespace",
                 NAMESPACE,
                 f"--timeout={timeout}s",
@@ -126,7 +219,16 @@ def set_env(container, name, value):
     container["env"].append({"name": name, "value": str(value)})
 
 
-def start_experiment_job(context, seed, max_iterations, timeout):
+def start_experiment_job(
+    context,
+    seed,
+    max_iterations,
+    timeout,
+    *,
+    num_of_stages,
+    num_of_replicas,
+    num_of_flows,
+):
     rendered = run(
         [
             "kubectl",
@@ -146,6 +248,9 @@ def start_experiment_job(context, seed, max_iterations, timeout):
     set_env(container, "IBG_SEEDS", seed)
     set_env(container, "MAX_ITERATIONS", max_iterations)
     set_env(container, "SLOT_ID", 1)
+    set_env(container, "NUM_STAGES", num_of_stages)
+    set_env(container, "EXPECTED_REPLICAS", num_of_replicas)
+    set_env(container, "NUM_FLOWS", num_of_flows)
 
     run(
         [
@@ -390,11 +495,133 @@ def follow_logs(context, trace_path, timeout):
         raise RuntimeError("controller Job did not complete successfully")
 
 
-def parse_args():
+def _read_csv_rows(path):
+    if not path.exists():
+        return [], []
+    with path.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        return list(reader.fieldnames or []), list(reader)
+
+
+def _write_csv_rows(path, fieldnames, rows):
+    with path.open("w", newline="", encoding="utf-8") as destination:
+        writer = csv.DictWriter(destination, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _append_metric_column(path, run_id, values):
+    fieldnames, rows = _read_csv_rows(path)
+    if run_id in fieldnames:
+        raise ValueError(f"CSV run identifier already exists in {path}: {run_id}")
+    fieldnames.append(run_id)
+    while len(rows) < len(values):
+        rows.append({name: "" for name in fieldnames})
+    for row in rows:
+        row.setdefault(run_id, "")
+    for index, value in enumerate(values):
+        rows[index][run_id] = value
+    _write_csv_rows(path, fieldnames, rows)
+
+
+def _snapshot_beliefs(event):
+    return {
+        str((replica["stage"], replica["replica_id"])): replica["belief"]
+        for replica in event["initial_replicas"]
+    }
+
+
+def _summary_beliefs(event):
+    beliefs = {}
+    for identity, values in event["summary"]["beliefs"].items():
+        stage, replica_id = (int(value) for value in identity.split(":", 1))
+        beliefs[str((stage, replica_id))] = values
+    return beliefs
+
+
+def _append_belief_rows(path, snapshots):
+    fieldnames, rows = _read_csv_rows(path)
+    for snapshot in snapshots:
+        for name in snapshot:
+            if name not in fieldnames:
+                fieldnames.append(name)
+    for snapshot in snapshots:
+        rows.append(
+            {
+                name: json.dumps(snapshot[name]) if name in snapshot else ""
+                for name in fieldnames
+            }
+        )
+    for row in rows:
+        for name in fieldnames:
+            row.setdefault(name, "")
+    _write_csv_rows(path, fieldnames, rows)
+
+
+def export_legacy_csv(trace_path, output_dir, run_id):
+    with trace_path.open(encoding="utf-8") as trace:
+        events = [json.loads(line) for line in trace if line.strip()]
+    run_started = next(
+        (event for event in events if event.get("event") == "run_started"),
+        None,
+    )
+    iterations = [
+        event for event in events if event.get("event") == "iteration_completed"
+    ]
+    run_completed = next(
+        (event for event in events if event.get("event") == "run_completed"),
+        None,
+    )
+    if run_started is None or not iterations or run_completed is None:
+        raise ValueError("trace does not contain a complete experiment run")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for filename, metric_name in CSV_METRICS.items():
+        _append_metric_column(
+            output_dir / filename,
+            run_id,
+            [event["summary"]["metrics"][metric_name] for event in iterations],
+        )
+    _append_belief_rows(
+        output_dir / "replica_results.csv",
+        [_snapshot_beliefs(run_started)]
+        + [_summary_beliefs(event) for event in iterations],
+    )
+    return [
+        output_dir / filename
+        for filename in (*CSV_METRICS, "replica_results.csv")
+    ]
+
+
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Start the IBG kind testbed and stream an equilibrium run."
     )
     parser.add_argument("--seed", type=int, default=2050)
+    parser.add_argument(
+        "--flow",
+        "--flows",
+        dest="num_of_flows",
+        type=int,
+        default=3,
+        help="number of logical flows",
+    )
+    parser.add_argument(
+        "--stage",
+        "--stages",
+        dest="num_of_stages",
+        type=int,
+        default=3,
+        help="number of ordered SFC stages",
+    )
+    parser.add_argument(
+        "--replica",
+        "--replicas",
+        dest="num_of_replicas",
+        type=int,
+        default=5,
+        help="number of replicas in every stage",
+    )
     parser.add_argument("--max-iterations", type=int, default=100)
     parser.add_argument("--cluster", default="ibg")
     parser.add_argument("--timeout", type=int, default=600)
@@ -408,26 +635,78 @@ def parse_args():
         type=Path,
         default=ROOT / "runs",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--csv",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help=(
+            "write the five legacy CSV reports to "
+            f"{CSV_OUTPUT_DIR} (1=enabled, 0=disabled)"
+        ),
+    )
+    return parser.parse_args(argv)
 
 
 def main():
     args = parse_args()
-    if args.max_iterations < 1:
-        raise ValueError("--max-iterations must be at least 1")
+    if min(
+        args.max_iterations,
+        args.num_of_flows,
+        args.num_of_stages,
+        args.num_of_replicas,
+    ) < 1:
+        raise ValueError(
+            "--flow, --stage, --replica, and --max-iterations must be positive"
+        )
     require_commands("docker", "kind", "kubectl")
+    print(
+        "Requested configuration: "
+        f"flows={args.num_of_flows}, stages={args.num_of_stages}, "
+        f"replicas/stage={args.num_of_replicas}"
+    )
+    base_profiles = load_profiles(ROOT / "deploy/kubernetes/profiles.json")
+    profiles = expand_profiles(
+        base_profiles,
+        args.num_of_stages,
+        args.num_of_replicas,
+    )
     ensure_cluster(args.cluster)
     if not args.skip_build:
         build_and_load_image(args.cluster)
     context = f"kind-{args.cluster}"
-    deploy_workloads(context, args.timeout, restart=not args.skip_build)
-    start_experiment_job(context, args.seed, args.max_iterations, args.timeout)
+    deploy_workloads(
+        context,
+        args.timeout,
+        restart=not args.skip_build,
+        num_of_stages=args.num_of_stages,
+        num_of_replicas=args.num_of_replicas,
+        profiles=profiles,
+    )
+    start_experiment_job(
+        context,
+        args.seed,
+        args.max_iterations,
+        args.timeout,
+        num_of_stages=args.num_of_stages,
+        num_of_replicas=args.num_of_replicas,
+        num_of_flows=args.num_of_flows,
+    )
 
     args.trace_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     trace_path = args.trace_dir / f"ibg-experiment-{timestamp}.jsonl"
     follow_logs(context, trace_path, args.timeout)
     print(f"\nDetailed JSONL trace: {trace_path}")
+    if args.csv == 1:
+        run_id = (
+            f"{timestamp}-seed{args.seed}-f{args.num_of_flows}"
+            f"-s{args.num_of_stages}-r{args.num_of_replicas}"
+        )
+        csv_paths = export_legacy_csv(trace_path, CSV_OUTPUT_DIR, run_id)
+        print(f"Legacy CSV reports: {CSV_OUTPUT_DIR}")
+        for csv_path in csv_paths:
+            print(f"  {csv_path.name}")
 
 
 if __name__ == "__main__":

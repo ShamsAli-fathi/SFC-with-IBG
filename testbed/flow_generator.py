@@ -19,13 +19,16 @@ class HopTarget(BaseModel):
 
 class FlowRoute(BaseModel):
     flow_id: int = Field(ge=1)
-    hops: list[HopTarget] = Field(min_length=3, max_length=3)
+    hops: list[HopTarget] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_stage_order(self):
         stages = [hop.stage for hop in self.hops]
-        if stages != [1, 2, 3]:
-            raise ValueError("route hops must contain stages 1, 2, and 3 in order")
+        expected = list(range(1, len(self.hops) + 1))
+        if stages != expected:
+            raise ValueError(
+                "route hops must contain contiguous stages starting at 1 in order"
+            )
         return self
 
 
@@ -38,6 +41,11 @@ class RunSlotRequest(BaseModel):
         flow_ids = [route.flow_id for route in self.routes]
         if len(flow_ids) != len(set(flow_ids)):
             raise ValueError("flow_id values must be unique within a slot")
+        stage_sequences = {
+            tuple(hop.stage for hop in route.hops) for route in self.routes
+        }
+        if len(stage_sequences) != 1:
+            raise ValueError("all routes in a slot must contain the same stages")
         return self
 
 
