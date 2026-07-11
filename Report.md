@@ -4,17 +4,17 @@ Date: 2026-07-01
 
 ## Purpose and scope
 
-This report compares the container and testbed design described in `misc/vesal_tex.tex` with the implementation currently present in this repository. It focuses on what is genuinely the same, what was simplified to make the testbed lightweight, and which paper claims are not implemented or validated by the current code.
+This report compares a proposed container-based testbed for studying service function chains with the lightweight Kubernetes testbed that was actually implemented. It is intended to help readers understand how closely the implementation represents the proposed system, which parts were simplified, and what the current testbed can and cannot demonstrate.
 
-The comparison is based on repository code, Kubernetes manifests, tests, and the recorded Phase 6 validation. It does not treat a design written in the paper as implemented unless corresponding evidence exists in the repository.
+The comparison covers the decision and learning behavior, cluster and container design, traffic generation, telemetry, and validation results. Its conclusions are based on the available implementation, configuration, automated tests, and recorded experiment results; proposed features are not presented as implemented unless there is supporting evidence.
 
 ## Short conclusion
 
 The current system preserves the main scientific control loop: flows arrive in sequence, choose exactly one replica at every stage, experience load-dependent utility, observe only selected replicas, update beliefs, and repeat until the existing equilibrium rule is satisfied. The exact decoupled `BR_EIBG` solver, utility calculation, learning rule, placement representation, SLA calculation, Jain fairness, and equilibrium test are reused by both the simulation and Kubernetes paths.
 
-The major difference is the meaning of a “CNF container.” The paper describes a hybrid telecom-oriented dataplane with kernel and DPDK/VPP CNFs, packet generators, sidecars, resource emulation, and a monitoring stack. The repository instead uses small Python/FastAPI HTTP services as CNF stand-ins. This retains real containers, Pods, service discovery, multi-hop traffic, contention, and latency measurement, but deliberately does not reproduce a real 6G user plane or accelerated packet processing.
+The implementation differs from the paper because the full design requires more computing capacity and specialized networking resources than were available for this work. To keep the testbed as lightweight and practical as possible, the repository uses small Python/FastAPI HTTP services in place of kernel and DPDK/VPP CNFs, specialized packet generators, sidecars, resource emulation, and a full monitoring stack.
 
-In simple terms: the implemented testbed is faithful to the IBG decision-and-learning experiment, but it is a lightweight functional model of the container dataplane rather than the full dataplane described in the paper.
+Despite these substitutions, the implementation remains faithful to the paper's goal of producing a working testbed and to its proposed control-plane and data-plane structure. Crucially, the simplifications do not remove containerization or cluster execution: the controller, flow generator, and replica services run as real containers inside a multi-node Kubernetes cluster, where Kubernetes manages Pods, Services, discovery, readiness, scheduling, and networking. The control plane performs replica discovery, selection, belief updates, and experiment coordination, while the data plane carries real multi-hop HTTP traffic through the selected containerized replicas and records contention and latency. The result is therefore not a simulation-only prototype, but a genuinely containerized and cluster-based testbed that provides a lightweight functional realization of the proposed system without claiming a full telecom-grade or accelerated dataplane deployment.
 
 ## Side-by-side comparison
 
@@ -73,6 +73,72 @@ There is one careful bridge between physical execution and mathematical preserva
 - failure detection for missing Pods, bad HTTP responses, identity mismatches, and correlation mismatches.
 
 Therefore, the repository is a real orchestration and service-to-service testbed. What it does not provide is a realistic telecom packet dataplane.
+
+## How Docker, kind, and Kubernetes fit together
+
+The lightweight testbed uses three related layers. They are easy to mix up because all three deal with containers, but they are responsible for different parts of the experiment.
+
+```text
+WSL2 Ubuntu host
++--------------------------------------------------------------------------+
+| scripts/run_experiment.py                                                |
+|   |                                                                      |
+|   +-- Docker build context + source ----------> native Docker Engine     |
+|   |                                                |                     |
+|   |                                                +-- runtime image      |
+|   |                                                                      |
+|   +-- kind cluster configuration -------------> kind                     |
+|   +-- runtime image ---------------------------> kind image loader        |
+|                                                    |                     |
+|                         Docker runs these as containers                  |
+|                                                    v                     |
+|   +----------------------- kind cluster nodes -----------------------+   |
+|   | control-plane node          worker node 1       worker node 2    |   |
+|   |                                                                  |   |
+|   |                    Kubernetes cluster                            |   |
+|   |  +------------------------------------------------------------+  |   |
+|   |  | Kubernetes API                                            |  |   |
+|   |  |   | manifests, profiles, RBAC, desired replica counts     |  |   |
+|   |  |   | readiness and Pod identity/endpoint information       |  |   |
+|   |  |   v                                                        |  |   |
+|   |  | IBG controller Job                                        |  |   |
+|   |  |   |                                                        |  |   |
+|   |  |   | CONTROL PLANE                                         |  |   |
+|   |  |   | selected routes: slot, flow, stage, replica, endpoint |  |   |
+|   |  |   v                                                        |  |   |
+|   |  | flow-generator Pod                                        |  |   |
+|   |  |   |                                                        |  |   |
+|   |  |   | DATA PLANE                                            |  |   |
+|   |  |   +-- HTTP request: slot ID, flow ID, congestion ------+  |  |   |
+|   |  |   |                                                    |  |  |   |
+|   |  |   +--> selected stage 1 replica -- response ----------+  |  |   |
+|   |  |   +--> selected stage 2 replica -- response ----------+  |  |   |
+|   |  |   +--> selected stage N replica -- response ----------+  |  |   |
+|   |  |                                                        |  |  |   |
+|   |  |   responses: identity, concurrency, latency,           |  |  |   |
+|   |  |   legacy observation signal and likelihood            |  |  |   |
+|   |  |   v                                                    |  |  |   |
+|   |  | flow generator -> correlated hop telemetry -> controller |  |   |
+|   |  |                                                |           |  |   |
+|   |  |                 beliefs, metrics, placements, events      |  |   |
+|   |  +------------------------------------------------------------+  |   |
+|   +------------------------------------------------------------------+   |
++--------------------------------------------------------------------------+
+```
+
+The downward control-plane path decides and communicates which already-running replicas each flow should use. The data-plane path then executes that decision as ordered HTTP traffic. Telemetry returns upward to the controller, where it is correlated with the selected route and used for belief updates, metrics, and experiment records.
+
+Docker is the local container foundation. In this repository it has two main jobs. First, it builds the shared runtime image that contains the Python code and dependencies used by the replica service, the flow generator, and the controller. Second, it runs the kind cluster nodes themselves as Docker containers. This is why the setup uses native Docker Engine inside Ubuntu, while Docker Desktop is not part of the testbed.
+
+kind sits between Docker and Kubernetes. Its name means “Kubernetes in Docker,” which is almost exactly what it provides here: a local Kubernetes cluster whose nodes are Docker containers. In the current setup, kind creates one control-plane node and two worker nodes. These node containers behave like Kubernetes machines from the cluster's point of view, but they are still lightweight local containers from the host's point of view. The command that loads the project image into kind makes that image available inside the cluster nodes, so Kubernetes can start Pods from it without pulling from an external registry.
+
+Kubernetes, often shortened informally to “kube,” is the orchestration layer that runs the actual experiment workloads. It creates the stage StatefulSets, gives each replica Pod a stable ordinal identity, exposes the replica Pods through headless Services, runs the flow-generator Deployment, and starts the controller as a Job. It also provides readiness checks, Service DNS, namespace isolation, ConfigMaps for deterministic profiles, and RBAC for read-only Pod discovery.
+
+The connection among the layers is therefore practical rather than abstract. Docker provides the image and the local containers that become cluster nodes. kind uses those Docker containers to form a small Kubernetes cluster. Kubernetes then schedules and connects the experiment Pods inside that cluster.
+
+At experiment time, `scripts/run_experiment.py` ties the layers together. It ensures the kind cluster exists, builds the Docker image when needed, loads that image into kind, applies the Kubernetes resources, waits until the replica and flow-generator Pods are Ready, and then creates a fresh controller Job. After that, the IBG-specific work happens inside Kubernetes: the controller discovers Ready replica Pods, the solver chooses one endpoint per stage for each flow, the flow generator sends HTTP requests through the selected route, and the returned telemetry is converted back into the existing IBG observation and reporting path.
+
+One important boundary remains: Kubernetes schedules Pods onto worker nodes, but the IBG solver does not reschedule Pods. The solver's “placement” decision means choosing which already-running replica endpoint a logical flow should use. That is much lighter than moving Pods or changing node affinity per flow, and it matches the SFC-style control question the testbed is meant to exercise.
 
 ## How the lightweight substitutions work
 
