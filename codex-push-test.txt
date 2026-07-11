@@ -1,0 +1,1 @@
+Temporary file for verifying authenticated Git push access. It is removed immediately after a successful test push.
