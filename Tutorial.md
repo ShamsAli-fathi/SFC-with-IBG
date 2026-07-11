@@ -8,7 +8,7 @@ This file is user-directed. Agents must not read or edit it unless the user expl
 
 ## 1. What this project is
 
-The project is converting an existing decoupled Indian Buffet Game (IBG) Python simulation into a lightweight Kubernetes testbed.
+The project is building an SFC-with-IBG testbed. The current implemented path converts the active decoupled Indian Buffet Game (IBG) Python simulation into a lightweight Kubernetes testbed.
 
 The important rule is that the IBG mathematics must stay stable. Kubernetes now replaces simulated discovery and traffic with real Pods and HTTP requests, but it does not redefine replica utility, policy selection, belief updates, equilibrium, or reporting.
 
@@ -197,7 +197,7 @@ Return to the project afterward:
 cd "$PROJECT_ROOT"
 ```
 
-The default decoupled path is the supported reference. Do not enable or modify the budgeted/coupled path unless that work is explicitly added to scope.
+The default decoupled path is the supported reference for the current build. Do not enable or modify the budgeted/coupled path unless that work is explicitly added to scope.
 
 ## 7. Phase 2 guide: use the adapter-backed simulation
 
@@ -695,11 +695,11 @@ The non-default acceptance run used:
 
 It reached equilibrium in 4 iterations. A subsequent default run removed Stage 4 automatically and restored three StatefulSets with five Ready replicas each.
 
-There is no scaling phase. The exact load-vector solver is intentionally limited to the supported small instance.
+There is no scaling phase in the current roadmap. The exact load-vector solver is intentionally limited to the supported small instance.
 
 ## 11. IBG Exact: Python scripts and logic
 
-“IBG Exact” is the name used in this tutorial for the preserved, active decoupled Python reference path. It means that later backends must reproduce this path's behavior. It does not bring the budgeted/coupled implementation into scope.
+“IBG Exact” is the name used in this tutorial for the preserved, active decoupled Python reference path. It means that later backends for this build must reproduce this path's behavior. It does not bring the budgeted/coupled implementation into the current scope.
 
 ### 11.1 Active script map
 
@@ -857,7 +857,7 @@ The tests do this before comparing exact fixtures or old/new orchestration. Cont
 
 ### 11.8 Files outside the active IBG Exact migration
 
-`IBG/budgeted.py` and `IBG/header_b.py` belong to the budgeted/coupled path. They remain in the repository as reference material but are outside the current migration.
+`IBG/budgeted.py` and `IBG/header_b.py` belong to the budgeted/coupled path. They remain in the repository as reference material but are outside the current migration unless future work explicitly brings them in.
 
 Do not “clean up” these files, old experiment helpers, generated CSV files, pickle files, or unrelated algorithm variants as part of testbed work.
 

@@ -7,7 +7,7 @@
 - Keep the Ubuntu distribution, source checkout, Docker data, and cluster data in the E-hosted WSL ext4 filesystem. Do not place Docker's data root on a Windows-mounted `/mnt/*` filesystem.
 - Limit WSL2 to 10 GB RAM and 6 processors, with a 4 GB swap file on E.
 - Use kind with one control-plane node and two worker nodes. kind uses containerd internally.
-- Start with the decoupled IBG only. Preserve its mathematical and learning logic with minimal alterations.
+- Start this roadmap with the decoupled IBG path. Preserve its mathematical and learning logic with minimal alterations.
 - Supported target: three stages, five replicas per stage, and three logical flows per slot.
 - Represent stages with three StatefulSets: two Pods per stage for the Phase 5 bring-up gate, then five Pods per stage for the supported validation target. Use stable ordinal identities but no persistent storage.
 - Use tiny kernel-path HTTP services as CNF stand-ins. They expose health/processing behavior and observable latency/load.
@@ -34,7 +34,7 @@
 - Enforce exactly one replica per stage in `BR_EIBG`; the paper's binary choose/skip pseudocode is generalized to the formal one-of-M SFC action constraint.
 - Keep the existing belief-driven 30-sample utility grid, utility kernel, learning, embedding, equilibrium, and reporting logic around the corrected solver. “Exact” refers to the SPNE recursion over that sampled grid.
 - Break exact utility ties by lowest replica ID so repeated seeded runs remain deterministic.
-- Keep `BR_EIBG` as the project's exact small-instance policy. A scalable approximation would be a separate future project and is not part of this roadmap.
+- Keep `BR_EIBG` as the current roadmap's exact small-instance policy. A scalable approximation, coupled extension, or additional baseline suite requires separate future scope and is not part of this roadmap.
 - Derive one-based solver replica IDs from zero-based StatefulSet Pod ordinals and require the full expected Ready ordinal set before solving a stage.
 - Store the Phase 5 deterministic replica profiles in one ConfigMap mounted by both replicas and the controller.
 - Use the existing HTTP client with the in-cluster ServiceAccount token and CA for namespace-scoped Pod discovery; grant only Pod `get` and `list` permissions.
@@ -57,7 +57,7 @@
 
 - DPDK, VPP, SR-IOV, hugepages, NUMA tuning, real telecom CNFs, and line-rate claims.
 - Prometheus/Grafana until basic controller-provided telemetry works.
-- Budgeted/coupled IBG migration.
+- Budgeted/coupled IBG migration for this roadmap.
 - Large-scale testbed sizing and remote/dedicated Linux hardware.
 
 These omissions still allow validation of Kubernetes orchestration, sequential placement, asymmetric observations, congestion effects, belief learning, utility, SLA behavior, fairness, and control-loop runtime.

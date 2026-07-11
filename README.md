@@ -1,6 +1,6 @@
 # SFC-with-IBG
 
-Migration of the decoupled Indian Buffet Game simulation into a lightweight Kubernetes testbed. See [Tutorial.md](Tutorial.md) for the beginner-friendly usage guide, `ARCHITECTURE.md` for the target design, and `ROADMAP.md` for the gated implementation sequence.
+SFC-with-IBG testbed development. The current implemented path migrates the active decoupled Indian Buffet Game simulation into a lightweight Kubernetes testbed. See [Tutorial.md](Tutorial.md) for the beginner-friendly usage guide, `ARCHITECTURE.md` for the target design, and `ROADMAP.md` for the gated implementation sequence.
 
 ## Python environment
 
@@ -41,4 +41,4 @@ docker compose -f deploy/local/compose.yaml down --remove-orphans
 
 The smoke test sends three logical flows concurrently. Each flow visits its selected stage 1, 2, and 3 replicas sequentially and returns correlated per-hop telemetry.
 
-The files directly under `IBG/` remain the reference simulation. The budgeted/coupled path is outside the current migration scope.
+The files directly under `IBG/` remain the reference simulation. The budgeted/coupled path is outside the current migration scope unless a future task explicitly brings it in.

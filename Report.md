@@ -37,7 +37,7 @@ Despite these substitutions, the implementation remains faithful to the paper's 
 | Monitoring | Prometheus, Grafana, latency histograms, queue depth, node metrics, and a metrics adapter | Correlated JSON telemetry is returned directly from replicas through the flow generator and recorded in controller events | External monitoring stack omitted |
 | Kubernetes client and permissions | Official Kubernetes Python client with wider actions such as watching, annotating, or changing affinity | Direct HTTPS calls to the Kubernetes API with the mounted ServiceAccount token; narrow RBAC permits only Pod `get` and `list` | Smaller and safer discovery-only API surface |
 | Controller lifecycle | A Python controller service observing admission events | A one-shot Kubernetes Job for validation, or a bounded multi-slot Job for experiments | Lightweight batch execution instead of a permanent control service |
-| Algorithms exercised | Exact algorithms plus candidate pruning, limited lookahead, Monte Carlo rollouts, coupled cases, and several baselines | Exact decoupled `BR_EIBG` only; the coupled/budgeted path and approximation pipeline are outside scope | Paper algorithm portfolio is broader than this testbed |
+| Algorithms exercised | Exact algorithms plus candidate pruning, limited lookahead, Monte Carlo rollouts, coupled cases, and several baselines | Exact decoupled `BR_EIBG` only in the current implementation; the coupled/budgeted path and approximation pipeline are future scope | Paper algorithm portfolio is broader than this testbed |
 | Supported scale | The draft discusses large-scale behavior and approximation-based scaling | Formally validated target is three flows, three stages, and five replicas per stage; other positive dimensions are exploratory configurations | Intentionally small exact testbed |
 | Hardware acceleration claims | Relative DPDK/kernel behavior, optional 10 GbE hardware, and approximated line rate | No DPDK, VPP, SR-IOV, hugepages, hardware offload, or line-rate validation | Not implemented and must not be claimed |
 
@@ -208,7 +208,7 @@ The following statements are not supported by this implementation:
 
 The implementation makes a deliberate exchange: it gives up dataplane fidelity and large-system breadth in order to make the experiment reproducible on one modest machine and to protect the reference IBG mathematics.
 
-That exchange preserves the main testbed goal well. The repository can answer, with real Kubernetes components, “Does the controller discover replicas, choose one per stage, run selected chains, collect asymmetric observations, update beliefs, and reproduce the simulation's mathematical outcome?” The validated answer is yes for the supported small configuration.
+That exchange preserves the current testbed goal well. The repository can answer, with real Kubernetes components, “Does the controller discover replicas, choose one per stage, run selected chains, collect asymmetric observations, update beliefs, and reproduce the simulation's mathematical outcome?” The validated answer is yes for the supported small configuration.
 
 It cannot yet answer, “How does this perform as a real accelerated 6G dataplane?” That would require the hardware, CNF classes, packet generators, link emulation, and monitoring components described in the paper but intentionally omitted here.
 

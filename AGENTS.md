@@ -4,7 +4,7 @@ Read `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md` before pla
 
 ## Project goal
 
-Convert the existing decoupled Indian Buffet Game (IBG) Python simulation into a lightweight Kubernetes testbed while preserving its equilibrium, utility, belief-update, and reporting logic.
+Build the SFC-with-IBG testbed incrementally. The current implemented roadmap migrates the active decoupled Indian Buffet Game (IBG) Python simulation into a lightweight Kubernetes testbed while preserving its equilibrium, utility, belief-update, and reporting logic. Future coupled, budgeted, datapath, or baseline extensions require explicit scope before changing the current behavior.
 
 ## Guardrails
 
