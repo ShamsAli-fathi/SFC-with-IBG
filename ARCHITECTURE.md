@@ -97,10 +97,64 @@ The adapter boundary uses four baseline ports: replica discovery, traffic execut
 
 The current active `IBG/` path remains the behavioral reference for this roadmap until an explicitly approved Phase 1 mathematical or parameter revision replaces it. Every such revision requires deterministic characterization and affected parity checks before it becomes the new reference. Expansion then proceeds through the gated phases in `ROADMAP.md`; cluster-specific code must not be embedded into `IBG/claude.py` or the replica utility and belief functions.
 
+## Planned Phase 1 latency model
+
+The following model is approved but not yet implemented. Each replica has a hidden true performance state $\theta\in\{1,2,3,4\}$ ordered from state 1 (bad) to state 4 (good). Controlled validation assigns states deterministically; exploratory experiments may draw them from a seeded declared prior. The state is configuration known only to the experiment/runtime source, never an observation exposed to flows or the controller, and remains fixed for a controlled run. Kernel versus DPDK/VPP is known experimental context rather than a latent state.
+
+For final assigned load $n$, a selected replica produces processing latency
+
+$$
+Q_\theta(n)=\mu_\theta+h_\theta(n,\kappa_\theta)+\epsilon_\theta.
+$$
+
+$\mu_\theta$ is state-dependent baseline latency, $\kappa_\theta$ is effective capacity measured in concurrent-flow units, and $\epsilon_\theta$ is Gaussian state-dependent jitter truncated only as needed to keep total latency positive. The initial congestion function is
+
+$$
+h_\theta(n,\kappa_\theta)=a_\theta\max(0,n-1)+b_\theta\max(0,n-\kappa_\theta)^2.
+$$
+
+$a_\theta$ models ordinary sharing cost and $b_\theta$ creates a sharper post-capacity knee. Profiles must satisfy the intended ordering: bad states have no lower baseline/jitter/congestion penalty and no higher effective capacity than good states. FastAPI applies this delay so the hidden state causally affects actual service behavior.
+
+The continuous private observation is the selected hop's processing latency itself: $s=q$. The learning boundary computes $\ell_\theta=f(q\mid\theta,n,m)$ for every state, where $m$ is the known datapath mode, and passes the four likelihoods through the existing posterior/aggregation structure. A categorical signal may report $\arg\max_\theta\ell_\theta$, but it does not drive the update. Unselected replicas produce no raw latency observation. Assigned final load, actual admitted concurrency, modeled delay, measured server processing latency, client request latency, and link/transport latency remain separate correlated fields.
+
+The planned stage utility is linear in latency:
+
+$$
+u_k(q)=R_k-\alpha_k q-c_k,\qquad \alpha_k>0.
+$$
+
+Expected stage utility integrates this kernel under the belief-weighted, load-conditioned latency law. Because congestion is already part of $q$, the former additional $(1+\gamma n)$ factor is removed. The realized end-to-end utility is
+
+$$
+U_i=\sum_{k=1}^{K}U_{i,k}-\alpha_{\mathrm{link}}\sum_{k=1}^{K-1}L_{\mathrm{link},k}.
+$$
+
+Processing and link latency therefore use explicit compatible weights instead of subtracting unscaled milliseconds from an inverse benefit. Per-flow SLA violations compare observed end-to-end latency with a configured latency threshold rather than treating state IDs 1 or 2 as automatic violations.
+
+Variable replica-pair link costs depend on consecutive stage choices and therefore couple stages. The decoupled exact solver may optimize a link term only if it is constant or decomposes into independent per-stage terms. Otherwise Phase 1 records/deducts link latency in realized reporting while coupled placement remains deferred pending its separate scope.
+
+Deterministic unit tests inject latency samples, and replay validation feeds the same captured samples to simulation and Kubernetes controller paths for exact mathematical comparison. Live Kubernetes timing is subject to scheduler and network variation, so its gate is distributional: state ordering, congestion response, likelihood calibration, and selected-only observations must hold; live elapsed values are not required to match an in-process clock sample exactly.
+
+## Planned Phase 2 calibration contract
+
+Phase 1 implements the formulas with provisional test parameters; Phase 2 selects experimental values reproducibly. For each state, define the first negative expected-utility load
+
+$$
+n_\theta^*=\min\left\{n\ge1:\mathbb{E}\left[R_k-\alpha_kQ_\theta(n)-c_k\right]<0\right\}.
+$$
+
+Calibration declares a load horizon $N_{\mathrm{cal}}$ and target bands satisfying $n_1^*<n_2^*<n_3^*<n_4^*$. State 1 must cross zero early; state 4 must remain positive until a declared high-congestion range. The implied stage-latency zero-utility threshold is $(R_k-c_k)/\alpha_k$, which makes the relationship between latency curves and utility feasibility directly auditable.
+
+Latency parameters $(\mu_\theta,a_\theta,b_\theta,\kappa_\theta,\sigma_\theta)$ are calibrated from state semantics and measured service behavior before reward/cost parameters are selected. Utility parameters $(R_k,\alpha_k,c_k)$ express policy valuation, while $\alpha_{\mathrm{link}}$ and SLA threshold $\tau_i$ retain explicit compatible units. A reproducible grid or constrained search generates expected curves, seeded Monte Carlo bands, zero crossings, SLA probabilities, and sensitivity results; live cluster runs validate representative points rather than serving as undocumented trial-and-error.
+
+The calibration horizon may exceed three flows because utility kernels can be evaluated directly without invoking the exact game. This does not expand the supported equilibrium-validation size. The supported operating range must retain at least one non-negative replica option per stage unless an explicit admission-rejection extension is later approved.
+
+Negative utility currently indicates an unattractive or infeasible assignment but does not reject a flow: the exact decoupled policy enforces one replica per stage. Adding skip/reject changes the action/admission model and must not be smuggled in as a parameter choice. Phase 2 must record the chosen interpretation and defer rejection behavior unless separately authorized and tested.
+
 ## Planned Kernel and DPDK/VPP expansion boundary
 
 The current HTTP route is the named `kernel` baseline: the flow generator reaches only controller-selected FastAPI endpoints through ordinary Linux TCP/IP and Kubernetes networking. The planned comparison path is `dpdk-vpp`: a VPP user-space forwarding component using an approved DPDK I/O backend between selected route peers while preserving the same FastAPI `/process` endpoint, route identity, controller placement, and learning contract. VPP can operate with non-DPDK interfaces and can integrate with the Linux control plane, but neither is a separate comparison mode in this roadmap.
 
-Datapath selection belongs behind traffic and telemetry adapters. Every mode must retain slot, flow, stage, replica, endpoint, Pod, and node correlation, and must fail a slot rather than report a partial completion. FastAPI remains the only producer of the belief-compatible `legacy_signal` and `legacy_likelihood`; it produces exactly one observation for each selected hop. Kernel and DPDK/VPP counters, transport latency, or queue measurements are supplemental telemetry only, and unselected replicas must not be queried or treated as observations.
+Datapath selection belongs behind traffic and telemetry adapters. Every mode must retain slot, flow, stage, replica, endpoint, Pod, and node correlation, and must fail a slot rather than report a partial completion. After Phase 1, FastAPI remains the source of exactly one selected-hop processing-latency observation and its four-state likelihood vector. Kernel and DPDK/VPP counters, transport latency, or queue measurements remain separately identified, and unselected replicas must not be queried or treated as observations.
 
 The future `dpdk-vpp` mode is intentionally not implemented or claimed. It starts only after host preflight establishes safe NIC, IOMMU/VFIO, hugepage, CPU/NUMA, privilege, and Kubernetes device-resource handling. Coupled IBG is a separate future mathematical scope and must not be introduced through these datapath adapters.

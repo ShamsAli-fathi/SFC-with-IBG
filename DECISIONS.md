@@ -24,7 +24,7 @@
 - Apply observation likelihoods in the controller learning core; adapters collect observations but do not redefine local belief update or aggregation mathematics.
 - Implement the HTTP replica as a small FastAPI/Uvicorn service with environment-provided stable identity and experiment parameters.
 - Count active requests inside each replica service and report the admitted concurrency and measured server processing latency. Always release the counter on success or failure.
-- Generate `legacy_signal` and `legacy_likelihood` through the reference tasting model while leaving belief mutation exclusively in the controller.
+- The completed baseline generates `legacy_signal` and `legacy_likelihood` through the reference tasting model while leaving belief mutation exclusively in the controller. Phase 1 intentionally supersedes the raw legacy signal with selected processing latency and a load-aware likelihood vector.
 - Make the flow generator accept complete controller-selected routes rather than perform placement itself.
 - Start logical flows concurrently but await the three selected hops of each individual flow in stage order.
 - Validate returned slot/flow correlation and replica identity, then fail the slot request on downstream HTTP, payload, correlation, or identity errors; do not present partial telemetry as a completed slot.
@@ -39,7 +39,7 @@
 - Store the Phase 5 deterministic replica profiles in one ConfigMap mounted by both replicas and the controller.
 - Use the existing HTTP client with the in-cluster ServiceAccount token and CA for namespace-scoped Pod discovery; grant only Pod `get` and `list` permissions.
 - Keep simulation observations stage-local, but let Kubernetes defer physical traffic until all stage placements form complete routes; convert returned hop telemetry into the existing observation contract before applying unchanged learning logic.
-- Preserve final assigned replica load as the congestion input to the legacy observation model in both backends; keep actual HTTP admission concurrency as separate Kubernetes telemetry.
+- The completed baseline preserves final assigned replica load as the legacy congestion input. Phase 1 retains final assigned load as the known conditioning variable for latency generation/likelihood and keeps actual HTTP admission concurrency as separate Kubernetes telemetry.
 - Derive controlled observation samples from a deterministic replica seed plus slot, flow, and final congestion so observation generation does not disturb the solver's NumPy stream.
 - Validate the supported three-stage/five-replica/three-flow case over seeds 2050, 2051, and 2052, requiring mathematical parity while treating Kubernetes timing and infrastructure metadata as backend-specific.
 - Apply the one-shot controller Job only after StatefulSet and flow-generator rollouts complete; do not race validation traffic against endpoint replacement.
@@ -60,6 +60,19 @@
 - Defer DPDK/VPP activation until the explicit host preflight for NIC ownership, IOMMU/VFIO, hugepages, CPU/NUMA, privileges, and Kubernetes device resources passes.
 - Keep coupled IBG separate from the datapath expansion. Its solver, state, observation, utility, learning, baseline, and acceptance requirements await explicit user instructions.
 - Begin the expansion with a dedicated mathematical/parameter revision phase. Each user-directed change must state its intended formula or parameter behavior, be independently characterized with deterministic tests, and re-establish affected simulation/Kubernetes parity before becoming the new baseline for datapath work.
+- Use the causal order hidden state -> state/load-conditioned replica latency -> selected private signal -> likelihood/posterior -> next-slot belief. Never infer and overwrite the experiment's true state from the telemetry used to learn it.
+- Order states from 1 (bad) to 4 (good). Deterministic profiles are the validation ground truth; experiments may use seeded draws from a declared prior. A controlled state remains fixed for the run, and datapath mode is known context rather than a hidden state.
+- Make selected server processing latency the continuous signal and $q$ variable. Its law is $Q_\theta(n)=\mu_\theta+h_\theta(n,\kappa_\theta)+\epsilon_\theta$ and its belief likelihood is conditioned on state, final assigned load, and known datapath mode. Only selected replicas emit it.
+- Require state profiles to make bad replicas behave worse statistically through higher baseline latency/jitter, lower effective capacity, and steeper congestion response. Preserve assigned load, admitted concurrency, modeled delay, measured processing latency, client latency, and link/transport latency as separate correlated data.
+- Replace the inverse utility kernel with $u_k(q)=R_k-\alpha_kq-c_k$, $\alpha_k>0$. Congestion is part of $q$ and must not be penalized again through the former $(1+\gamma n)$ factor.
+- Interpret $q$ as latency, so utility is non-increasing in $q$; paper text describing utility as non-decreasing in latency must be corrected when the paper is next revised.
+- Define realized end-to-end utility as summed stage utility minus explicitly weighted inter-stage link latency, and define SLA violations by per-flow end-to-end latency thresholds rather than hidden state IDs.
+- Do not let replica-pair link latency silently invalidate stage independence. Constant or stage-separable link terms may enter the decoupled solver; pair-dependent link optimization belongs to the future coupled scope, though realized link latency is still deducted in reporting.
+- Use injected/seeded latency samples and signal replay for exact mathematical parity. Judge live Kubernetes latency by calibrated distributions, state ordering, congestion response, and asymmetric selected-only sampling rather than exact wall-clock equality.
+- Separate formula implementation from numerical calibration. Phase 1 uses provisional test profiles; Phase 2 declares a load horizon and reproducibly chooses latency, utility, link-weight, jitter, and SLA values.
+- Calibrate ordered zero crossings $n_1^*<n_2^*<n_3^*<n_4^*$ so bad states become negative early and perfect states remain positive until declared high congestion. Fit latency behavior before choosing reward/cost parameters, and preserve the accepted values, units, target bands, seeds, curves, and sensitivity evidence.
+- Prefer recorded grid/constrained search plus seeded Monte Carlo and live spot checks over undocumented manual trial-and-error. Direct utility sweeps beyond three flows are calibration evidence only and do not claim exact-solver scalability.
+- Do not interpret negative utility as automatic rejection under the current one-of-M action contract. Maintain a feasible replica per stage over the supported range; any skip or flow-admission rejection policy requires an explicit later decision and new solver/orchestration tests.
 
 ## Deliberately deferred
 
