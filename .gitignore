@@ -1,4 +1,5 @@
 /runs/
+/figures/
 .venv/
 __pycache__/
 .pytest_cache/

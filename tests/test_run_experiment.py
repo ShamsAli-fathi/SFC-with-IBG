@@ -55,6 +55,10 @@ def test_csv_flag_is_disabled_by_default_and_accepts_zero_or_one():
     assert parse_args(["--csv", "1"]).csv == 1
 
 
+def test_csv_output_defaults_to_the_ignored_project_figures_directory():
+    assert launcher.CSV_OUTPUT_DIR == launcher.ROOT / "figures"
+
+
 def test_export_legacy_csv_writes_all_reports(tmp_path):
     trace_path = tmp_path / "trace.jsonl"
     output_dir = tmp_path / "csv"

@@ -1,6 +1,6 @@
 # Project Status
 
-Updated: 2026-07-01
+Updated: 2026-07-11
 
 ## Completed
 
@@ -61,18 +61,19 @@ Updated: 2026-07-01
 - Restored the default three-flow/three-stage/five-replica topology through the same CLI, verified stale Stage 4 resources were removed, and reproduced equilibrium in 9 iterations with the validated final beliefs.
 - Added `Report.md`, a repository-evidence-based comparison of the paper draft's hybrid container testbed and the implemented lightweight HTTP/Kubernetes testbed.
 - Made `Report.md` opt-in-only: it must not be read or edited unless the user explicitly requests it in the current task.
-- Added optional `--csv 1` host-side export to `scripts/run_experiment.py`. A completed Kubernetes JSONL trace is converted into `time.csv`, `sla_violations.csv`, `aggregate_utility.csv`, `jain_index.csv`, and `replica_results.csv` under `/mnt/e/WSL/Ubuntu-24.04/CSV`; omitting the option retains JSONL-only behavior.
+- Added optional `--csv 1` host-side export to `scripts/run_experiment.py`. A completed Kubernetes JSONL trace is converted into `time.csv`, `sla_violations.csv`, `aggregate_utility.csv`, `jain_index.csv`, and `replica_results.csv` under the repository-local ignored `figures/` directory; omitting the option retains JSONL-only behavior.
 - Expanded the suite to 76 passing tests, including CSV option parsing, complete legacy report generation, initial/per-iteration belief snapshots, and appending a new experiment column to existing metric reports.
 - Recreated the disposable `ibg` kind cluster after its stopped node containers returned with an unusable API following a WSL interruption, then reloaded the existing local runtime image.
 - Verified `./scripts/run_experiment.py --csv 1 --flow 4 --stage 3 --replica 3 --max-iterations 100 --skip-build` live. All nine replica Pods and the flow generator became Ready, the controller Job reached equilibrium in 8 iterations, the JSONL trace completed, and all five requested CSV files were written successfully.
 - Created and maintained the repository handoff documents as implementation progressed.
+- Reset the active roadmap for the next expansion: begin with controlled user-directed mathematical and parameter revisions, then make the resulting validated FastAPI/Kubernetes route the explicit `kernel` mode, plan the later comparison path as DPDK/VPP, and leave coupled IBG awaiting a separate user-defined scope.
 
 ## Environment facts
 
 - Host: Windows 11 Enterprise, Intel i7-10750H (6 cores/12 threads), approximately 16 GB RAM.
 - Hardware virtualization is enabled.
 - Ubuntu 24.04 runs under WSL2 with `systemd` enabled. Its `ext4.vhdx` is stored at `E:\WSL\Ubuntu-24.04`.
-- The active checkout is `/home/shams/projects/SFC-with-IBG`; the previous `/mnt/e/WSL/Ubuntu-24.04/projects/SFC-with-IBG` checkout remains temporarily as a backup.
+- The active checkout for this workspace is `/home/vhakami/Desktop/projects/vesal/SFC-with-IBG`. Earlier WSL checkout paths recorded in prior handoffs are historical and must be re-verified before use.
 - Native Docker Engine is active under `systemd`, normal-user Docker access is configured, and its data root is `/var/lib/docker` inside the E-hosted ext4 filesystem.
 - `%UserProfile%\.wslconfig` is active: WSL reports approximately 10 GB RAM, 6 processors, and 4 GB swap.
 - The `ibg` kind cluster is running with one Ready control-plane node and two Ready workers. The `ibg-testbed` namespace currently has nine Ready replica Pods, one Ready flow-generator Pod, and a successfully completed four-flow/three-stage/three-replica experiment Job.
@@ -82,12 +83,12 @@ Updated: 2026-07-01
 
 ## Current state
 
-Phases 0-6 are complete for the current decoupled exact Kubernetes testbed roadmap. The supported exact testbed target is verified at three stages, five replicas per stage, and three flows over three controlled seeds. Mathematical outputs match the simulation backend exactly; only expected infrastructure timing and Kubernetes-specific metadata differ. The former scaling phase was removed because exact `BR_EIBG` is intentionally a small-instance algorithm. The post-roadmap experiment launcher exposes the full start-to-equilibrium progression, accepts runtime dimensions, and optionally exports the five legacy CSV reports without changing the solver or learning mathematics; non-default dimensions are operational configurations, not additional Phase 6 validation claims.
+The original decoupled exact Kubernetes migration is complete. Its supported three-stage, five-replica, three-flow target matches controlled simulation mathematics over three seeds; only expected infrastructure timing and Kubernetes-specific metadata differ. Phase 1 now permits controlled user-directed revisions to mathematical computations and parameters; each revision must establish its own deterministic evidence and affected parity before it becomes the new baseline. The resulting FastAPI/Kubernetes route will then be the frozen `kernel` baseline for the later DPDK/VPP comparison. DPDK/VPP must not change the approved solver, utility, learning, legacy observation, or asymmetric/partial-observation semantics, and requires host resource preflight before implementation. Coupled IBG is not scheduled and awaits an explicit mathematical and experimental specification.
 
 ## Next action
 
-Use `./scripts/run_experiment.py --flow 3 --stage 3 --replica 5` for the validated default or select other positive runtime dimensions for exploratory experiments. Add `--csv 1` to also write the five legacy reports under `/mnt/e/WSL/Ubuntu-24.04/CSV`. Retain selected JSONL traces outside Git when needed for analysis. No later phase is planned for this completed roadmap; any new capability, including coupled IBG, additional baselines, or Kernel/DPDK datapaths, requires explicit scope.
+Begin Phase 1 of the expansion roadmap: accept and validate explicit user-directed mathematical or parameter revisions one at a time. For each revision, record the intended change, add deterministic tests, and rerun the affected simulation/Kubernetes parity checks before moving to Phase 2's explicit `kernel` datapath mode. Do not add DPDK/VPP resources until Phase 3 documents the topology, DPDK backend, interfaces, lifecycle, correlation, failure contract, and host-resource preflight. Use `./scripts/run_experiment.py --flow 3 --stage 3 --replica 5` to retain the validated baseline; add `--csv 1` only when legacy CSV output is required.
 
 ## New-thread handoff prompt
 
-> We are continuing the completed decoupled exact IBG Kubernetes testbed roadmap in `/home/shams/projects/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Do not read or edit `Tutorial.md` or `Report.md` unless explicitly requested. Phases 0-6 are complete for the current roadmap. The supported three-stage, five-replica, three-flow case matches controlled simulation mathematics over three seeds. Future coupled IBG, additional baselines, or Kernel/DPDK datapath work requires explicit new scope.
+> We are continuing the Kernel-versus-DPDK/VPP expansion roadmap in `/home/vhakami/Desktop/projects/vesal/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Do not read or edit `Tutorial.md` unless explicitly requested; `Report.md` is opt-in only. The original decoupled exact FastAPI/Kubernetes testbed matches controlled simulation at three stages, five replicas per stage, and three flows over seeds 2050–2052. Start with Phase 1: controlled user-directed mathematical or parameter revisions, each with explicit intent, deterministic fixtures, and affected parity checks. Phase 2 makes the resulting FastAPI route the explicit `kernel` baseline; the later comparison path is DPDK/VPP and requires a documented topology plus DPDK host-resource preflight. Coupled IBG awaits a separate user-defined scope.

@@ -20,7 +20,7 @@ from testbed.profiles import expand_profiles, load_profiles
 IMAGE = "ibg-testbed:phase6"
 NAMESPACE = "ibg-testbed"
 JOB_NAME = "ibg-experiment"
-CSV_OUTPUT_DIR = Path("/mnt/e/WSL/Ubuntu-24.04/CSV")
+CSV_OUTPUT_DIR = ROOT / "figures"
 CSV_METRICS = {
     "time.csv": "elapsed_seconds",
     "sla_violations.csv": "sla_violations",

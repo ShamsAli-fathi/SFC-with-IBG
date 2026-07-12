@@ -1,98 +1,107 @@
-# IBG Testbed Roadmap
+# IBG Testbed Expansion Roadmap
 
-Work proceeds in order. A phase starts only after the previous phase's checks pass and `STATUS.md` records the result.
+Work proceeds in order. A phase starts only after the previous phase's checks pass and `STATUS.md` records the result. This roadmap replaces the completed lightweight-migration roadmap as the active plan; it does not invalidate its Phase 6 simulation/Kubernetes parity evidence.
 
-## Codex reasoning guidance
+## Scope and terminology
 
-The suggested reasoning effort is a starting point for GPT-5.3-Codex or another Codex model that supports `low`, `medium`, `high`, and `xhigh`. Raise it one level when a phase exposes unexplained test failures, mathematical discrepancies, concurrency bugs, or unsafe infrastructure changes. Use the closest supported level if the selected model offers a different set.
+The frozen baseline is the decoupled exact IBG testbed: the Python solver, utility grid, learning rule, equilibrium rule, FastAPI replica contract, flow-generator contract, and the supported three-flow/three-stage/five-replica validation remain the behavioral reference.
 
-## Phase 0: Python environment
+`Kernel` means the ordinary Linux socket/TCP/IP path already used by the HTTP workloads. The later comparison target is `dpdk-vpp`: VPP running in Linux user space with its approved DPDK I/O backend. VPP can also integrate with the Linux control plane or use non-DPDK interfaces, but that is not a third comparison arm in this roadmap. The immediate work is to make the Kernel baseline explicit; DPDK/VPP is a later target, not an implemented capability or a current validation claim.
 
-Status: complete.
+In every mode, FastAPI remains responsible for `/health`, `/process`, replica identity, the legacy observation signal and likelihood, and application-level latency/concurrency telemetry. A datapath may forward traffic and contribute transport telemetry, but it must not generate observations, update beliefs, alter final-load legacy congestion, or cause unselected replicas to emit samples. This preserves the paper's asymmetric and partial-observation requirement.
 
-Suggested Codex reasoning: `low` — routine environment setup, dependency installation, and direct verification.
-
-- Create a repository-local Python 3.12 virtual environment at `.venv`.
-- Install the reference simulation and test dependencies from `requirements.txt`.
-- Verify imports for NumPy, pandas, SciPy, Matplotlib, scikit-learn, and pytest.
-- Compile the Python sources without running the 48-experiment `IBG/main.py` entry point.
-
-Gate: the clean virtual environment installs successfully, required imports work, and all existing Python sources compile.
-
-## Phase 1: Protect the mathematics
+## Completed foundation
 
 Status: complete.
 
-Suggested Codex reasoning: `high` — preserving stochastic mathematical behavior requires careful fixture design and equivalence analysis.
+- The decoupled exact `BR_EIBG` solver and its mathematical characterization are protected by tests.
+- Simulation and lightweight Kubernetes/HTTP runs match for the supported configuration over seeds 2050, 2051, and 2052.
+- The controller selects already-running Ready Pod endpoints; FastAPI replicas and the flow generator exercise only the selected complete routes.
+- Legacy observations are kept separate from measured HTTP latency and actual admission concurrency.
 
-- Add deterministic characterization tests with fixed Python and NumPy seeds.
-- Cover utility calculation, per-stage selection, embedding, belief updates, equilibrium, aggregate utility, SLA, and Jain fairness.
-- Extract one configurable experiment slot from the monolithic runner without changing solver, utility, belief, or equilibrium behavior.
-- Replace the provisional myopic policy with memoized `BR_EIBG` continuation play that enforces one replica per stage.
+Gate: retained as the regression baseline for every expansion phase.
 
-Gate: fixed fixtures reproduce the reference results around orchestration extraction, a non-myopic fixture proves continuation reasoning, and a three-flow/five-replica/three-stage exact run completes successfully.
-
-## Phase 2: Introduce adapter boundaries
+## Phase 0: Freeze the expansion contract
 
 Status: complete.
 
-Suggested Codex reasoning: `high` — interface boundaries must preserve reference behavior while separating simulation and infrastructure concerns.
+Suggested Codex reasoning: `high` — new datapath components must not silently change the IBG experiment or its asymmetric-observation semantics.
 
-- Define interfaces for replica discovery, traffic execution, observation collection, and result storage.
-- Implement simulation-backed adapters first using the reference functions.
-- Keep the legacy observation signal separate from measured latency telemetry.
+- Record FastAPI/Kubernetes as the known-good Kernel baseline and preserve its controlled parity fixtures and JSONL event schema.
+- Define `kernel`, `vpp`, and future `dpdk` as explicit datapath modes behind traffic/telemetry adapters; do not add datapath branches to `IBG/claude.py`, replica utility functions, or learning code.
+- Require each selected hop to retain slot, flow, stage, replica, endpoint, Pod, and node correlation. Observations remain exactly one legacy sample per selected hop; transport counters and latency are supplemental telemetry.
+- Keep the current report factual: DPDK/VPP must remain labelled planned until its corresponding gate is verified.
 
-Gate: the adapter-driven simulation matches the Phase 1 reference fixtures for the same seeds and inputs.
+Gate: architecture, decision, status, and roadmap handoffs describe the frozen mathematical baseline, the Kernel-versus-DPDK/VPP comparison, and coupled IBG as separate scopes.
 
-## Phase 3: Build the HTTP replica
+## Phase 1: Controlled mathematical and parameter revisions
 
-Status: complete.
+Status: planned.
 
-Suggested Codex reasoning: `medium` — the service is bounded, with clear endpoint contracts and focused local tests.
+Suggested Codex reasoning: `xhigh` — changes to the IBG mathematics, stochastic assumptions, utility/observation parameters, or equilibrium behavior can invalidate the established behavioral baseline.
 
-- Implement lightweight `/health` and `/process` endpoints.
-- Expose stable stage/replica identity, flow and slot IDs, concurrent load, processing latency, and a belief-compatible observation.
-- Configure hidden state and capacity as deterministic experiment parameters.
+- Accept mathematical or parameter changes only from explicit user instructions supplied during this phase. Record the intended formula, parameter domain/default, affected paths, and expected behavioral consequence before implementation.
+- Keep each change small and independently reviewable. Do not combine an unverified mathematical revision with Kernel, DPDK/VPP, coupled-IBG, or unrelated infrastructure work.
+- Add or update deterministic characterization fixtures for every intentional behavior change, including seeded stochastic effects where applicable. Preserve prior fixtures when they remain valid; deliberately update expected values only when the approved mathematical change requires it.
+- Revalidate solver decisions, placement, observation/learning behavior, utility, SLA, fairness, equilibrium, reporting, and simulation/Kubernetes parity to the extent affected by each change.
+- Update `ARCHITECTURE.md`, `DECISIONS.md`, `STATUS.md`, and the validation evidence whenever a revision changes a stable contract, accepted formula, default parameter, or supported comparison claim.
 
-Gate: local tests verify identity, concurrency accounting, latency telemetry, observation format, and failure behavior.
+Gate: every approved revision has an explicit record, focused deterministic tests, documented expected behavior, and passing affected parity/regression checks. The resulting decoupled FastAPI/Kubernetes behavior becomes the new frozen Kernel baseline for later datapath comparison.
 
-## Phase 4: Build the flow generator
+## Phase 2: Establish an explicit Kernel datapath baseline
 
-Status: complete.
+Status: planned.
 
-Suggested Codex reasoning: `high` — concurrent multi-hop execution, correlation, cleanup, and partial failures create subtle state and timing risks.
+Suggested Codex reasoning: `high` — the existing HTTP path is functionally valid, but it needs a stable mode contract and evidence suitable for a later comparison.
 
-- Accept complete three-stage routes from the controller.
-- Admit placements sequentially, then run logical flows concurrently.
-- Execute each flow through its selected stage endpoints and return per-hop telemetry only for selected replicas.
+- Expose the existing Kubernetes HTTP route as the named `kernel` datapath mode without changing route selection, FastAPI request semantics, or solver inputs.
+- Add mode-aware traffic/telemetry adapter contracts and trace metadata so each completed slot records the active datapath and its mode-specific transport measurements.
+- Verify that all traffic remains limited to controller-selected routes and that no mode-specific metric is converted into a legacy observation.
+- Capture reproducible Kernel baseline runs at the supported configuration, including host, image, Kubernetes, and mode configuration needed for later comparison.
 
-Gate: a local container-network test completes concurrent three-hop flows and returns complete, correctly correlated telemetry.
+Gate: Kernel-mode runs reproduce simulation placements, legacy observations, beliefs, utilities, SLA, fairness, and equilibrium within the existing Phase 6 tolerance, while producing complete correlated Kernel telemetry.
 
-## Phase 5: Connect Kubernetes
+## Phase 3: Design and prove the DPDK/VPP integration boundary
 
-Status: complete.
+Status: planned.
 
-Suggested Codex reasoning: `high` — StatefulSet identity, discovery, RBAC, readiness, and controller integration require coordinated infrastructure changes.
+Suggested Codex reasoning: `xhigh` — DPDK resource ownership plus VPP topology, interfaces, lifecycle, routing, and failure handling must be specified before changing runtime workloads.
 
-- Deploy three headless Services and three StatefulSets with stable replica ordinals.
-- Add deterministic replica profiles, the flow-generator Deployment, the controller Job, and narrow discovery RBAC.
-- Map Pod readiness and ordinal identity to solver-side `(stage, replica)` records without changing the solver.
+- Audit and reserve the required DPDK resources on the target host: NIC ownership, IOMMU/VFIO, hugepages, CPU/NUMA placement, container privileges, and Kubernetes device resources. Define a safe rollback procedure.
+- Select and document the DPDK/VPP topology, its DPDK I/O backend, and the Linux-facing interfaces for this host (for example, VPP forwarding between the flow generator and selected FastAPI replicas). Keep Kubernetes Service discovery and FastAPI application endpoints intact.
+- Define lifecycle, readiness, configuration, cleanup, and failure behavior for DPDK/VPP components and their Kubernetes resources. `kernel` mode must remain independently runnable.
+- Specify how DPDK/VPP counters and per-hop transport timing are correlated to the existing slot/flow/stage/replica route identity without expanding the observation set. Add focused control-boundary tests before requiring a cluster deployment.
 
-Gate: a small cluster case with three stages, two replicas per stage, and three flows completes one controller slot successfully.
+Gate: the host preflight and documented DPDK/VPP design demonstrate safe resource ownership and can forward only a selected, correlated route to its FastAPI endpoint, report a clear readiness/failure state, and leave the legacy observation contract unchanged.
 
-## Phase 6: Validate behavior
+## Phase 4: Implement the DPDK/VPP-backed FastAPI route
 
-Status: complete.
+Status: planned.
 
-Suggested Codex reasoning: `xhigh` — cross-backend validation must explain discrepancies and distinguish mathematical, stochastic, telemetry, and Kubernetes effects.
+Suggested Codex reasoning: `xhigh` — this joins privileged DPDK resources, Kubernetes networking, VPP lifecycle, selected-route enforcement, and controller telemetry without authorization to alter IBG behavior.
 
-- Compare simulation-backed and Kubernetes-backed runs using controlled seeds and replica profiles.
-- Use exact `BR_EIBG` in both backends.
-- Verify placement, asymmetric observations, belief evolution, utility, SLA, fairness, timing, and result metadata.
-- Repeat the supported case with three stages, five replicas per stage, and three flows, then quantify any discrepancies from the reference behavior.
+- Add deployable DPDK/VPP resources and a `dpdk-vpp` traffic/telemetry adapter behind the existing complete-slot traffic port.
+- Route each selected logical hop through the configured DPDK/VPP path and then to the same FastAPI `/process` contract. Do not replace FastAPI replicas with synthetic datapath observations.
+- Preserve concurrent flows, sequential hops within a flow, route/identity validation, cleanup, and explicit failure rather than partial-success reporting.
+- Emit DPDK/VPP-specific metadata only as supplemental telemetry, clearly separating it from FastAPI latency/concurrency and legacy observation fields.
 
-Gate: repeated supported-size runs produce complete, comparable results, and discrepancies from the Python reference behavior are measured and documented.
+Gate: a local and a small-cluster DPDK/VPP-mode run complete selected multi-hop routes, reject a DPDK/VPP or downstream failure cleanly, and retain complete per-hop correlation with no observations from idle replicas.
 
-## Post-roadmap operation
+## Phase 5: Validate Kernel and DPDK/VPP modes against the IBG baseline
 
-The completed testbed has a one-command observable experiment runner. It starts or reuses the kind environment, accepts runtime flow/stage/per-stage-replica dimensions, generates the corresponding Kubernetes stage resources and deterministic profiles, runs successive slots over one evolving belief state until the existing equilibrium condition is met, prints concise iteration progress and final replica state, and retains a detailed JSONL trace. Optional host-side legacy CSV export is available with `--csv 1`. The default remains the supported three-flow/three-stage/five-replica configuration. Runtime configurability and CSV export are operating capabilities, not additional migration or scaling phases.
+Status: planned.
+
+Suggested Codex reasoning: `xhigh` — comparison must separate mathematical equivalence from genuine datapath timing and counter differences.
+
+- Run controlled seeds at the supported three-flow/three-stage/five-replica configuration for simulation, `kernel`, and `dpdk-vpp` modes.
+- Require parity for placements, utility grids, legacy signals/likelihoods, beliefs, utility, SLA, fairness, and equilibrium. Runtime and datapath telemetry may differ and must be reported rather than normalized away.
+- Verify asymmetric/partial observation behavior directly: only selected replicas provide legacy observations in every mode.
+- Publish a reproducible comparison command and a bounded evidence report; make no line-rate, hardware-offload, or DPDK claim from these results.
+
+Gate: Kernel and DPDK/VPP modes are mathematically equivalent to the controlled simulation for the supported seeds, with explained and complete mode-specific telemetry and only the measured comparison claims supported by the hardware configuration.
+
+## Future coupled-IBG track
+
+Status: awaiting user requirements; not scheduled.
+
+Coupled IBG is a separate mathematical and experimental scope. It must begin with an explicit problem definition, state/action and utility changes, observation and learning semantics, baselines, and acceptance fixtures. It must not be introduced as a datapath-mode option or silently alter the validated decoupled solver.
