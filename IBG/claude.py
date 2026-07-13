@@ -3,6 +3,8 @@ from functools import lru_cache
 import numpy as np
 import pandas as pd
 
+from latency_model import sample_belief_latency_ms
+
 
 class BREIBGPolicy:
     """Exact per-stage BR_EIBG policy for one-of-M replica selection.
@@ -113,32 +115,14 @@ class BREIBGPolicy:
             return default
 
 
-def _sample_replica_quality(replica, sample_count=30):
-    belief = np.asarray(replica.belief, dtype=float)
-    belief_total = belief.sum()
-    if belief.shape != (4,) or belief_total <= 0 or (belief < 0).any():
-        raise ValueError(
-            "replica belief must contain four non-negative, positive-total values"
-        )
-    probabilities = belief / belief_total
-
-    def draw():
-        return np.random.choice(
-            [
-                np.random.normal(3, np.sqrt(0.5)),
-                np.random.normal(6, np.sqrt(1)),
-                np.random.normal(10, np.sqrt(2)),
-                np.random.normal(15, np.sqrt(4)),
-            ],
-            p=[
-                probabilities[3],
-                probabilities[2],
-                probabilities[1],
-                probabilities[0],
-            ],
-        )
-
-    return np.asarray([draw() for _ in range(sample_count)])
+def _sample_replica_latency(replica, load, sample_count=30):
+    return np.asarray(
+        [
+            sample_belief_latency_ms(replica.belief, load)
+            for _ in range(sample_count)
+        ],
+        dtype=float,
+    )
 
 
 def br_eibg_exact(
@@ -178,9 +162,11 @@ def br_eibg_exact(
     utility_grid_values = np.zeros((len(replicas_in_stage), len(flow_list)))
 
     for row, replica in enumerate(replicas_in_stage):
-        quality_samples = _sample_replica_quality(replica)
         utility_grid_values[row, :] = [
-            replica.eval_util(load, quality_samples)
+            replica.eval_util(
+                load,
+                _sample_replica_latency(replica, load),
+            )
             for load in loads
         ]
 

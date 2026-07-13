@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from header import Replica, update
+from header import Replica
 from learning import apply_observations
 from ports import AdapterBundle, Observation
 from result_sinks import CsvResultSink
@@ -86,13 +86,12 @@ def test_explicit_simulation_adapters_match_default_runner():
         )
 
 
-def test_collected_observations_reproduce_legacy_update():
+def test_collected_latency_observations_drive_belief_update():
     assignments = {1: 1, 2: 1, 3: 2}
-    legacy_replicas = make_replicas()
-    adapted_replicas = copy.deepcopy(legacy_replicas)
-
-    np.random.seed(99)
-    update(assignments, 2, 1, legacy_replicas, 0.8)
+    adapted_replicas = make_replicas()
+    beliefs_before = {
+        key: replica.belief.copy() for key, replica in adapted_replicas.items()
+    }
 
     np.random.seed(99)
     observations = SimulationObservationCollector().collect(
@@ -103,12 +102,13 @@ def test_collected_observations_reproduce_legacy_update():
     apply_observations(observations, adapted_replicas)
 
     assert [observation.flow_id for observation in observations] == [1, 2, 3]
-    assert all(observation.measured_latency_ms is None for observation in observations)
-    for key in adapted_replicas:
-        np.testing.assert_allclose(
-            adapted_replicas[key].belief,
-            legacy_replicas[key].belief,
-        )
+    assert all(
+        observation.measured_latency_ms == observation.signal
+        for observation in observations
+    )
+    assert adapted_replicas[(1, 1)].belief != beliefs_before[(1, 1)]
+    assert adapted_replicas[(1, 2)].belief != beliefs_before[(1, 2)]
+    assert adapted_replicas[(2, 1)].belief == beliefs_before[(2, 1)]
 
 
 def test_discovery_is_stage_scoped_and_preserves_stable_ids():
@@ -117,19 +117,21 @@ def test_discovery_is_stage_scoped_and_preserves_stable_ids():
     assert list(discovered) == [(2, 1), (2, 2)]
 
 
-def test_observation_keeps_legacy_signal_separate_from_latency():
+def test_observation_correlates_latency_and_estimated_state():
     observation = Observation(
         stage=1,
         flow_id=7,
         replica_id=2,
         congestion=3,
-        signal=4,
+        signal=12.5,
         likelihood=(0.1, 0.2, 0.3, 0.4),
         measured_latency_ms=12.5,
+        estimated_state=4,
     )
 
-    assert observation.signal == 4
+    assert observation.signal == 12.5
     assert observation.measured_latency_ms == 12.5
+    assert observation.estimated_state == 4
 
 
 def test_runner_fails_clearly_when_discovery_returns_no_replicas():
@@ -188,7 +190,7 @@ def test_csv_result_sink_uses_reference_report_layout(tmp_path):
         ({"stage": 0}, "stage"),
         ({"replica_id": 0}, "replica_id"),
         ({"congestion": 0}, "congestion"),
-        ({"likelihood": (0.5, 0.5)}, "four legacy IBG states"),
+        ({"likelihood": (0.5, 0.5)}, "four IBG states"),
     ],
 )
 def test_observation_rejects_invalid_contract_values(changes, message):

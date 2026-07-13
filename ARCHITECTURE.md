@@ -6,7 +6,7 @@
 
 ## IBG Exact solver contract
 
-For each decoupled stage, the solver first builds the existing belief-driven utility grid using 30 Monte Carlo quality samples per replica and one utility value for every possible load from 1 through the number of flows. `BR_EIBG` then solves the sequential one-replica-per-stage game exactly with respect to that sampled grid.
+For each decoupled stage, the solver builds a belief-driven utility grid using 30 Monte Carlo processing-latency samples per replica and load. Each sample draws a possible hidden state from the current belief and then draws from that state's load-conditioned positive latency law. `BR_EIBG` solves the sequential one-replica-per-stage game exactly with respect to the resulting sampled grid.
 
 Each subgame is identified by the next player and the full vector of loads already assigned to the stage's replica slots. The solver branches over every active replica, recursively solves the continuation game, evaluates the current player's choice at its predicted final load, and selects the best continuation-consistent action. Subgames are memoized by load vector, and exact ties select the lowest replica ID for deterministic behavior. The former `backward_d_memoized_simple` name remains only as a compatibility wrapper around `br_eibg_exact`.
 
@@ -43,19 +43,19 @@ Development tools, source code, Docker Engine, and cluster state live inside the
 6. Only selected replicas return per-request signals such as latency and concurrent load.
 7. The controller updates replica beliefs using the existing learning rule and records utility, SLA, fairness, timing, placement, and belief results.
 
-The HTTP Pods are test doubles, not real AMF/SMF/UPF functions. Their `/health` and `/process` behavior supplies real Kubernetes networking and configurable congestion without specialized dataplane hardware. Measured request latency and concurrency are recorded as testbed telemetry. The legacy belief-compatible observation remains a separate signal until a validated calibration allows measured latency to replace it without silently changing the IBG mathematics.
+The HTTP Pods are test doubles, not real AMF/SMF/UPF functions. Their `/health` and `/process` behavior supplies real Kubernetes networking and state/load-conditioned processing latency without specialized dataplane hardware. Selected server processing latency is the continuous private signal used for belief likelihoods. Client request latency, modeled delay, actual admission concurrency, assigned load, and transport overhead remain separately correlated telemetry.
 
 ## HTTP replica contract
 
-The Phase 3 replica service is a small FastAPI/Uvicorn application. `GET /health` reports readiness, stable stage/replica identity, Pod name, and current concurrency. `POST /process` accepts positive `slot_id` and `flow_id` values and returns the same identity plus admitted concurrency, measured processing latency, `legacy_signal`, and the four-state `legacy_likelihood` vector.
+The FastAPI/Uvicorn replica exposes `GET /health` for readiness, stable identity, and current concurrency. `POST /process` accepts positive slot/flow IDs and final `assigned_load`, samples state-conditioned modeled processing delay, performs the work, and returns modeled/measured processing latency, admitted concurrency, a categorical state estimate, and the four-state load-aware likelihood vector. Transitional `legacy_*` aliases remain in the wire response for trace compatibility but do not define the active belief model.
 
-Replica identity, hidden state, capacity, base delay, and congestion delay are deterministic environment configuration. The service increments a shared request counter before simulated work, applies an additional delay for overlapping requests, and decrements the counter in a `finally` block. Its default observation source delegates to the reference `Replica.tasting()` model; it does not update beliefs locally.
+Replica identity, hidden state, capacity, baseline delay, congestion parameters, and jitter seed are deterministic environment configuration. The service increments a shared request counter before modeled work, applies the sampled state/load-conditioned delay, and decrements the counter in a `finally` block. It computes likelihoods from the selected hop's processing-latency observation but never updates beliefs locally.
 
 ## Flow-generator contract
 
 The Phase 4 flow generator is a separate FastAPI service. `POST /run-slot` accepts a slot ID and a nonempty set of complete routes supplied by the controller. Every route contains the configured contiguous stages in order, with an explicit replica identity and HTTP endpoint for each hop.
 
-The generator starts all logical flows concurrently, while each flow awaits its own hops sequentially. A route may contain any positive number of contiguous stages starting at stage 1, and every route in a slot must use the same stage sequence. It calls only the selected replica endpoints, validates that each response matches the requested slot, flow, stage, and replica, and returns correlated per-hop telemetry containing slot, flow, stage, replica, Pod, endpoint, admitted concurrency, server and client latency, and the unchanged legacy observation fields. A downstream failure, identity mismatch, or correlation mismatch fails the slot request explicitly rather than returning partial results as if the slot had completed.
+The generator starts all logical flows concurrently, while each flow awaits its own hops sequentially. A route may contain any positive number of contiguous stages starting at stage 1, and every route in a slot must use the same stage sequence. It calls only selected endpoints, supplies each selected replica's final assigned load, validates response correlation/identity/load, and returns modeled processing latency, measured processing latency, request latency, concurrency, state estimate, and likelihood. A downstream failure or mismatch fails the slot rather than presenting partial telemetry as complete.
 
 For local validation, the replica and flow-generator processes share one non-root container image and run on a private Docker Compose network. This exercises real service-to-service HTTP without introducing Kubernetes concerns before Phase 5.
 
@@ -67,13 +67,13 @@ The controller uses its mounted ServiceAccount token and CA with the existing HT
 
 Simulation keeps its existing stage-by-stage observation path. For Kubernetes, the runner's optional slot-traffic port defers physical execution until all configured stages have been placed. The flow generator then runs all complete routes, and its correlated hop telemetry is converted into the existing `Observation` contract before the unchanged learning and equilibrium logic runs.
 
-The flow generator calculates each selected replica's final assignment load from the complete routes and sends it separately as `legacy_congestion`. Replica services use that final load for the preserved belief observation while continuing to report actual admitted concurrency as runtime telemetry. Request-stable observation samples are derived from the configured replica seed plus slot, flow, and final congestion; they do not consume the controller's NumPy stream.
+The flow generator calculates each selected replica's final assignment load from complete routes and sends it as `assigned_load`. Replica services condition their delay and likelihood on that load while reporting actual admitted concurrency separately. Seeded model samples are derived from replica seed plus slot, flow, and assigned load; they do not consume the controller's NumPy stream.
 
 ## Validation contract
 
 Phase 6 compares three controlled seeds at three stages, five replicas per stage, and three flows. `scripts/phase6_compare.py` reruns the simulation backend with the same profiles, solver seed, flow order, final-load observation semantics, and request observation seeds, then compares it with controller Job logs.
 
-Placements, sampled utility grids, legacy observations, beliefs, aggregate/per-flow utility, SLA, Jain fairness, and equilibrium must match within numerical tolerance. Kubernetes-only Pod, node, endpoint, admitted concurrency, and measured latency metadata must be complete. Runtime is measured but is not required to match because the Kubernetes result includes API, DNS, HTTP, and telemetry overhead.
+Placements, sampled utility grids, processing-latency observations and likelihoods, beliefs, aggregate/per-flow and realized utility, SLA, Jain fairness, and equilibrium must match within numerical tolerance. Kubernetes-only Pod, node, endpoint, admitted concurrency, and measured latency metadata must be complete. Runtime is measured but is not required to match because the Kubernetes result includes API, DNS, HTTP, and telemetry overhead.
 
 The base Kustomization deploys long-running resources only. The controller Job is applied after all StatefulSet and Deployment rollouts complete so discovery and traffic cannot race with endpoint replacement.
 
@@ -93,13 +93,13 @@ When `--csv 1` is selected, the launcher converts the completed host-side JSONL 
 
 Keep the solver and belief mathematics as pure Python. Add replaceable adapters for replica discovery, placement publication, HTTP traffic/telemetry, and result storage. This keeps the simulation logic testable without a cluster and lets testbed integration be verified separately.
 
-The adapter boundary uses four baseline ports: replica discovery, traffic execution, observation collection, and result storage. An optional complete-slot traffic port supports Kubernetes routes. Simulation implementations delegate to the reference embedding and tasting behavior. The learning core applies collected likelihoods through the existing local-update and aggregation methods. Each observation carries the legacy signal separately from optional measured latency so HTTP telemetry cannot silently alter belief mathematics.
+The adapter boundary uses discovery, traffic execution, observation collection, link/transport-latency collection, and result storage ports. An optional complete-slot traffic port supports Kubernetes routes. Simulation and Kubernetes observations both carry positive processing latency, assigned load, an optional categorical state estimate, and four load-aware likelihoods. The learning core applies those likelihoods through the existing posterior/aggregation functions. Kubernetes transport overhead is collected as non-negative request-minus-processing latency and is not claimed to be a direct consecutive-Pod link measurement.
 
-The current active `IBG/` path remains the behavioral reference for this roadmap until an explicitly approved Phase 1 mathematical or parameter revision replaces it. Every such revision requires deterministic characterization and affected parity checks before it becomes the new reference. Expansion then proceeds through the gated phases in `ROADMAP.md`; cluster-specific code must not be embedded into `IBG/claude.py` or the replica utility and belief functions.
+The Phase 1 `IBG/` path is now the behavioral reference: latency is the sampled/observed $q$, utility is linear in latency, and state-based SLA is retired from active orchestration. The old tasting functions and `legacy_*` wire aliases remain only for budgeted/reference compatibility. Expansion proceeds through the gated phases in `ROADMAP.md`; cluster-specific code must not be embedded into the solver or replica mathematics.
 
-## Planned Phase 1 latency model
+## Implemented Phase 1 latency model
 
-The following model is approved but not yet implemented. Each replica has a hidden true performance state $\theta\in\{1,2,3,4\}$ ordered from state 1 (bad) to state 4 (good). Controlled validation assigns states deterministically; exploratory experiments may draw them from a seeded declared prior. The state is configuration known only to the experiment/runtime source, never an observation exposed to flows or the controller, and remains fixed for a controlled run. Kernel versus DPDK/VPP is known experimental context rather than a latent state.
+Each replica has a hidden true performance state $\theta\in\{1,2,3,4\}$ ordered from state 1 (bad) to state 4 (good). Controlled validation assigns states deterministically; exploratory simulation may draw them from a seeded declared prior. The state is configuration known only to the experiment/runtime source, never an observation exposed to flows or the controller, and remains fixed for a controlled run. Kernel versus DPDK/VPP is known experimental context rather than a latent state.
 
 For final assigned load $n$, a selected replica produces processing latency
 

@@ -1,4 +1,3 @@
-import copy
 import os
 import random
 import subprocess
@@ -6,18 +5,8 @@ import sys
 
 import numpy as np
 
-from claude import br_eibg_exact
-from header import (
-    Replica,
-    aggregate_utility_per_flow,
-    aggregate_utility_total,
-    embedding,
-    is_equilibrium,
-    jain_index,
-    update,
-)
+from header import Replica
 from main import DEFAULT_EXPERIMENT_RUNS
-from report import SLA_v
 from runner import run_decoupled_slot
 
 
@@ -46,94 +35,38 @@ def make_replicas():
     return replicas
 
 
-def run_legacy_slot(flow_list, replica_list):
-    embed_dict = {f"f_{flow}": [] for flow in flow_list}
-    aggregate_total = 0
-    aggregate_per_flow = {flow: [] for flow in flow_list}
-    assignments_by_stage = {}
-    utility_grids = {}
-    previous_beliefs = [
-        copy.deepcopy(replica.belief) for replica in replica_list.values()
-    ]
-
-    for stage in range(1, 4):
-        random.shuffle(flow_list)
-        policy, utility_grid = br_eibg_exact(
-            flow_list,
-            replica_list,
-            0.8,
-            stage,
-            2,
-        )
-        embed_dict, last_embed = embedding(
-            policy,
-            2,
-            embed_dict,
-            flow_list,
-        )
-        assignments_by_stage[stage] = last_embed
-        utility_grids[stage] = utility_grid
-        aggregate_total = aggregate_utility_total(
-            utility_grid,
-            last_embed,
-            aggregate_total,
-        )
-        aggregate_per_flow = aggregate_utility_per_flow(
-            last_embed,
-            utility_grid,
-            aggregate_per_flow,
-        )
-        update(last_embed, 2, stage, replica_list, 0.8)
-
-    return {
-        "embed_dict": embed_dict,
-        "assignments_by_stage": assignments_by_stage,
-        "utility_grids": utility_grids,
-        "aggregate_total": aggregate_total,
-        "aggregate_per_flow": aggregate_per_flow,
-        "sla": SLA_v(embed_dict, replica_list),
-        "jain": jain_index(aggregate_per_flow, aggregate_total),
-        "equilibrium": is_equilibrium(replica_list, previous_beliefs),
-    }
-
-
-def test_extracted_slot_matches_legacy_orchestration():
-    legacy_flows = [1, 2, 3]
-    legacy_replicas = make_replicas()
+def test_seeded_latency_slot_is_repeatable():
+    first_flows = [1, 2, 3]
+    first_replicas = make_replicas()
     random.seed(2026)
     np.random.seed(2026)
-    legacy = run_legacy_slot(legacy_flows, legacy_replicas)
+    first = run_decoupled_slot(first_flows, first_replicas, 3, 2)
 
-    extracted_flows = [1, 2, 3]
-    extracted_replicas = make_replicas()
+    second_flows = [1, 2, 3]
+    second_replicas = make_replicas()
     random.seed(2026)
     np.random.seed(2026)
-    extracted = run_decoupled_slot(
-        extracted_flows,
-        extracted_replicas,
-        num_of_stages=3,
-        num_of_replicas=2,
-        likelihood=0.8,
-    )
+    second = run_decoupled_slot(second_flows, second_replicas, 3, 2)
 
-    assert extracted_flows == legacy_flows
-    assert extracted.embed_dict == legacy["embed_dict"]
-    assert extracted.assignments_by_stage == legacy["assignments_by_stage"]
-    assert extracted.aggregate_utility_total == legacy["aggregate_total"]
-    assert extracted.aggregate_utility_per_flow == legacy["aggregate_per_flow"]
-    assert extracted.sla_violations == legacy["sla"]
-    assert extracted.jain_fairness == legacy["jain"]
-    assert extracted.equilibrium == legacy["equilibrium"]
+    assert first_flows == second_flows
+    assert first.embed_dict == second.embed_dict
+    assert first.assignments_by_stage == second.assignments_by_stage
+    assert first.aggregate_utility_total == second.aggregate_utility_total
+    assert first.aggregate_utility_per_flow == second.aggregate_utility_per_flow
+    assert first.end_to_end_latency_ms_per_flow == second.end_to_end_latency_ms_per_flow
+    assert first.sla_violations == second.sla_violations
+    assert first.jain_fairness == second.jain_fairness
+    assert first.equilibrium == second.equilibrium
 
     for stage in range(1, 4):
         np.testing.assert_allclose(
-            extracted.utility_grids[stage].to_numpy(),
-            legacy["utility_grids"][stage].to_numpy(),
+            first.utility_grids[stage].to_numpy(),
+            second.utility_grids[stage].to_numpy(),
         )
-    for key in extracted_replicas:
+    for key in first_replicas:
         np.testing.assert_allclose(
-            extracted_replicas[key].belief,
-            legacy_replicas[key].belief,
+            first_replicas[key].belief,
+            second_replicas[key].belief,
         )
 
 

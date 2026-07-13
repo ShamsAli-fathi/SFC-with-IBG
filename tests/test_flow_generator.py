@@ -77,8 +77,13 @@ class RecordingReplicaNetwork:
                     "replica_id": response_replica,
                     "pod_name": host,
                     "concurrency": concurrency,
-                    "legacy_congestion": payload["legacy_congestion"],
+                    "assigned_load": payload["assigned_load"],
+                    "modeled_processing_latency_ms": 10.0,
+                    "legacy_congestion": payload["assigned_load"],
                     "processing_latency_ms": 10.0,
+                    "signal_latency_ms": 10.0,
+                    "state_estimate": 3,
+                    "state_likelihood": [0.1, 0.2, 0.3, 0.4],
                     "legacy_signal": 3,
                     "legacy_likelihood": [0.1, 0.2, 0.3, 0.4],
                 },
@@ -104,7 +109,7 @@ def test_complete_routes_run_flows_concurrently_and_hops_sequentially():
     assert network.peak["stage-2-1"] == 3
     assert network.peak["stage-3-1"] == 3
     assert all(
-        payload["legacy_congestion"] == 3
+        payload["assigned_load"] == 3
         for _, payload in network.payloads
     )
     calls_by_flow = defaultdict(list)
@@ -150,6 +155,10 @@ def test_hop_telemetry_preserves_correlation_and_latency_fields():
         assert hop.slot_id == 4
         assert hop.flow_id == 9
         assert hop.request_latency_ms >= hop.processing_latency_ms
+        assert hop.assigned_load == 1
+        assert hop.signal_latency_ms == hop.processing_latency_ms
+        assert hop.state_estimate == 3
+        assert hop.state_likelihood == (0.1, 0.2, 0.3, 0.4)
         assert hop.legacy_congestion == 1
         assert hop.legacy_signal == 3
         assert hop.legacy_likelihood == (0.1, 0.2, 0.3, 0.4)

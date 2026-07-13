@@ -19,7 +19,7 @@
 - Read or update `Tutorial.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
 - Read or update `Report.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
 - Characterize the reference behavior before refactoring, then introduce simulation-backed adapter contracts before Kubernetes implementations.
-- Treat measured HTTP latency and the legacy belief observation as separate fields initially. Replacing the legacy signal with measured latency requires an explicit, validated mathematical decision.
+- The completed baseline kept HTTP latency separate from its synthetic belief observation. Phase 1 explicitly supersedes that choice: selected processing latency is now the belief signal, while request/transport latency and concurrency remain separate telemetry.
 - Make the slot runner depend on explicit discovery, traffic, observation, and result-sink ports. Keep simulation implementations as the behavioral baseline for future infrastructure adapters.
 - Apply observation likelihoods in the controller learning core; adapters collect observations but do not redefine local belief update or aggregation mathematics.
 - Implement the HTTP replica as a small FastAPI/Uvicorn service with environment-provided stable identity and experiment parameters.
@@ -28,7 +28,7 @@
 - Make the flow generator accept complete controller-selected routes rather than perform placement itself.
 - Start logical flows concurrently but await the three selected hops of each individual flow in stage order.
 - Validate returned slot/flow correlation and replica identity, then fail the slot request on downstream HTTP, payload, correlation, or identity errors; do not present partial telemetry as a completed slot.
-- Correlate every hop with slot, flow, stage, replica, Pod, and endpoint metadata while retaining server latency, client latency, concurrency, and legacy observation fields separately.
+- Correlate every hop with slot, flow, stage, replica, Pod, endpoint, assigned load, modeled/measured processing latency, client latency, concurrency, state estimate, and likelihood. Transitional legacy aliases are compatibility fields only.
 - Use one non-root runtime image for the local replica and flow-generator services; keep Docker Compose packaging local to Phase 4 and defer Kubernetes manifests to Phase 5.
 - Use exact continuation play for the decoupled IBG: branch over every available replica at each player/load-vector subgame, score choices at their predicted final loads, and memoize subgames.
 - Enforce exactly one replica per stage in `BR_EIBG`; the paper's binary choose/skip pseudocode is generalized to the formal one-of-M SFC action constraint.
@@ -52,10 +52,10 @@
 - Preserve all validated profiles exactly and deterministically extend new stage/replica identities from the validated profile templates with unique observation seeds. This changes experiment configuration only, not `BR_EIBG` or its mathematics.
 - Require every flow-generator route to contain the same positive contiguous stage sequence beginning at stage 1, rather than embedding a three-stage assumption in the traffic contract.
 - Keep Kubernetes CSV export host-side: `--csv 1` converts the completed structured trace into the five legacy report files under the repository-local ignored `figures/` directory, avoiding cluster volumes and preserving the default JSONL-only behavior when disabled.
-- Retain FastAPI as the application, identity, health, legacy-observation, and application-telemetry endpoint for every datapath mode. A datapath extension forwards selected traffic; it does not replace the replica's observation behavior.
+- Retain FastAPI as the application, identity, health, selected processing-latency observation, and application-telemetry endpoint for every datapath mode. A datapath extension forwards selected traffic; it does not replace replica observation behavior.
 - Treat ordinary Linux socket/TCP/IP networking as the explicit `kernel` baseline and the later `dpdk-vpp` path as VPP running with its approved DPDK I/O backend. VPP is user-space software and can use non-DPDK interfaces, but this roadmap does not introduce standalone VPP as a third comparison mode.
 - Keep datapath selection behind traffic and telemetry adapters. Kernel and future DPDK/VPP paths must preserve the controller-selected route and the slot/flow/stage/replica/endpoint/Pod/node correlation contract.
-- Preserve asymmetric and partial observations in every mode: only a selected FastAPI hop yields one legacy signal and likelihood; datapath counters, latency, and queue measurements are supplementary telemetry and cannot update beliefs without an explicit validated mathematical decision.
+- Preserve asymmetric and partial observations in every mode: only a selected FastAPI hop yields one processing-latency signal and likelihood. Other datapath counters or queue measurements cannot update beliefs without another explicit validated mathematical decision.
 - Add the DPDK/VPP path only after its topology, DPDK I/O backend, Linux-facing interfaces, lifecycle, readiness, route setup/cleanup, failure behavior, and host resource preflight are documented and testable. The existing Kernel mode must remain independently runnable.
 - Defer DPDK/VPP activation until the explicit host preflight for NIC ownership, IOMMU/VFIO, hugepages, CPU/NUMA, privileges, and Kubernetes device resources passes.
 - Keep coupled IBG separate from the datapath expansion. Its solver, state, observation, utility, learning, baseline, and acceptance requirements await explicit user instructions.

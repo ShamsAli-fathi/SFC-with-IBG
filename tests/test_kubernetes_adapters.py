@@ -184,11 +184,18 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
                             "pod_name": f"stage-{hop['stage']}-{hop['replica_id'] - 1}",
                                 "endpoint": hop["url"],
                                 "concurrency": 1,
+                                "assigned_load": planned_congestion[
+                                    (hop["stage"], hop["replica_id"])
+                                ],
+                                "modeled_processing_latency_ms": 40.0,
                                 "legacy_congestion": planned_congestion[
                                     (hop["stage"], hop["replica_id"])
                                 ],
                                 "processing_latency_ms": 40.0,
                             "request_latency_ms": 41.0,
+                            "signal_latency_ms": 40.0,
+                            "state_estimate": 3,
+                            "state_likelihood": [0.1, 0.2, 0.3, 0.4],
                             "legacy_signal": 3,
                             "legacy_likelihood": [0.1, 0.2, 0.3, 0.4],
                         }
@@ -238,3 +245,20 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
             observation.congestion == congestion[observation.replica_id]
             for observation in observations
         )
+    assert all(
+        latency == pytest.approx(num_of_stages)
+        for latency in result.link_latency_ms_per_flow.values()
+    )
+    assert all(
+        latency == pytest.approx(num_of_stages * 40.0)
+        for latency in result.processing_latency_ms_per_flow.values()
+    )
+    assert all(
+        latency == pytest.approx(num_of_stages * 41.0)
+        for latency in result.end_to_end_latency_ms_per_flow.values()
+    )
+    assert all(
+        utility == pytest.approx(num_of_stages * 58.0)
+        for utility in result.realized_utility_per_flow.values()
+    )
+    assert result.sla_violations == 0

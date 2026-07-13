@@ -3,16 +3,14 @@ import numpy as np
 import os
 
 
-def SLA_v(embed_dict, replica_list):
-    violation_count = 0
-    for index, embeds in embed_dict.items():
-        count_of_ones = sum(
-            1 for index, rep in enumerate(embeds)
-            if replica_list[(index + 1, rep)].state in (1, 2)
-        )
-        if count_of_ones > 0:
-            violation_count += 1
-    return violation_count
+def SLA_v(end_to_end_latency_ms_per_flow, threshold_ms):
+    """Count flows whose observed end-to-end latency exceeds the SLA."""
+    if threshold_ms <= 0:
+        raise ValueError("SLA latency threshold must be positive")
+    return sum(
+        latency_ms > threshold_ms
+        for latency_ms in end_to_end_latency_ms_per_flow.values()
+    )
 
 
 def csv_gen_SLA(violation_count, hash_value, filename='sla_violations.csv'):

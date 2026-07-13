@@ -8,12 +8,22 @@ import sys
 from collections import Counter
 from scipy.stats import truncnorm
 
+from latency_model import (
+    DEFAULT_LATENCY_WEIGHT,
+    DEFAULT_REWARD,
+    estimate_state,
+    latency_likelihood,
+    require_state_parameters,
+    sample_latency_ms,
+)
+
 sys.setrecursionlimit(1000)
 
 
 class Replica:
     def __init__(self, stage, replica, belief, delay, cost, gamma, state,
-                 capacity):  # Base info of each replica j in stage k
+                 capacity, reward=DEFAULT_REWARD,
+                 latency_weight=DEFAULT_LATENCY_WEIGHT):
         self.stage = stage
         self.replica = replica
         self.belief = belief  # GOOD belief
@@ -23,6 +33,8 @@ class Replica:
         self.weight = 1
         self.state = state
         self.capacity = capacity
+        self.reward = reward
+        self.latency_weight = latency_weight
 
     def __repr__(self):
         return (f"Replica(stage={self.stage}, replica={self.replica}, "
@@ -37,11 +49,11 @@ class Replica:
         congestion = landa * ((n - 1) / (n + 1))
         kernel = pr - congestion
         return kernel"""
-        gamma = self.gamma
-        beta = 100
-        denominator = q * (1 + gamma * n)
-        kernel = beta / denominator - 5  # the deducted number is the c_k
-        return kernel
+        if n < 1:
+            raise ValueError("load must be at least 1")
+        if q <= 0:
+            raise ValueError("latency q must be positive")
+        return self.reward - (self.latency_weight * q) - self.cost
 
     def eval_util(self, n, q_list):  # likelihood of (q_low | Good) or (q_bad | Bad)
         """q_low = [25, 40, 50]
@@ -56,12 +68,21 @@ class Replica:
         # Average overstates
         U = (self.belief * e_good) + ((1 - self.belief) * e_bad)
         return U"""
+        if len(q_list) == 0:
+            raise ValueError("q_list must contain at least one latency sample")
         avg_util_list = []
         for q in q_list:
             sampled_utility = self.utility_kernel(n, q)
             avg_util_list.append(sampled_utility)
         avg_util = sum(avg_util_list) / len(avg_util_list)
         return avg_util
+
+    def observe_latency(self, load, random_source=None, latency_ms=None):
+        parameters = require_state_parameters(self.state)
+        if latency_ms is None:
+            latency_ms = sample_latency_ms(load, parameters, random_source)
+        likelihood = latency_likelihood(latency_ms, load)
+        return float(latency_ms), estimate_state(likelihood), likelihood
 
     def local_update(self, likelihood, signal):
         local_update_list = []

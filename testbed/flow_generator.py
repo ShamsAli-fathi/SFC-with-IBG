@@ -61,9 +61,14 @@ class HopTelemetry(BaseModel):
     pod_name: str
     endpoint: str
     concurrency: int
+    assigned_load: int
+    modeled_processing_latency_ms: float
     legacy_congestion: int
     processing_latency_ms: float
     request_latency_ms: float
+    signal_latency_ms: float
+    state_estimate: int
+    state_likelihood: tuple[float, float, float, float]
     legacy_signal: int
     legacy_likelihood: tuple[float, float, float, float]
 
@@ -163,7 +168,7 @@ class FlowGenerator:
         slot_id,
         flow_id,
         hop,
-        legacy_congestion,
+        assigned_load,
     ):
         endpoint = f"{str(hop.url).rstrip('/')}/process"
         started_at = time.perf_counter()
@@ -173,7 +178,7 @@ class FlowGenerator:
                 json={
                     "slot_id": slot_id,
                     "flow_id": flow_id,
-                    "legacy_congestion": legacy_congestion,
+                    "assigned_load": assigned_load,
                 },
             )
             response.raise_for_status()
@@ -203,11 +208,11 @@ class FlowGenerator:
                 f"slot {replica_response.slot_id} flow {replica_response.flow_id}"
             )
 
-        if replica_response.legacy_congestion != legacy_congestion:
+        if replica_response.assigned_load != assigned_load:
             raise FlowExecutionError(
-                f"flow {flow_id} stage {hop.stage} legacy congestion mismatch: "
-                f"expected {legacy_congestion}, got "
-                f"{replica_response.legacy_congestion}"
+                f"flow {flow_id} stage {hop.stage} assigned load mismatch: "
+                f"expected {assigned_load}, got "
+                f"{replica_response.assigned_load}"
             )
 
         return HopTelemetry(
@@ -218,9 +223,16 @@ class FlowGenerator:
             pod_name=replica_response.pod_name,
             endpoint=str(hop.url),
             concurrency=replica_response.concurrency,
+            assigned_load=replica_response.assigned_load,
+            modeled_processing_latency_ms=(
+                replica_response.modeled_processing_latency_ms
+            ),
             legacy_congestion=replica_response.legacy_congestion,
             processing_latency_ms=replica_response.processing_latency_ms,
             request_latency_ms=(time.perf_counter() - started_at) * 1000,
+            signal_latency_ms=replica_response.signal_latency_ms,
+            state_estimate=replica_response.state_estimate,
+            state_likelihood=replica_response.state_likelihood,
             legacy_signal=replica_response.legacy_signal,
             legacy_likelihood=replica_response.legacy_likelihood,
         )

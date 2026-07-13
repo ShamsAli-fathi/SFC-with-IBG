@@ -12,9 +12,10 @@ from header import (
     embedding,
     is_equilibrium,
     jain_index,
-    pdf_cal,
-    update,
 )
+from latency_model import latency_likelihood
+from learning import apply_observations
+from ports import Observation
 from report import SLA_v
 
 
@@ -34,8 +35,8 @@ def make_replica(stage=1, replica=1, *, gamma=0.2, state=4, capacity=2000):
 def test_utility_kernel_and_expected_utility_are_characterized():
     replica = make_replica()
 
-    assert replica.utility_kernel(2, 5.0) == pytest.approx(9.285714285714286)
-    assert replica.eval_util(2, [4.0, 5.0, 6.0]) == pytest.approx(9.682539682539684)
+    assert replica.utility_kernel(2, 5.0) == pytest.approx(94.0)
+    assert replica.eval_util(2, [4.0, 5.0, 6.0]) == pytest.approx(94.0)
 
 
 def test_seeded_br_eibg_and_embedding_are_characterized():
@@ -58,8 +59,8 @@ def test_seeded_br_eibg_and_embedding_are_characterized():
     np.testing.assert_allclose(
         utility_grid.to_numpy(),
         [
-            [8.052992351812803, 6.188279158696687, 4.789744263859601],
-            [8.12865493638177, 5.667032135810186, 3.9827639038401594],
+            [75.87600634568135, 70.48196061422094, 55.86159412285359],
+            [75.93549342890614, 69.45484091770277, 57.51273535415906],
         ],
     )
     assert embed == {"f_1": [2], "f_2": [1], "f_3": [1]}
@@ -111,23 +112,27 @@ def test_belief_update_and_aggregation_are_characterized():
     selected = make_replica(replica=1)
     unselected = make_replica(replica=2)
     likelihood = [0.1, 0.2, 0.3, 0.4]
-    selected.tasting = lambda congestion: (4, likelihood)
     replicas = {(1, 1): selected, (1, 2): unselected}
 
-    assert selected.local_update(likelihood, signal=4) == likelihood
-    update({1: 1, 2: 1}, 2, 1, replicas, likelihood=0.8)
+    assert selected.local_update(likelihood, signal=12.0) == likelihood
+    apply_observations(
+        [
+            Observation(1, 1, 1, 2, 12.0, tuple(likelihood)),
+            Observation(1, 2, 1, 2, 12.0, tuple(likelihood)),
+        ],
+        replicas,
+    )
 
     assert selected.belief == [0.19, 0.23, 0.27, 0.31]
     assert unselected.belief == [0.25, 0.25, 0.25, 0.25]
 
 
 def test_signal_likelihood_is_characterized():
-    state, posterior = pdf_cal(1.0)
+    posterior = latency_likelihood(18.0, load=1)
 
-    assert state == 3
     np.testing.assert_allclose(
         posterior,
-        [0.20826038, 0.25991709, 0.28627025, 0.24555228],
+        [1.34631923e-07, 2.57065445e-03, 9.97429211e-01, 2.52632173e-14],
         rtol=1e-7,
     )
 
@@ -154,12 +159,8 @@ def test_metrics_are_characterized():
 
 
 def test_sla_and_equilibrium_rules_are_characterized():
-    replicas = {
-        (1, 1): make_replica(stage=1, state=4),
-        (2, 1): make_replica(stage=2, state=1),
-        (3, 1): make_replica(stage=3, state=4),
-    }
+    replicas = {(1, 1): make_replica(stage=1, state=4)}
 
-    assert SLA_v({"f_1": [1, 1, 1]}, replicas) == 1
-    assert is_equilibrium(replicas, [[0.24] * 4] * 3) == 1
-    assert is_equilibrium(replicas, [[0.1] * 4] * 3) == 0
+    assert SLA_v({1: 251.0, 2: 249.0}, threshold_ms=250.0) == 1
+    assert is_equilibrium(replicas, [[0.24] * 4]) == 1
+    assert is_equilibrium(replicas, [[0.1] * 4]) == 0

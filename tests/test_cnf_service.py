@@ -4,11 +4,11 @@ from httpx import ASGITransport, AsyncClient
 import numpy as np
 import pytest
 
-from IBG.header import Replica
+from IBG.latency_model import require_state_parameters, sample_latency_ms
 from testbed.cnf_service import (
-    LegacyObservationSource,
+    LatencyObservationSource,
     ReplicaConfig,
-    SeededLegacyObservationSource,
+    SeededLatencyObservationSource,
     create_app,
 )
 
@@ -21,13 +21,13 @@ async def request(app, method, path, **kwargs):
         return await client.request(method, path, **kwargs)
 
 
-def fixed_observation(congestion):
-    return 3, (0.1, 0.2, 0.3, 0.4)
+def fixed_latency(assigned_load):
+    return 2.0
 
 
 def test_health_exposes_stable_identity():
     config = ReplicaConfig(stage=2, replica_id=7, pod_name="stage-2-6")
-    app = create_app(config, observation_source=fixed_observation)
+    app = create_app(config, observation_source=fixed_latency)
 
     response = asyncio.run(request(app, "GET", "/health"))
 
@@ -41,7 +41,7 @@ def test_health_exposes_stable_identity():
     }
 
 
-def test_process_returns_identity_latency_and_separate_legacy_observation():
+def test_process_returns_identity_and_latency_observation():
     config = ReplicaConfig(
         stage=3,
         replica_id=4,
@@ -49,7 +49,7 @@ def test_process_returns_identity_latency_and_separate_legacy_observation():
         base_delay_ms=2,
         congestion_delay_ms=1,
     )
-    app = create_app(config, observation_source=fixed_observation)
+    app = create_app(config, observation_source=fixed_latency)
 
     response = asyncio.run(
         request(
@@ -68,19 +68,23 @@ def test_process_returns_identity_latency_and_separate_legacy_observation():
     assert body["replica_id"] == 4
     assert body["pod_name"] == "stage-3-3"
     assert body["concurrency"] == 1
+    assert body["assigned_load"] == 1
+    assert body["modeled_processing_latency_ms"] == 2.0
     assert body["legacy_congestion"] == 1
     assert body["processing_latency_ms"] >= 2
-    assert body["legacy_signal"] == 3
-    assert body["legacy_likelihood"] == [0.1, 0.2, 0.3, 0.4]
+    assert body["signal_latency_ms"] == body["processing_latency_ms"]
+    assert body["legacy_signal"] == body["state_estimate"]
+    assert body["legacy_likelihood"] == body["state_likelihood"]
+    assert sum(body["state_likelihood"]) == pytest.approx(1.0)
     assert app.state.runtime.active_requests == 0
 
 
-def test_legacy_observation_uses_final_assignment_load_not_admission_order():
+def test_latency_model_uses_final_assignment_load_not_admission_order():
     observed_congestion = []
 
-    def observation_source(congestion):
-        observed_congestion.append(congestion)
-        return fixed_observation(congestion)
+    def observation_source(assigned_load):
+        observed_congestion.append(assigned_load)
+        return 30.0
 
     app = create_app(
         ReplicaConfig(base_delay_ms=30, congestion_delay_ms=5),
@@ -99,7 +103,7 @@ def test_legacy_observation_uses_final_assignment_load_not_admission_order():
                         json={
                             "slot_id": 1,
                             "flow_id": flow_id,
-                            "legacy_congestion": 3,
+                            "assigned_load": 3,
                         },
                     )
                     for flow_id in (1, 2, 3)
@@ -109,16 +113,16 @@ def test_legacy_observation_uses_final_assignment_load_not_admission_order():
     responses = asyncio.run(scenario())
 
     assert sorted(response.json()["concurrency"] for response in responses) == [1, 2, 3]
-    assert {response.json()["legacy_congestion"] for response in responses} == {3}
+    assert {response.json()["assigned_load"] for response in responses} == {3}
     assert observed_congestion == [3, 3, 3]
 
 
 def test_concurrent_requests_report_real_overlapping_load():
     observed_concurrency = []
 
-    def observation_source(congestion):
-        observed_concurrency.append(congestion)
-        return fixed_observation(congestion)
+    def observation_source(assigned_load):
+        observed_concurrency.append(assigned_load)
+        return 30.0
 
     config = ReplicaConfig(base_delay_ms=30, congestion_delay_ms=5)
     app = create_app(config, observation_source=observation_source)
@@ -147,21 +151,19 @@ def test_concurrent_requests_report_real_overlapping_load():
     assert app.state.runtime.active_requests == 0
 
 
-def test_legacy_observation_source_matches_reference_tasting():
+def test_latency_observation_source_matches_reference_model():
     config = ReplicaConfig(stage=1, replica_id=2, state=2, capacity=5000)
-    reference = Replica(1, 2, [0.25] * 4, 5, 1, 0, 2, 5000)
 
     np.random.seed(77)
-    expected_signal, expected_likelihood = reference.tasting(congestion=3)
+    expected = sample_latency_ms(3, require_state_parameters(2))
     np.random.seed(77)
-    signal, likelihood = LegacyObservationSource(config)(congestion=3)
+    observed = LatencyObservationSource(config)(assigned_load=3)
 
-    assert signal == expected_signal
-    np.testing.assert_allclose(likelihood, expected_likelihood)
+    assert observed == expected
 
 
-def test_seeded_observation_is_request_stable_and_uses_legacy_model():
-    source = SeededLegacyObservationSource(
+def test_seeded_latency_is_request_stable_and_uses_phase1_model():
+    source = SeededLatencyObservationSource(
         ReplicaConfig(
             stage=2,
             replica_id=3,
@@ -171,16 +173,27 @@ def test_seeded_observation_is_request_stable_and_uses_legacy_model():
         )
     )
 
-    first = source(congestion=2, slot_id=4, flow_id=1)
-    repeated = source(congestion=2, slot_id=4, flow_id=1)
-    another_flow = source(congestion=2, slot_id=4, flow_id=2)
+    first = source(assigned_load=2, slot_id=4, flow_id=1)
+    repeated = source(assigned_load=2, slot_id=4, flow_id=1)
+    another_flow = source(assigned_load=2, slot_id=4, flow_id=2)
 
     assert repeated == first
-    assert another_flow[1] != first[1]
+    assert another_flow != first
+
+
+def test_hidden_state_causally_changes_modeled_processing_latency():
+    bad = SeededLatencyObservationSource(
+        ReplicaConfig(state=1, observation_seed=99)
+    )(assigned_load=2, slot_id=1, flow_id=1)
+    good = SeededLatencyObservationSource(
+        ReplicaConfig(state=4, observation_seed=99)
+    )(assigned_load=2, slot_id=1, flow_id=1)
+
+    assert bad > good
 
 
 def test_request_validation_rejects_invalid_flow_without_leaking_load():
-    app = create_app(ReplicaConfig(), observation_source=fixed_observation)
+    app = create_app(ReplicaConfig(), observation_source=fixed_latency)
 
     response = asyncio.run(
         request(

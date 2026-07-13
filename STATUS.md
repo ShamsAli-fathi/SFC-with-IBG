@@ -1,6 +1,6 @@
 # Project Status
 
-Updated: 2026-07-12
+Updated: 2026-07-13
 
 ## Completed
 
@@ -67,6 +67,10 @@ Updated: 2026-07-12
 - Verified `./scripts/run_experiment.py --csv 1 --flow 4 --stage 3 --replica 3 --max-iterations 100 --skip-build` live. All nine replica Pods and the flow generator became Ready, the controller Job reached equilibrium in 8 iterations, the JSONL trace completed, and all five requested CSV files were written successfully.
 - Created and maintained the repository handoff documents as implementation progressed.
 - Reset the active roadmap for the next expansion: begin with controlled user-directed mathematical and parameter revisions, then make the resulting validated FastAPI/Kubernetes route the explicit `kernel` mode, plan the later comparison path as DPDK/VPP, and leave coupled IBG awaiting a separate user-defined scope.
+- Completed expansion Phase 1: added a pure positive state/load-conditioned latency model with provisional ordered state curves; migrated active utility from inverse/double-congestion behavior to $R_k-\alpha_kq-c_k$; and made selected processing latency the continuous belief signal with load-aware likelihoods.
+- Made FastAPI replica behavior causally depend on hidden state, final assigned load, effective capacity, congestion knee, and seeded jitter while keeping admitted concurrency and client/transport timing separate.
+- Added per-flow processing, transport, and end-to-end latency plus realized linear utility; replaced active state-ID SLA with a configurable latency threshold; and retained legacy wire fields only as transition aliases.
+- Expanded the suite to 82 passing tests, including provisional state ordering/zero crossings, seeded latency, state causality, replay parity, selected-only observations, transport deduction, realized utility, and latency SLA. Compiled all Python sources successfully.
 
 ## Environment facts
 
@@ -83,12 +87,12 @@ Updated: 2026-07-12
 
 ## Current state
 
-The original decoupled exact Kubernetes migration is complete. Its supported three-stage, five-replica, three-flow target matches controlled simulation mathematics over three seeds; only expected infrastructure timing and Kubernetes-specific metadata differ. Phase 1 is specified but not implemented: hidden ordered states will cause load-conditioned processing latency/jitter, latency becomes the selected private signal, utility becomes linear in latency, end-to-end reporting deducts compatible link latency, and SLA uses latency thresholds. Phase 2 then calibrates all numerical values against predeclared state-specific zero-crossing ranges so bad replicas turn negative early and perfect replicas remain positive until high congestion. Calibration does not add rejection: the current solver still requires one replica per stage, so the supported range must retain a feasible option unless a later admission-policy change is explicitly approved. The calibrated FastAPI/Kubernetes route becomes the frozen `kernel` baseline before DPDK/VPP work.
+Expansion Phase 1 is complete locally. The active decoupled solver now samples load-conditioned latency from beliefs, FastAPI emits selected measured processing-latency observations, beliefs use four state likelihoods, utility is linear in latency, and results include processing/transport/end-to-end latency, realized utility, and latency SLA. Provisional state parameters yield ordered expected zero crossings at loads 3, 5, 7, and 11, but these are test values—not accepted experiment calibration. Phase 2 must calibrate numerical values and validate representative points live. Calibration does not add rejection: the solver still requires one replica per stage, so the supported range must retain a feasible option unless an admission-policy change is separately approved.
 
 ## Next action
 
-Implement Phase 1 in reviewable slices using provisional test profiles: state-conditioned latency, load-aware likelihoods, linear stage utility, end-to-end/link reporting, and latency-threshold SLA. Then execute Phase 2 with a reproducible calibration script: declare $N_{\mathrm{cal}}$ and target zero-crossing bands, fit latency curves, choose policy weights, run sensitivity/Monte Carlo checks, and validate representative points live. Do not introduce rejection, pair-dependent link optimization, DPDK/VPP resources, or coupled behavior implicitly.
+Begin Phase 2 with a reproducible calibration script: declare $N_{\mathrm{cal}}$ and target zero-crossing bands, fit latency curves, choose policy weights, run sensitivity/Monte Carlo checks, and validate representative points live. Decide and record accepted parameter units/defaults and supported load range. Do not introduce rejection, pair-dependent link optimization, DPDK/VPP resources, or coupled behavior implicitly.
 
 ## New-thread handoff prompt
 
-> We are continuing Phase 1 of the Kernel-versus-DPDK/VPP expansion roadmap in `/home/vhakami/Desktop/projects/vesal/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Do not read or edit `Tutorial.md` unless explicitly requested; `Report.md` is opt-in only. Phase 1 implements hidden-state/load-conditioned processing latency, latency likelihoods, linear utility $R_k-\alpha_kq-c_k$, end-to-end link deduction, and latency SLA using provisional profiles. Phase 2 reproducibly calibrates parameters so $n_1^*<n_2^*<n_3^*<n_4^*$, with bad states negative early and perfect states positive until high congestion. The one-of-M solver does not reject negative choices; retain feasibility in the supported range unless rejection is separately authorized. Kernel baseline, DPDK/VPP, pair-dependent links, and coupled IBG follow later phases.
+> We are continuing Phase 2 of the Kernel-versus-DPDK/VPP expansion roadmap in `/home/vhakami/Desktop/projects/vesal/SFC-with-IBG` on branch `IBG`. Read `AGENTS.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md`. Do not read or edit `Tutorial.md` unless explicitly requested; `Report.md` is opt-in only. Phase 1 is implemented and locally verified with 82 tests: hidden-state/load-conditioned processing latency, latency likelihoods, linear utility $R_k-\alpha_kq-c_k$, processing/transport/end-to-end metrics, realized utility, and latency SLA. Provisional zero crossings are 3, 5, 7, and 11. Phase 2 must reproducibly calibrate accepted parameters and live tolerances so $n_1^*<n_2^*<n_3^*<n_4^*$. The one-of-M solver does not reject negative choices; retain feasibility unless rejection is separately authorized. DPDK/VPP, pair-dependent link optimization, and coupled IBG remain out of scope.

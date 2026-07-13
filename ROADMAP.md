@@ -36,7 +36,7 @@ Gate: architecture, decision, status, and roadmap handoffs describe the frozen m
 
 ## Phase 1: Introduce the latency-based state, signal, and utility model
 
-Status: planned.
+Status: complete.
 
 Suggested Codex reasoning: `xhigh` — changes to the IBG mathematics, stochastic assumptions, utility/observation parameters, or equilibrium behavior can invalidate the established behavioral baseline.
 
@@ -51,7 +51,7 @@ Suggested Codex reasoning: `xhigh` — changes to the IBG mathematics, stochasti
 - Add deterministic tests with injected/seeded latency sources, likelihood/posterior fixtures, monotonic state and congestion checks, utility/end-to-end/SLA fixtures, and selected-only observation checks. Validate exact simulation/Kubernetes controller parity by replaying identical captured signals; validate live latency statistically through state ordering, congestion response, and likelihood calibration rather than requiring bit-for-bit timing equality.
 - Remove or explicitly migrate obsolete parameters (`gamma`, unused replica `delay`, synthetic legacy signal fields, and the old state-based SLA rule) only when their replacements are covered by tests and trace/schema compatibility is addressed.
 
-Gate: the revised model has explicit parameter units and provisional test profiles, deterministic characterization and replay parity, latency-driven beliefs, linear stage and end-to-end utility, latency-based SLA results, selected-only observations, and updated traces/documentation. Final experimental values and live state/congestion calibration belong to Phase 2.
+Gate: complete. The pure latency model, provisional ordered profiles, load-aware likelihoods, selected-only observation adapters, linear utility, end-to-end processing/transport metrics, latency SLA, compatibility schema, and replay validation are covered by 82 passing tests. Python sources compile successfully. Final experimental values and live state/congestion calibration belong to Phase 2.
 
 ## Phase 2: Calibrate latency and utility parameters
 

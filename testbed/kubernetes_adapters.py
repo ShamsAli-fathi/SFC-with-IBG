@@ -224,13 +224,29 @@ class KubernetesObservationCollector:
                     stage=stage,
                     flow_id=flow_id,
                     replica_id=replica_id,
-                    congestion=hop.legacy_congestion,
-                    signal=hop.legacy_signal,
-                    likelihood=tuple(hop.legacy_likelihood),
+                    congestion=hop.assigned_load,
+                    signal=hop.signal_latency_ms,
+                    likelihood=tuple(hop.state_likelihood),
                     measured_latency_ms=hop.processing_latency_ms,
+                    estimated_state=hop.state_estimate,
                 )
             )
         return observations
+
+
+class KubernetesLinkLatencyCollector:
+    """Extract measured transport overhead without claiming inter-Pod links."""
+
+    def collect(self, traffic_telemetry):
+        if traffic_telemetry is None:
+            raise RuntimeError("slot traffic has not completed")
+        return {
+            flow.flow_id: sum(
+                max(0.0, hop.request_latency_ms - hop.processing_latency_ms)
+                for hop in flow.hops
+            )
+            for flow in traffic_telemetry.flows
+        }
 
 
 def build_replica_list(profiles, num_of_stages, num_of_replicas):
@@ -290,4 +306,5 @@ def make_kubernetes_adapters(
         observation_collector=KubernetesObservationCollector(slot_traffic),
         result_sink=result_sink or NullResultSink(),
         slot_traffic_executor=slot_traffic,
+        link_latency_collector=KubernetesLinkLatencyCollector(),
     )

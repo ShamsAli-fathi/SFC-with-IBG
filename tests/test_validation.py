@@ -54,10 +54,15 @@ def kubernetes_shape(simulation):
                     "pod_name": placement["pod_name"],
                     "endpoint": placement["endpoint"],
                     "concurrency": observation["congestion"],
+                    "assigned_load": observation["congestion"],
+                    "modeled_processing_latency_ms": observation["signal"],
                     "legacy_congestion": observation["congestion"],
-                    "processing_latency_ms": 40.0,
-                    "request_latency_ms": 41.0,
-                    "legacy_signal": observation["signal"],
+                    "processing_latency_ms": observation["signal"],
+                    "request_latency_ms": observation["signal"] + 1.0,
+                    "signal_latency_ms": observation["signal"],
+                    "state_estimate": observation["estimated_state"],
+                    "state_likelihood": observation["likelihood"],
+                    "legacy_signal": observation["estimated_state"],
                     "legacy_likelihood": observation["likelihood"],
                 }
             )

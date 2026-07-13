@@ -14,6 +14,10 @@ from header import (
 from ports import AdapterBundle
 from report import SLA_v
 from simulation_adapters import make_simulation_adapters
+from latency_model import (
+    DEFAULT_LINK_LATENCY_WEIGHT,
+    DEFAULT_SLA_LATENCY_MS,
+)
 
 
 @dataclass
@@ -30,6 +34,11 @@ class SlotResult:
     equilibrium: int
     elapsed_seconds: float
     traffic_telemetry: object | None = None
+    processing_latency_ms_per_flow: dict | None = None
+    link_latency_ms_per_flow: dict | None = None
+    end_to_end_latency_ms_per_flow: dict | None = None
+    realized_utility_total: float | None = None
+    realized_utility_per_flow: dict | None = None
 
 
 def run_decoupled_slot(
@@ -41,6 +50,8 @@ def run_decoupled_slot(
     random_source=random,
     adapters: AdapterBundle | None = None,
     slot_id=1,
+    link_latency_weight=DEFAULT_LINK_LATENCY_WEIGHT,
+    sla_latency_threshold_ms=DEFAULT_SLA_LATENCY_MS,
 ):
     """Run one reference decoupled IBG iteration without writing reports.
 
@@ -50,6 +61,10 @@ def run_decoupled_slot(
     """
     if num_of_stages < 1:
         raise ValueError("num_of_stages must be at least 1")
+    if link_latency_weight < 0:
+        raise ValueError("link_latency_weight must not be negative")
+    if sla_latency_threshold_ms <= 0:
+        raise ValueError("sla_latency_threshold_ms must be positive")
     if adapters is None:
         adapters = make_simulation_adapters()
 
@@ -130,8 +145,43 @@ def run_decoupled_slot(
             apply_observations(observations, replica_list)
         ended_at = time.perf_counter()
 
+    processing_latency_by_flow = {flow: 0.0 for flow in flow_list}
+    realized_per_flow = {flow: 0.0 for flow in flow_list}
+    for observations in observations_by_stage.values():
+        for observation in observations:
+            processing_latency_by_flow[observation.flow_id] += observation.signal
+            replica = replica_list[(observation.stage, observation.replica_id)]
+            realized_per_flow[observation.flow_id] += replica.utility_kernel(
+                observation.congestion,
+                observation.signal,
+            )
+
+    link_latency_by_flow = {flow: 0.0 for flow in flow_list}
+    if adapters.link_latency_collector is not None:
+        collected_link_latency = adapters.link_latency_collector.collect(
+            traffic_telemetry
+        )
+        for flow in flow_list:
+            link_latency_by_flow[flow] = float(
+                collected_link_latency.get(flow, 0.0)
+            )
+
+    for flow in flow_list:
+        penalty = link_latency_weight * link_latency_by_flow[flow]
+        aggregate_per_flow[flow].append(-penalty)
+        aggregate_total -= penalty
+        realized_per_flow[flow] -= penalty
+
+    end_to_end_latency_by_flow = {
+        flow: processing_latency_by_flow[flow] + link_latency_by_flow[flow]
+        for flow in flow_list
+    }
+    realized_total = sum(realized_per_flow.values())
     elapsed_seconds = ended_at - started_at
-    violations = SLA_v(embed_dict, replica_list)
+    violations = SLA_v(
+        end_to_end_latency_by_flow,
+        sla_latency_threshold_ms,
+    )
     fairness = jain_index(aggregate_per_flow, aggregate_total)
     equilibrium = is_equilibrium(replica_list, previous_beliefs)
 
@@ -148,6 +198,11 @@ def run_decoupled_slot(
         equilibrium=equilibrium,
         elapsed_seconds=elapsed_seconds,
         traffic_telemetry=traffic_telemetry,
+        processing_latency_ms_per_flow=processing_latency_by_flow,
+        link_latency_ms_per_flow=link_latency_by_flow,
+        end_to_end_latency_ms_per_flow=end_to_end_latency_by_flow,
+        realized_utility_total=realized_total,
+        realized_utility_per_flow=realized_per_flow,
     )
     adapters.result_sink.record_slot(result)
     return result

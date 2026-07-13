@@ -9,12 +9,16 @@ from fastapi import FastAPI
 import numpy as np
 from pydantic import BaseModel, Field
 
-from IBG.header import Replica
+from IBG.latency_model import (
+    estimate_state,
+    latency_likelihood,
+    require_state_parameters,
+    sample_latency_ms,
+)
 from testbed.profiles import load_profiles, require_profile
 
 
-LegacyObservation = tuple[int, tuple[float, float, float, float]]
-ObservationSource = Callable[[int], LegacyObservation]
+LatencySource = Callable[[int], float]
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,7 @@ class ReplicaConfig:
 class ProcessRequest(BaseModel):
     slot_id: int = Field(ge=1)
     flow_id: int = Field(ge=1)
+    assigned_load: int | None = Field(default=None, ge=1)
     legacy_congestion: int | None = Field(default=None, ge=1)
 
 
@@ -121,34 +126,32 @@ class ProcessResponse(BaseModel):
     replica_id: int
     pod_name: str
     concurrency: int
+    assigned_load: int
+    modeled_processing_latency_ms: float
     legacy_congestion: int
     processing_latency_ms: float
+    signal_latency_ms: float
+    state_estimate: int
+    state_likelihood: tuple[float, float, float, float]
     legacy_signal: int
     legacy_likelihood: tuple[float, float, float, float]
 
 
-class LegacyObservationSource:
-    """Generate the exact observation model used by the reference replica."""
+class LatencyObservationSource:
+    """Sample the Phase 1 state/load-conditioned processing delay."""
 
     def __init__(self, config: ReplicaConfig):
-        self.replica = Replica(
-            stage=config.stage,
-            replica=config.replica_id,
-            belief=[0.25, 0.25, 0.25, 0.25],
-            delay=config.base_delay_ms,
-            cost=1,
-            gamma=0,
-            state=config.state,
-            capacity=config.capacity,
+        self.state = config.state
+
+    def __call__(self, assigned_load: int) -> float:
+        return sample_latency_ms(
+            assigned_load,
+            require_state_parameters(self.state),
         )
 
-    def __call__(self, congestion: int) -> LegacyObservation:
-        signal, likelihood = self.replica.tasting(congestion)
-        return int(signal), tuple(float(value) for value in likelihood)
 
-
-class SeededLegacyObservationSource(LegacyObservationSource):
-    """Generate request-stable samples without changing the legacy model."""
+class SeededLatencyObservationSource(LatencyObservationSource):
+    """Generate request-stable state/load-conditioned processing delay."""
 
     def __init__(self, config: ReplicaConfig):
         if config.observation_seed is None:
@@ -158,43 +161,42 @@ class SeededLegacyObservationSource(LegacyObservationSource):
 
     def __call__(
         self,
-        congestion: int,
+        assigned_load: int,
         slot_id: int,
         flow_id: int,
-    ) -> LegacyObservation:
+    ) -> float:
         generator = np.random.default_rng(
             np.random.SeedSequence(
-                [self.seed, slot_id, flow_id, congestion]
+                [self.seed, slot_id, flow_id, assigned_load]
             )
         )
-        variance = {1: 4, 2: 2, 3: 1, 4: 0.5}
-        sample = -1.0
-        while sample <= 0:
-            sample = float(
-                generator.normal(
-                    loc=0,
-                    scale=np.sqrt(variance[self.replica.state]),
-                )
-            )
-        signal, likelihood = self.replica.tasting(congestion, e=sample)
-        return int(signal), tuple(float(value) for value in likelihood)
+        return sample_latency_ms(
+            assigned_load,
+            require_state_parameters(self.state),
+            generator,
+        )
+
+
+# Compatibility names for callers migrating from the completed baseline.
+LegacyObservationSource = LatencyObservationSource
+SeededLegacyObservationSource = SeededLatencyObservationSource
 
 
 class ReplicaRuntime:
     def __init__(
         self,
         config: ReplicaConfig,
-        observation_source: ObservationSource | None = None,
+        observation_source: LatencySource | None = None,
     ):
         self.config = config
         if observation_source is not None:
             self.observation_source = observation_source
             self._request_seeded_observation = False
         elif config.observation_seed is not None:
-            self.observation_source = SeededLegacyObservationSource(config)
+            self.observation_source = SeededLatencyObservationSource(config)
             self._request_seeded_observation = True
         else:
-            self.observation_source = LegacyObservationSource(config)
+            self.observation_source = LatencyObservationSource(config)
             self._request_seeded_observation = False
         self._lock = asyncio.Lock()
         self._active_requests = 0
@@ -227,21 +229,23 @@ class ReplicaRuntime:
             self._peak_concurrency = max(self._peak_concurrency, concurrency)
 
         try:
-            legacy_congestion = request.legacy_congestion or concurrency
-            delay_ms = (
-                self.config.base_delay_ms
-                + self.config.congestion_delay_ms * (concurrency - 1)
+            assigned_load = (
+                request.assigned_load
+                or request.legacy_congestion
+                or concurrency
             )
-            await asyncio.sleep(delay_ms / 1000)
             if self._request_seeded_observation:
-                signal, likelihood = self.observation_source(
-                    legacy_congestion,
+                modeled_delay_ms = self.observation_source(
+                    assigned_load,
                     request.slot_id,
                     request.flow_id,
                 )
             else:
-                signal, likelihood = self.observation_source(legacy_congestion)
+                modeled_delay_ms = self.observation_source(assigned_load)
+            await asyncio.sleep(modeled_delay_ms / 1000)
             elapsed_ms = (time.perf_counter() - started_at) * 1000
+            likelihood = latency_likelihood(elapsed_ms, assigned_load)
+            state_estimate = estimate_state(likelihood)
             return ProcessResponse(
                 slot_id=request.slot_id,
                 flow_id=request.flow_id,
@@ -249,9 +253,14 @@ class ReplicaRuntime:
                 replica_id=self.config.replica_id,
                 pod_name=self.config.pod_name,
                 concurrency=concurrency,
-                legacy_congestion=legacy_congestion,
+                assigned_load=assigned_load,
+                modeled_processing_latency_ms=modeled_delay_ms,
+                legacy_congestion=assigned_load,
                 processing_latency_ms=elapsed_ms,
-                legacy_signal=signal,
+                signal_latency_ms=elapsed_ms,
+                state_estimate=state_estimate,
+                state_likelihood=likelihood,
+                legacy_signal=state_estimate,
                 legacy_likelihood=likelihood,
             )
         finally:
@@ -261,7 +270,7 @@ class ReplicaRuntime:
 
 def create_app(
     config: ReplicaConfig | None = None,
-    observation_source: ObservationSource | None = None,
+    observation_source: LatencySource | None = None,
 ):
     runtime = ReplicaRuntime(
         config or ReplicaConfig.from_env(),

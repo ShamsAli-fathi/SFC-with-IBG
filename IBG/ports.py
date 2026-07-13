@@ -4,15 +4,16 @@ from typing import Any, Mapping, Protocol, Sequence
 
 @dataclass(frozen=True)
 class Observation:
-    """One selected-replica observation returned to the learning core."""
+    """One selected-replica processing-latency observation."""
 
     stage: int
     flow_id: int
     replica_id: int
     congestion: int
-    signal: int
+    signal: float
     likelihood: tuple
     measured_latency_ms: float | None = None
+    estimated_state: int | None = None
 
     def __post_init__(self):
         if self.stage < 1:
@@ -21,8 +22,12 @@ class Observation:
             raise ValueError("replica_id must be at least 1")
         if self.congestion < 1:
             raise ValueError("congestion must be at least 1")
+        if self.signal <= 0:
+            raise ValueError("signal latency must be positive")
         if len(self.likelihood) != 4:
-            raise ValueError("likelihood must contain the four legacy IBG states")
+            raise ValueError("likelihood must contain the four IBG states")
+        if self.estimated_state is not None and self.estimated_state not in (1, 2, 3, 4):
+            raise ValueError("estimated_state must be one of 1, 2, 3, or 4")
 
 
 @dataclass
@@ -67,6 +72,11 @@ class ObservationCollector(Protocol):
         """Collect observations only from selected replicas."""
 
 
+class LinkLatencyCollector(Protocol):
+    def collect(self, traffic_telemetry: Any) -> Mapping[int, float]:
+        """Return per-flow transport/link latency in milliseconds."""
+
+
 class ResultSink(Protocol):
     def record_slot(self, result: Any) -> None:
         """Store or publish one completed slot result."""
@@ -79,3 +89,4 @@ class AdapterBundle:
     observation_collector: ObservationCollector
     result_sink: ResultSink
     slot_traffic_executor: SlotTrafficExecutor | None = None
+    link_latency_collector: LinkLatencyCollector | None = None

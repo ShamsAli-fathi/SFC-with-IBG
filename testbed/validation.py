@@ -10,12 +10,13 @@ from simulation_adapters import (
     SimulationReplicaDiscovery,
     SimulationTrafficExecutor,
 )
-from testbed.cnf_service import ReplicaConfig, SeededLegacyObservationSource
+from IBG.latency_model import estimate_state, latency_likelihood
+from testbed.cnf_service import ReplicaConfig, SeededLatencyObservationSource
 from testbed.kubernetes_adapters import build_replica_list
 
 
 class SeededSimulationObservationCollector:
-    """Apply the legacy model with request-stable Phase 6 samples."""
+    """Apply the Phase 1 latency model with request-stable samples."""
 
     def __init__(self, profiles, slot_id):
         self.slot_id = slot_id
@@ -35,18 +36,19 @@ class SeededSimulationObservationCollector:
                 congestion_delay_ms=profile.congestion_delay_ms,
                 observation_seed=profile.observation_seed,
             )
-            self.sources[(stage, replica_id)] = SeededLegacyObservationSource(config)
+            self.sources[(stage, replica_id)] = SeededLatencyObservationSource(config)
 
     def collect(self, stage, assignments, replica_list):
         congestion_by_replica = Counter(assignments.values())
         observations = []
         for flow_id, replica_id in assignments.items():
             congestion = congestion_by_replica[replica_id]
-            signal, likelihood = self.sources[(stage, replica_id)](
+            signal = self.sources[(stage, replica_id)](
                 congestion,
                 self.slot_id,
                 flow_id,
             )
+            likelihood = latency_likelihood(signal, congestion)
             observations.append(
                 Observation(
                     stage=stage,
@@ -55,7 +57,8 @@ class SeededSimulationObservationCollector:
                     congestion=congestion,
                     signal=signal,
                     likelihood=tuple(likelihood),
-                    measured_latency_ms=None,
+                    measured_latency_ms=signal,
+                    estimated_state=estimate_state(likelihood),
                 )
             )
         return observations
@@ -113,6 +116,7 @@ def summarize_slot(
             "signal": observation.signal,
             "likelihood": [float(value) for value in observation.likelihood],
             "measured_latency_ms": observation.measured_latency_ms,
+            "estimated_state": observation.estimated_state,
         }
         for stage_observations in result.observations_by_stage.values()
         for observation in stage_observations
@@ -134,7 +138,7 @@ def summarize_slot(
     return {
         "backend": backend,
         "solver": "br_eibg_exact",
-        "observation_mode": "seeded-final-assignment-congestion",
+        "observation_mode": "processing-latency-conditioned-on-assigned-load",
         "seed": seed,
         "slot_id": slot_id,
         "configuration": {
@@ -160,6 +164,23 @@ def summarize_slot(
             "jain_fairness": float(result.jain_fairness),
             "equilibrium": int(result.equilibrium),
             "elapsed_seconds": float(result.elapsed_seconds),
+            "processing_latency_ms_per_flow": {
+                str(flow_id): float(value)
+                for flow_id, value in result.processing_latency_ms_per_flow.items()
+            },
+            "link_latency_ms_per_flow": {
+                str(flow_id): float(value)
+                for flow_id, value in result.link_latency_ms_per_flow.items()
+            },
+            "end_to_end_latency_ms_per_flow": {
+                str(flow_id): float(value)
+                for flow_id, value in result.end_to_end_latency_ms_per_flow.items()
+            },
+            "realized_utility_total": float(result.realized_utility_total),
+            "realized_utility_per_flow": {
+                str(flow_id): float(value)
+                for flow_id, value in result.realized_utility_per_flow.items()
+            },
         },
         "beliefs": {
             f"{stage}:{replica_id}": [float(value) for value in replica.belief]
@@ -287,6 +308,33 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
         ),
         default=0.0,
     )
+    realized_per_flow_utility_max_abs = max(
+        (
+            abs(
+                simulation_metrics["realized_utility_per_flow"][flow_id]
+                - kubernetes_metrics["realized_utility_per_flow"][flow_id]
+            )
+            for flow_id in simulation_metrics["realized_utility_per_flow"]
+        ),
+        default=0.0,
+    )
+    latency_metric_max_abs = {
+        metric: max(
+            (
+                abs(
+                    simulation_metrics[metric][flow_id]
+                    - kubernetes_metrics[metric][flow_id]
+                )
+                for flow_id in simulation_metrics[metric]
+            ),
+            default=0.0,
+        )
+        for metric in (
+            "processing_latency_ms_per_flow",
+            "link_latency_ms_per_flow",
+            "end_to_end_latency_ms_per_flow",
+        )
+    }
 
     traffic = kubernetes.get("traffic") or {}
     traffic_hops = [
@@ -308,6 +356,14 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
             - kubernetes_metrics["aggregate_utility_total"]
         ),
         "per_flow_utility_max_abs": per_flow_utility_max_abs,
+        "realized_utility_abs": abs(
+            simulation_metrics["realized_utility_total"]
+            - kubernetes_metrics["realized_utility_total"]
+        ),
+        "realized_per_flow_utility_max_abs": (
+            realized_per_flow_utility_max_abs
+        ),
+        "latency_metric_max_abs": latency_metric_max_abs,
         "jain_fairness_abs": abs(
             simulation_metrics["jain_fairness"]
             - kubernetes_metrics["jain_fairness"]
@@ -338,6 +394,9 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
             belief_max_abs <= tolerance,
             exact_metrics["aggregate_utility_abs"] <= tolerance,
             exact_metrics["per_flow_utility_max_abs"] <= tolerance,
+            exact_metrics["realized_utility_abs"] <= tolerance,
+            exact_metrics["realized_per_flow_utility_max_abs"] <= tolerance,
+            max(latency_metric_max_abs.values(), default=0.0) <= tolerance,
             exact_metrics["jain_fairness_abs"] <= tolerance,
             exact_metrics["sla_match"],
             exact_metrics["equilibrium_match"],
