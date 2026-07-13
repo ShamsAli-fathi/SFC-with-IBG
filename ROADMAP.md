@@ -55,7 +55,7 @@ Gate: complete. The pure latency model, provisional ordered profiles, load-aware
 
 ## Phase 2: Calibrate latency and utility parameters
 
-Status: planned.
+Status: complete.
 
 Suggested Codex reasoning: `xhigh` — parameter fitting must produce interpretable state separation and congestion thresholds without tuning results opportunistically or confusing model capacity with measured datapath capacity.
 
@@ -68,7 +68,20 @@ Suggested Codex reasoning: `xhigh` — parameter fitting must produce interpreta
 - Explicitly decide what a negative utility means before treating it as flow rejection. The current exact one-of-M solver always assigns one replica per stage; calibration alone does not add skip/reject behavior. Until a separate admission policy is approved, require at least one feasible replica per stage in the supported operating range and report negative utility as infeasibility outside it.
 - Record the final parameter table, units, target bands, calibration evidence, seeds, and supported operating range in the handoffs and deterministic profiles.
 
-Gate: reproducible calibration produces ordered, interpretable state/latency curves and approved zero-crossing ranges, representative live measurements agree within declared tolerances, the supported operating range retains a feasible replica per stage, and negative-utility handling is documented without silently changing the one-of-M game.
+Gate: complete. `scripts/phase2_calibrate.py` records a 12-flow horizon, accepted state/policy tables, crossing bands, seeded Monte Carlo classification/SLA evidence, and sensitivity scenarios. A 5,000-sample-per-state/load run reached 94.42% minimum model classification accuracy and preserved crossings 3, 5, 7, and 11 under every declared sensitivity. Forty repeated localhost Uvicorn observations across all states passed correlation, signal, likelihood, positivity, timing-tolerance, and at-least-80%-per-point live classification checks. The supported load-3 range retains a positive state-4 option; negative utility does not reject a flow. Kubernetes Kernel-mode tolerances remain Phase 3 work.
+
+## Deferred conditional work: extend utility calibration to 50 loads
+
+Status: required before any study uses accepted utility values above 12 assigned flows per replica; not scheduled now.
+
+This is independent of any future heuristic approximation for the recursive solver. It evaluates the existing latency and utility formulas directly; it must not modify `BR_EIBG`, placement behavior, or claim exact-solver scalability at 50 total flows.
+
+- Set $N_{\mathrm{cal}}=50$ and select state parameters that preserve ordered behavior with target first-negative-load bands: state 1 at 3--6, state 2 at 12--20, state 3 at 25--35, and state 4 at 45--50.
+- Keep $Q_\theta(n)=\mu_\theta+a_\theta\max(0,n-1)+b_\theta\max(0,n-\kappa_\theta)^2+\epsilon_\theta$ and $u(q)=R-\alpha q-c$ unless separately authorized to change the model.
+- Generate expected utility tables for loads 1--50; rerun ordered-curve, zero-crossing, Monte Carlo, and sensitivity checks; then update code, tests, and handoffs.
+- Record that this horizon refers to one replica's assigned load. A future total-flow count may be higher or lower depending on route placement.
+
+Gate: reproducible 1--50 utility evidence meets the declared bands and documents the accepted parameters, while keeping solver/heuristic scope explicitly separate.
 
 ## Phase 3: Establish an explicit Kernel datapath baseline
 

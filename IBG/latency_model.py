@@ -8,16 +8,17 @@ import numpy as np
 
 DEFAULT_REWARD = 100.0
 DEFAULT_LATENCY_WEIGHT = 1.0
+DEFAULT_COST = 1.0
 DEFAULT_LINK_LATENCY_WEIGHT = 1.0
 DEFAULT_SLA_LATENCY_MS = 250.0
 
 
 @dataclass(frozen=True)
 class LatencyParameters:
-    """Provisional state-conditioned processing-latency parameters.
+    """State-conditioned processing-latency parameters.
 
     ``capacity_flows`` and ``load`` are both measured in concurrent-flow
-    units. The values remain provisional until Roadmap Phase 2 calibration.
+    units. Every latency-valued field is measured in milliseconds.
     """
 
     base_ms: float
@@ -37,20 +38,25 @@ class LatencyParameters:
             raise ValueError("jitter_ms must be positive")
 
 
-# Ordered from state 1 (bad) to state 4 (good). Phase 2 will calibrate
-# accepted experiment values; Phase 1 needs separated provisional curves.
-PROVISIONAL_STATE_PARAMETERS: Mapping[int, LatencyParameters] = {
+# Phase 2 accepted design calibration, ordered from state 1 (bad) to state 4
+# (good). These values characterize the synthetic FastAPI replica behavior;
+# they are not measured Kernel or DPDK/VPP capacity claims.
+CALIBRATED_STATE_PARAMETERS: Mapping[int, LatencyParameters] = {
     1: LatencyParameters(40.0, 8.0, 12.0, 1, 4.0),
     2: LatencyParameters(28.0, 6.0, 8.0, 2, 3.0),
     3: LatencyParameters(18.0, 4.0, 5.0, 3, 2.0),
     4: LatencyParameters(10.0, 2.0, 2.0, 5, 1.0),
 }
 
+# Transitional import alias for Phase 1 callers. Active code and new tests
+# should use CALIBRATED_STATE_PARAMETERS.
+PROVISIONAL_STATE_PARAMETERS = CALIBRATED_STATE_PARAMETERS
+
 
 def require_state_parameters(
     state: int,
     parameters_by_state: Mapping[int, LatencyParameters] = (
-        PROVISIONAL_STATE_PARAMETERS
+        CALIBRATED_STATE_PARAMETERS
     ),
 ) -> LatencyParameters:
     try:
@@ -120,7 +126,7 @@ def latency_likelihood(
     latency_ms: float,
     load: int,
     parameters_by_state: Mapping[int, LatencyParameters] = (
-        PROVISIONAL_STATE_PARAMETERS
+        CALIBRATED_STATE_PARAMETERS
     ),
 ) -> tuple[float, float, float, float]:
     """Return normalized state likelihoods ordered as states 1..4."""
@@ -152,7 +158,7 @@ def sample_belief_latency_ms(
     load: int,
     random_source=None,
     parameters_by_state: Mapping[int, LatencyParameters] = (
-        PROVISIONAL_STATE_PARAMETERS
+        CALIBRATED_STATE_PARAMETERS
     ),
 ) -> float:
     random_source = random_source or np.random
@@ -180,12 +186,18 @@ def expected_state_utility(
     *,
     reward: float = DEFAULT_REWARD,
     latency_weight: float = DEFAULT_LATENCY_WEIGHT,
-    cost: float = 1.0,
+    cost: float = DEFAULT_COST,
+    parameters_by_state: Mapping[int, LatencyParameters] = (
+        CALIBRATED_STATE_PARAMETERS
+    ),
 ) -> float:
     return (
         reward
         - latency_weight
-        * expected_latency_ms(load, require_state_parameters(state))
+        * expected_latency_ms(
+            load,
+            require_state_parameters(state, parameters_by_state),
+        )
         - cost
     )
 
@@ -196,7 +208,10 @@ def first_negative_utility_load(
     *,
     reward: float = DEFAULT_REWARD,
     latency_weight: float = DEFAULT_LATENCY_WEIGHT,
-    cost: float = 1.0,
+    cost: float = DEFAULT_COST,
+    parameters_by_state: Mapping[int, LatencyParameters] = (
+        CALIBRATED_STATE_PARAMETERS
+    ),
 ) -> int | None:
     if max_load < 1:
         raise ValueError("max_load must be at least 1")
@@ -207,6 +222,7 @@ def first_negative_utility_load(
             reward=reward,
             latency_weight=latency_weight,
             cost=cost,
+            parameters_by_state=parameters_by_state,
         ) < 0:
             return load
     return None

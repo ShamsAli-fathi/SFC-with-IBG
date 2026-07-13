@@ -61,7 +61,7 @@ For local validation, the replica and flow-generator processes share one non-roo
 
 ## Kubernetes integration contract
 
-The `ibg-testbed` namespace contains three headless Services and three five-replica StatefulSets for the supported Phase 6 target, plus a ClusterIP flow-generator Service, one flow-generator Deployment, and a one-shot controller Job. The StatefulSet ordinal is converted to the one-based solver replica ID. A shared ConfigMap supplies deterministic solver and runtime profiles, so the controller and HTTP replica agree on state, capacity, delay, cost, congestion penalty, processing delays, and observation seeds.
+The `ibg-testbed` namespace contains three headless Services and three five-replica StatefulSets for the supported Phase 6 target, plus a ClusterIP flow-generator Service, one flow-generator Deployment, and a one-shot controller Job. The StatefulSet ordinal is converted to the one-based solver replica ID. A shared ConfigMap supplies deterministic solver and runtime profiles, so the controller and HTTP replica agree on hidden state, stage cost, identity, and observation seed. The active processing-latency parameters come from the calibrated state table in `IBG/latency_model.py`; older capacity/delay/gamma fields remain compatibility metadata and are not active latency inputs.
 
 The controller uses its mounted ServiceAccount token and CA with the existing HTTP client to list only namespace-scoped replica Pods. Discovery accepts only Running, Ready Pods and requires the exact ordinal set expected for every stage. Narrow RBAC permits `get` and `list` on Pods but does not permit Secret reads or Pod creation. Pod DNS through each headless Service becomes the selected hop endpoint; node and Pod identities are retained as placement metadata.
 
@@ -117,7 +117,7 @@ $a_\theta$ models ordinary sharing cost and $b_\theta$ creates a sharper post-ca
 
 The continuous private observation is the selected hop's processing latency itself: $s=q$. The learning boundary computes $\ell_\theta=f(q\mid\theta,n,m)$ for every state, where $m$ is the known datapath mode, and passes the four likelihoods through the existing posterior/aggregation structure. A categorical signal may report $\arg\max_\theta\ell_\theta$, but it does not drive the update. Unselected replicas produce no raw latency observation. Assigned final load, actual admitted concurrency, modeled delay, measured server processing latency, client request latency, and link/transport latency remain separate correlated fields.
 
-The planned stage utility is linear in latency:
+The implemented stage utility is linear in latency:
 
 $$
 u_k(q)=R_k-\alpha_k q-c_k,\qquad \alpha_k>0.
@@ -135,21 +135,38 @@ Variable replica-pair link costs depend on consecutive stage choices and therefo
 
 Deterministic unit tests inject latency samples, and replay validation feeds the same captured samples to simulation and Kubernetes controller paths for exact mathematical comparison. Live Kubernetes timing is subject to scheduler and network variation, so its gate is distributional: state ordering, congestion response, likelihood calibration, and selected-only observations must hold; live elapsed values are not required to match an in-process clock sample exactly.
 
-## Planned Phase 2 calibration contract
+## Implemented Phase 2 calibration contract
 
-Phase 1 implements the formulas with provisional test parameters; Phase 2 selects experimental values reproducibly. For each state, define the first negative expected-utility load
+Phase 2 accepts a synthetic design calibration for the FastAPI test doubles. It is reproducible through `scripts/phase2_calibrate.py` and is not an empirical NIC, Kernel-path, DPDK, VPP, or line-rate capacity claim. For each state, the first negative expected-utility load remains
 
 $$
 n_\theta^*=\min\left\{n\ge1:\mathbb{E}\left[R_k-\alpha_kQ_\theta(n)-c_k\right]<0\right\}.
 $$
 
-Calibration declares a load horizon $N_{\mathrm{cal}}$ and target bands satisfying $n_1^*<n_2^*<n_3^*<n_4^*$. State 1 must cross zero early; state 4 must remain positive until a declared high-congestion range. The implied stage-latency zero-utility threshold is $(R_k-c_k)/\alpha_k$, which makes the relationship between latency curves and utility feasibility directly auditable.
+The accepted load horizon is $N_{\mathrm{cal}}=12$ concurrent flows. Inclusive crossing bands are state 1: 3--4, state 2: 4--6, state 3: 6--8, and state 4: 10--12. The accepted state table is:
 
-Latency parameters $(\mu_\theta,a_\theta,b_\theta,\kappa_\theta,\sigma_\theta)$ are calibrated from state semantics and measured service behavior before reward/cost parameters are selected. Utility parameters $(R_k,\alpha_k,c_k)$ express policy valuation, while $\alpha_{\mathrm{link}}$ and SLA threshold $\tau_i$ retain explicit compatible units. A reproducible grid or constrained search generates expected curves, seeded Monte Carlo bands, zero crossings, SLA probabilities, and sensitivity results; live cluster runs validate representative points rather than serving as undocumented trial-and-error.
+| State | $\mu$ ms | $a$ ms | $b$ ms | $\kappa$ flows | $\sigma$ ms | $n_\theta^*$ |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 (bad) | 40 | 8 | 12 | 1 | 4 | 3 |
+| 2 | 28 | 6 | 8 | 2 | 3 | 5 |
+| 3 | 18 | 4 | 5 | 3 | 2 | 7 |
+| 4 (good) | 10 | 2 | 2 | 5 | 1 | 11 |
 
-The calibration horizon may exceed three flows because utility kernels can be evaluated directly without invoking the exact game. This does not expand the supported equilibrium-validation size. The supported operating range must retain at least one non-negative replica option per stage unless an explicit admission-rejection extension is later approved.
+The accepted policy values are $R_k=100$ utility units per selected stage, $c_k=1$ utility unit, $\alpha_k=1$ utility unit/ms, $\alpha_{\mathrm{link}}=1$ utility unit/ms, and end-to-end SLA threshold $\tau=250$ ms. Thus the stage-latency zero-utility threshold is 99 ms. Expected low-load utilities for states 1 through 4 are 59, 71, 81, and 89; at the supported exact load of three flows they are -5, 51, 73, and 85. The game still assigns every flow, but a feasible state-4 option remains available in the supported profile set.
+
+The full seeded run uses 5,000 samples per state/load with seed 2050. It achieved 94.42% minimum categorical state accuracy over all loads 1--12, while the complete likelihood vector—not the category—continues to drive belief updates. Scaling all latency parameters or $\alpha_k$ by $\pm10\%$, and changing reward by $\pm5\%$, preserved ordered crossings inside the accepted bands. A three-stage, load-3, zero-transport illustrative SLA sweep produced violation probabilities 1.0, 0.0, 0.0, and 0.0 for homogeneous states 1 through 4; it is a model check, not a prediction for mixed live routes.
+
+Live localhost Uvicorn checks exercised each state at baseline and one post-capacity load, five repetitions per point. All 40 accepted observations preserved assigned-load correlation, positive modeled/measured latency, measured processing latency as the signal, and recomputed likelihood equality. The maximum accepted server sleep/scheduling overshoot was 6.78 ms under a declared tolerance of $\max(10\text{ ms}, 0.1Q_{\mathrm{modeled}})$; minimum per-point categorical accuracy was 80%, reflecting occasional first-request scheduling noise. This tolerance is a localhost conformance bound only. Phase 3 must establish Kubernetes Kernel-mode distributions and tolerances separately.
+
+The calibration horizon exceeds three flows only through direct utility evaluation and does not expand the supported equilibrium-validation size. `deploy/kubernetes/profiles.json` fixes all active stage costs at 1 and maps replicas to states; the calibrated state table supplies active latency parameters. Legacy profile capacity, delay, gamma, base-delay, and congestion-delay fields remain for trace/schema compatibility and must not be interpreted as the accepted latency law.
 
 Negative utility currently indicates an unattractive or infeasible assignment but does not reject a flow: the exact decoupled policy enforces one replica per stage. Adding skip/reject changes the action/admission model and must not be smuggled in as a parameter choice. Phase 2 must record the chosen interpretation and defer rejection behavior unless separately authorized and tested.
+
+## Deferred utility-horizon extension
+
+Before a future experiment or heuristic study uses accepted utility values for per-replica loads above 12, extend the synthetic calibration to $N_{\mathrm{cal}}=50$. This is direct latency/utility evaluation only: it must preserve the active $Q_\theta(n)$ law and $u(q)=R-\alpha q-c$, must not alter `BR_EIBG`, add heuristics, change placement, or claim 50-flow exact-solver scalability.
+
+The user-requested target crossing bands are state 1: 3--6, state 2: 12--20, state 3: 25--35, and state 4: 45--50. The extension must select/fix suitable state parameters, generate utility curves for loads 1--50, rerun seeded Monte Carlo and sensitivity checks, update deterministic tests and all handoffs, and state explicitly that the horizon is per-replica assigned load rather than total logical flows. It is a deferred calibration requirement, not part of the present Phase 3 Kernel-baseline work.
 
 ## Planned Kernel and DPDK/VPP expansion boundary
 
