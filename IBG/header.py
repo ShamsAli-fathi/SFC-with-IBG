@@ -19,6 +19,8 @@ from latency_model import (
 
 sys.setrecursionlimit(1000)
 
+GLOBAL_BELIEF_RETENTION = 0.8
+
 
 class Replica:
     def __init__(self, stage, replica, belief, delay, cost, gamma, state,
@@ -105,7 +107,7 @@ class Replica:
         return pdf_signal, like
 
     def aggregation(self, beliefs):
-        w = 0.6  # How important global belief is
+        w = GLOBAL_BELIEF_RETENTION
 
         for i in range(0, len(beliefs[0])):
             b_temp = [sublist[i] for sublist in beliefs]

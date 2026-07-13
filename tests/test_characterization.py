@@ -6,6 +6,7 @@ import pytest
 
 from claude import BREIBGPolicy, br_eibg_exact
 from header import (
+    GLOBAL_BELIEF_RETENTION,
     Replica,
     aggregate_utility_per_flow,
     aggregate_utility_total,
@@ -123,7 +124,8 @@ def test_belief_update_and_aggregation_are_characterized():
         replicas,
     )
 
-    assert selected.belief == [0.19, 0.23, 0.27, 0.31]
+    assert GLOBAL_BELIEF_RETENTION == 0.8
+    assert selected.belief == [0.22, 0.24, 0.26, 0.28]
     assert unselected.belief == [0.25, 0.25, 0.25, 0.25]
 
 

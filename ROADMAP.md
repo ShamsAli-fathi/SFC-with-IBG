@@ -96,7 +96,21 @@ Suggested Codex reasoning: `high` — the existing HTTP path is functionally val
 
 Gate: complete. `kernel` is explicit from adapters through traces, while the FastAPI replica request and all solver/learning inputs remain unchanged. A supported seed-2050 run reached equilibrium in nine iterations with 81 complete selected hops over loads 1--3. All hop modes, selected-only correlations, signals, likelihoods, and non-negative request-overhead fields were complete. Load-1 state means remained ordered, observed state-3/state-4 congestion groups were non-decreasing, categorical accuracy was 83.95%, and 98.77% of hops met the accepted $\max(10\text{ ms},10\%)$ server-overshoot tolerance. Replaying all nine slots produced zero mathematical drift in placements, grids, observations, beliefs, utility, SLA, fairness, and equilibrium. `scripts/phase3_kernel_baseline.py` reproduces the gate from the ignored JSONL trace.
 
-## Phase 4: Design and prove the DPDK/VPP integration boundary
+## Phase 4: Curate evidence and user-directed reports
+
+Status: planned.
+
+Suggested Codex reasoning: `high` — evidence must remain traceable to a reproducible run and must not silently turn synthetic testbed results into hardware or datapath claims.
+
+- Help the user gather, inspect, summarize, and explain existing simulation and `kernel` evidence, including structured JSONL traces, host-side CSV exports, validation summaries, calibration results, and focused test outcomes.
+- Preserve provenance for every reported figure or claim: record the source command/trace, seed, dimensions, image/mode, and whether a result is mathematical replay, modeled calibration, localhost FastAPI conformance, or live Kubernetes telemetry.
+- Keep claims bounded: the HTTP/Kubernetes route is the validated `kernel` baseline; do not imply DPDK/VPP, SR-IOV, hugepages, hardware offload, line-rate, or real CNF validation.
+- Treat report content as user-directed work. Do not read or edit `Tutorial.md` or `Report.md` unless the user explicitly requests that file in the current task. Do not rewrite generated evidence files; derive new summaries or figures only when requested.
+- Answer user questions and add narrowly scoped reproducibility aids when needed, without changing the decoupled solver, processing-latency observation/likelihood boundary, hard 250 ms SLA, or one-of-M no-rejection behavior.
+
+Gate: the requested evidence is traceable to committed code and identified run artifacts, its scope/units/limitations are clear, and no IBG or datapath behavior has changed.
+
+## Phase 5: Design and prove the DPDK/VPP integration boundary
 
 Status: planned.
 
@@ -109,7 +123,7 @@ Suggested Codex reasoning: `xhigh` — DPDK resource ownership plus VPP topology
 
 Gate: the host preflight and documented DPDK/VPP design demonstrate safe resource ownership and can forward only a selected, correlated route to its FastAPI endpoint, report a clear readiness/failure state, and preserve the Phase 1 latency-observation contract.
 
-## Phase 5: Implement the DPDK/VPP-backed FastAPI route
+## Phase 6: Implement the DPDK/VPP-backed FastAPI route
 
 Status: planned.
 
@@ -122,7 +136,7 @@ Suggested Codex reasoning: `xhigh` — this joins privileged DPDK resources, Kub
 
 Gate: a local and a small-cluster DPDK/VPP-mode run complete selected multi-hop routes, reject a DPDK/VPP or downstream failure cleanly, and retain complete per-hop correlation with no observations from idle replicas.
 
-## Phase 6: Validate Kernel and DPDK/VPP modes against the IBG baseline
+## Phase 7: Validate Kernel and DPDK/VPP modes against the IBG baseline
 
 Status: planned.
 
