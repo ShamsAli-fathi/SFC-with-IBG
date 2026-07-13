@@ -4,6 +4,7 @@ import random
 import numpy as np
 
 from ports import AdapterBundle, Observation
+from datapath import KERNEL_DATAPATH_MODE, SIMULATION_DATAPATH_MODE
 from runner import run_decoupled_slot
 from simulation_adapters import (
     NullResultSink,
@@ -64,6 +65,72 @@ class SeededSimulationObservationCollector:
         return observations
 
 
+class ReplayObservationCollector:
+    """Replay selected Kernel signals without changing the learning boundary."""
+
+    def __init__(self):
+        self.summary = None
+
+    def set_summary(self, summary):
+        self.summary = summary
+
+    def collect(self, stage, assignments, replica_list):
+        if self.summary is None:
+            raise RuntimeError("no Kernel summary is loaded for replay")
+        captured = {
+            (item["stage"], item["flow_id"]): item
+            for item in self.summary["observations"]
+        }
+        observations = []
+        for flow_id, replica_id in assignments.items():
+            try:
+                item = captured[(stage, flow_id)]
+            except KeyError as error:
+                raise RuntimeError(
+                    f"missing replay observation for flow {flow_id} stage {stage}"
+                ) from error
+            if item["replica_id"] != replica_id:
+                raise RuntimeError(
+                    f"replay placement drift for flow {flow_id} stage {stage}"
+                )
+            observations.append(
+                Observation(
+                    stage=stage,
+                    flow_id=flow_id,
+                    replica_id=replica_id,
+                    congestion=item["congestion"],
+                    signal=item["signal"],
+                    likelihood=tuple(item["likelihood"]),
+                    measured_latency_ms=item["measured_latency_ms"],
+                    estimated_state=item["estimated_state"],
+                )
+            )
+        return observations
+
+
+class ReplaySlotTrafficExecutor:
+    def execute_slot(self, slot_id, assignments_by_stage, discovered_by_stage):
+        return None
+
+
+class ReplayLinkLatencyCollector:
+    def __init__(self):
+        self.summary = None
+
+    def set_summary(self, summary):
+        self.summary = summary
+
+    def collect(self, traffic_telemetry):
+        if self.summary is None:
+            raise RuntimeError("no Kernel summary is loaded for replay")
+        return {
+            int(flow_id): float(value)
+            for flow_id, value in self.summary["metrics"][
+                "link_latency_ms_per_flow"
+            ].items()
+        }
+
+
 def make_seeded_simulation_adapters(profiles, slot_id):
     return AdapterBundle(
         replica_discovery=SimulationReplicaDiscovery(),
@@ -73,6 +140,7 @@ def make_seeded_simulation_adapters(profiles, slot_id):
             slot_id,
         ),
         result_sink=NullResultSink(),
+        datapath_mode=SIMULATION_DATAPATH_MODE,
     )
 
 
@@ -137,6 +205,7 @@ def summarize_slot(
 
     return {
         "backend": backend,
+        "datapath_mode": result.datapath_mode,
         "solver": "br_eibg_exact",
         "observation_mode": "processing-latency-conditioned-on-assigned-load",
         "seed": seed,
@@ -223,6 +292,97 @@ def run_controlled_simulation(
         num_of_replicas=num_of_replicas,
         num_of_flows=num_of_flows,
     )
+
+
+def replay_kernel_trace(events, profiles):
+    started = [event for event in events if event.get("event") == "run_started"]
+    iterations = [
+        event for event in events if event.get("event") == "iteration_completed"
+    ]
+    if len(started) != 1 or not iterations:
+        raise ValueError("expected one Kernel run with completed iterations")
+    metadata = started[0]
+    configuration = metadata["configuration"]
+    seed = metadata["seed"]
+    random.seed(seed)
+    np.random.seed(seed)
+    replica_list = build_replica_list(
+        profiles,
+        configuration["stages"],
+        configuration["replicas_per_stage"],
+    )
+    observation_collector = ReplayObservationCollector()
+    link_collector = ReplayLinkLatencyCollector()
+    adapters = AdapterBundle(
+        replica_discovery=SimulationReplicaDiscovery(),
+        traffic_executor=SimulationTrafficExecutor(),
+        observation_collector=observation_collector,
+        result_sink=NullResultSink(),
+        slot_traffic_executor=ReplaySlotTrafficExecutor(),
+        link_latency_collector=link_collector,
+        datapath_mode=SIMULATION_DATAPATH_MODE,
+    )
+    flow_list = list(range(1, configuration["flows"] + 1))
+    comparisons = []
+    for event in iterations:
+        captured = event["summary"]
+        observation_collector.set_summary(captured)
+        link_collector.set_summary(captured)
+        result = run_decoupled_slot(
+            flow_list,
+            replica_list,
+            num_of_stages=configuration["stages"],
+            num_of_replicas=configuration["replicas_per_stage"],
+            adapters=adapters,
+            slot_id=event["slot_id"],
+        )
+        replayed = summarize_slot(
+            result,
+            replica_list,
+            backend="simulation",
+            seed=seed,
+            slot_id=event["slot_id"],
+            num_of_stages=configuration["stages"],
+            num_of_replicas=configuration["replicas_per_stage"],
+            num_of_flows=configuration["flows"],
+        )
+        comparisons.append(compare_backend_summaries(replayed, captured))
+    return {
+        "gate_passed": all(item["gate_passed"] for item in comparisons),
+        "iterations": len(comparisons),
+        "slots": [
+            {
+                "slot_id": item["slot_id"],
+                "gate_passed": item["gate_passed"],
+                "placement_matches": item["placements"]["matches"],
+                "observation_matches": item["observations"]["signal_matches"],
+                "belief_max_abs": item["belief_max_abs"],
+                "aggregate_utility_abs": item["metrics"][
+                    "aggregate_utility_abs"
+                ],
+            }
+            for item in comparisons
+        ],
+        "max_belief_abs": max(
+            (item["belief_max_abs"] for item in comparisons),
+            default=0.0,
+        ),
+        "max_mathematical_abs": max(
+            (
+                max(
+                    [item["belief_max_abs"]]
+                    + list(item["utility_grid_max_abs_by_stage"].values())
+                    + [
+                        item["observations"]["likelihood_max_abs"],
+                        item["metrics"]["aggregate_utility_abs"],
+                        item["metrics"]["realized_utility_abs"],
+                    ]
+                )
+                for item in comparisons
+            ),
+            default=0.0,
+        ),
+    }
 
 
 def _indexed(items):
@@ -342,6 +502,36 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
         for flow in traffic.get("flows", [])
         for hop in flow.get("hops", [])
     ]
+    traffic_keys = {
+        (hop.get("stage"), hop.get("flow_id")) for hop in traffic_hops
+    }
+    selected_keys = set(kubernetes_placements)
+    observation_selected_keys = set(kubernetes_observations)
+    mode_contract = {
+        "simulation": simulation.get("datapath_mode") == SIMULATION_DATAPATH_MODE,
+        "kubernetes": kubernetes.get("datapath_mode") == KERNEL_DATAPATH_MODE,
+        "slot_traffic": traffic.get("datapath_mode") == KERNEL_DATAPATH_MODE,
+        "all_hops": all(
+            hop.get("datapath_mode") == KERNEL_DATAPATH_MODE
+            for hop in traffic_hops
+        ),
+    }
+    selected_only = (
+        selected_keys == observation_selected_keys == traffic_keys
+    )
+    transport_telemetry_complete = all(
+        float(hop.get("transport_overhead_ms", -1.0)) >= 0
+        and abs(
+            float(hop["transport_overhead_ms"])
+            - max(
+                0.0,
+                float(hop["request_latency_ms"])
+                - float(hop["processing_latency_ms"]),
+            )
+        )
+        <= tolerance
+        for hop in traffic_hops
+    )
     metadata_complete = all(
         placement.get("pod_name")
         and placement.get("node_name")
@@ -385,6 +575,7 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
         [
             simulation["configuration"] == kubernetes["configuration"],
             simulation["solver"] == kubernetes["solver"] == "br_eibg_exact",
+            all(mode_contract.values()),
             placement_matches == len(placement_keys) == expected_hops,
             max(utility_max_by_stage.values(), default=0.0) <= tolerance,
             observation_replica_matches == len(observation_keys) == expected_hops,
@@ -401,6 +592,8 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
             exact_metrics["sla_match"],
             exact_metrics["equilibrium_match"],
             len(traffic_hops) == expected_hops,
+            selected_only,
+            transport_telemetry_complete,
             metadata_complete,
         ]
     )
@@ -429,7 +622,11 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
             "kubernetes_seconds": kubernetes_metrics["elapsed_seconds"],
         },
         "kubernetes_telemetry": {
+            "datapath_mode": kubernetes.get("datapath_mode"),
+            "mode_contract": mode_contract,
             "complete_hops": len(traffic_hops),
+            "selected_only": selected_only,
+            "transport_telemetry_complete": transport_telemetry_complete,
             "metadata_complete": metadata_complete,
             "max_admitted_concurrency": max(
                 (hop["concurrency"] for hop in traffic_hops),

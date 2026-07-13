@@ -4,6 +4,7 @@ import csv
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import sys
@@ -17,7 +18,8 @@ from testbed.kubernetes_resources import build_runtime_resources
 from testbed.profiles import expand_profiles, load_profiles
 
 
-IMAGE = "ibg-testbed:phase6"
+IMAGE = "ibg-testbed:kernel-phase3"
+DATAPATH_MODE = "kernel"
 NAMESPACE = "ibg-testbed"
 JOB_NAME = "ibg-experiment"
 CSV_OUTPUT_DIR = ROOT / "figures"
@@ -228,6 +230,7 @@ def start_experiment_job(
     num_of_stages,
     num_of_replicas,
     num_of_flows,
+    environment_metadata=None,
 ):
     rendered = run(
         [
@@ -251,6 +254,13 @@ def start_experiment_job(
     set_env(container, "NUM_STAGES", num_of_stages)
     set_env(container, "EXPECTED_REPLICAS", num_of_replicas)
     set_env(container, "NUM_FLOWS", num_of_flows)
+    set_env(container, "DATAPATH_MODE", DATAPATH_MODE)
+    set_env(container, "RUNTIME_IMAGE", IMAGE)
+    set_env(
+        container,
+        "EXPERIMENT_ENVIRONMENT",
+        json.dumps(environment_metadata or {}, sort_keys=True),
+    )
 
     run(
         [
@@ -274,6 +284,25 @@ def start_experiment_job(
 
 def belief_text(values):
     return "[" + ", ".join(f"{value:.3f}" for value in values) + "]"
+
+
+def collect_environment_metadata(context):
+    kubernetes = json.loads(
+        run(
+            ["kubectl", "--context", context, "version", "--output", "json"],
+            capture=True,
+        ).stdout
+    )
+    return {
+        "host_platform": platform.platform(),
+        "docker_server": run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            capture=True,
+        ).stdout.strip(),
+        "kind": run(["kind", "version"], capture=True).stdout.strip(),
+        "kubernetes_server": kubernetes["serverVersion"]["gitVersion"],
+        "cluster_context": context,
+    }
 
 
 def print_replicas(title, replicas):
@@ -322,7 +351,8 @@ def render_event(event):
         config = event["configuration"]
         print(
             "\nIBG experiment started: "
-            f"seed={event['seed']}, stages={config['stages']}, "
+            f"mode={event['datapath_mode']}, seed={event['seed']}, "
+            f"stages={config['stages']}, "
             f"replicas/stage={config['replicas_per_stage']}, "
             f"flows={config['flows']}, max iterations={event['max_iterations']}"
         )
@@ -691,6 +721,7 @@ def main():
         num_of_stages=args.num_of_stages,
         num_of_replicas=args.num_of_replicas,
         num_of_flows=args.num_of_flows,
+        environment_metadata=collect_environment_metadata(context),
     )
 
     args.trace_dir.mkdir(parents=True, exist_ok=True)

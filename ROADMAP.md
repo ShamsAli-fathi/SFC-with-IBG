@@ -85,7 +85,7 @@ Gate: reproducible 1--50 utility evidence meets the declared bands and documents
 
 ## Phase 3: Establish an explicit Kernel datapath baseline
 
-Status: planned.
+Status: complete.
 
 Suggested Codex reasoning: `high` — the existing HTTP path is functionally valid, but it needs a stable mode contract and evidence suitable for a later comparison.
 
@@ -94,7 +94,7 @@ Suggested Codex reasoning: `high` — the existing HTTP path is functionally val
 - Verify that all traffic remains limited to controller-selected routes and that only the approved selected-hop processing latency is converted into a belief observation.
 - Capture reproducible Kernel baseline runs at the supported configuration, including host, image, Kubernetes, and mode configuration needed for later comparison.
 
-Gate: replayed Kernel-mode signals reproduce simulation placements, beliefs, utilities, SLA, fairness, and equilibrium within the calibrated Phase 2 tolerances, while live runs produce complete correlated Kernel telemetry and pass the revised statistical latency checks.
+Gate: complete. `kernel` is explicit from adapters through traces, while the FastAPI replica request and all solver/learning inputs remain unchanged. A supported seed-2050 run reached equilibrium in nine iterations with 81 complete selected hops over loads 1--3. All hop modes, selected-only correlations, signals, likelihoods, and non-negative request-overhead fields were complete. Load-1 state means remained ordered, observed state-3/state-4 congestion groups were non-decreasing, categorical accuracy was 83.95%, and 98.77% of hops met the accepted $\max(10\text{ ms},10\%)$ server-overshoot tolerance. Replaying all nine slots produced zero mathematical drift in placements, grids, observations, beliefs, utility, SLA, fairness, and equilibrium. `scripts/phase3_kernel_baseline.py` reproduces the gate from the ignored JSONL trace.
 
 ## Phase 4: Design and prove the DPDK/VPP integration boundary
 

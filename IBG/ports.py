@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
+from datapath import SIMULATION_DATAPATH_MODE, require_datapath_mode
+
 
 @dataclass(frozen=True)
 class Observation:
@@ -90,3 +92,11 @@ class AdapterBundle:
     result_sink: ResultSink
     slot_traffic_executor: SlotTrafficExecutor | None = None
     link_latency_collector: LinkLatencyCollector | None = None
+    datapath_mode: str = SIMULATION_DATAPATH_MODE
+
+    def __post_init__(self):
+        object.__setattr__(
+            self,
+            "datapath_mode",
+            require_datapath_mode(self.datapath_mode),
+        )

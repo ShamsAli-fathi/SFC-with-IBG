@@ -22,6 +22,7 @@ from latency_model import (
 
 @dataclass
 class SlotResult:
+    datapath_mode: str
     embed_dict: dict
     flow_order_by_stage: dict
     assignments_by_stage: dict
@@ -186,6 +187,7 @@ def run_decoupled_slot(
     equilibrium = is_equilibrium(replica_list, previous_beliefs)
 
     result = SlotResult(
+        datapath_mode=adapters.datapath_mode,
         embed_dict=embed_dict,
         flow_order_by_stage=flow_order_by_stage,
         assignments_by_stage=assignments_by_stage,

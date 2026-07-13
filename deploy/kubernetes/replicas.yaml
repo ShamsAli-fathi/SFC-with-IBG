@@ -46,7 +46,7 @@ spec:
                     ibg.stage: "1"
       containers:
         - name: replica
-          image: ibg-testbed:phase6
+          image: ibg-testbed:kernel-phase3
           imagePullPolicy: Never
           ports:
             - name: http
@@ -136,7 +136,7 @@ spec:
                     ibg.stage: "2"
       containers:
         - name: replica
-          image: ibg-testbed:phase6
+          image: ibg-testbed:kernel-phase3
           imagePullPolicy: Never
           ports:
             - name: http
@@ -226,7 +226,7 @@ spec:
                     ibg.stage: "3"
       containers:
         - name: replica
-          image: ibg-testbed:phase6
+          image: ibg-testbed:kernel-phase3
           imagePullPolicy: Never
           ports:
             - name: http

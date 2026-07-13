@@ -1,5 +1,6 @@
 from collections import Counter
 
+from datapath import SIMULATION_DATAPATH_MODE
 from header import embedding
 from ports import AdapterBundle, Observation, StageExecution
 
@@ -71,4 +72,5 @@ def make_simulation_adapters(result_sink=None):
         traffic_executor=SimulationTrafficExecutor(),
         observation_collector=SimulationObservationCollector(),
         result_sink=result_sink or NullResultSink(),
+        datapath_mode=SIMULATION_DATAPATH_MODE,
     )

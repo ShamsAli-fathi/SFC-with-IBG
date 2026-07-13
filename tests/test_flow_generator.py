@@ -96,6 +96,7 @@ def test_complete_routes_run_flows_concurrently_and_hops_sequentially():
     network = RecordingReplicaNetwork()
     generator = FlowGenerator(transport=MockTransport(network))
     request = RunSlotRequest(
+        datapath_mode="kernel",
         slot_id=8,
         routes=[route(flow_id) for flow_id in (1, 2, 3)],
     )
@@ -103,6 +104,7 @@ def test_complete_routes_run_flows_concurrently_and_hops_sequentially():
     response = asyncio.run(generator.run_slot(request))
 
     assert response.slot_id == 8
+    assert response.datapath_mode == "kernel"
     assert [flow.flow_id for flow in response.flows] == [1, 2, 3]
     assert all([hop.stage for hop in flow.hops] == [1, 2, 3] for flow in response.flows)
     assert network.peak["stage-1-1"] == 3
@@ -125,6 +127,7 @@ def test_only_selected_replica_endpoints_receive_requests():
     network = RecordingReplicaNetwork()
     generator = FlowGenerator(transport=MockTransport(network))
     request = RunSlotRequest(
+        datapath_mode="kernel",
         slot_id=1,
         routes=[
             route(1, {1: 1, 2: 2, 3: 1}),
@@ -148,13 +151,23 @@ def test_only_selected_replica_endpoints_receive_requests():
 def test_hop_telemetry_preserves_correlation_and_latency_fields():
     generator = FlowGenerator(transport=MockTransport(RecordingReplicaNetwork()))
     response = asyncio.run(
-        generator.run_slot(RunSlotRequest(slot_id=4, routes=[route(9)]))
+        generator.run_slot(
+            RunSlotRequest(
+                datapath_mode="kernel",
+                slot_id=4,
+                routes=[route(9)],
+            )
+        )
     )
 
     for hop in response.flows[0].hops:
+        assert hop.datapath_mode == "kernel"
         assert hop.slot_id == 4
         assert hop.flow_id == 9
         assert hop.request_latency_ms >= hop.processing_latency_ms
+        assert hop.transport_overhead_ms == pytest.approx(
+            hop.request_latency_ms - hop.processing_latency_ms
+        )
         assert hop.assigned_load == 1
         assert hop.signal_latency_ms == hop.processing_latency_ms
         assert hop.state_estimate == 3
@@ -168,12 +181,17 @@ def test_hop_telemetry_preserves_correlation_and_latency_fields():
     "payload, message",
     [
         (
-            {"slot_id": 1, "routes": [route(1), route(1)]},
+            {
+                "datapath_mode": "kernel",
+                "slot_id": 1,
+                "routes": [route(1), route(1)],
+            },
             "flow_id values must be unique",
         ),
         (
             {
                 "slot_id": 1,
+                "datapath_mode": "kernel",
                 "routes": [
                     {
                         "flow_id": 1,
@@ -186,6 +204,7 @@ def test_hop_telemetry_preserves_correlation_and_latency_fields():
         (
             {
                 "slot_id": 1,
+                "datapath_mode": "kernel",
                 "routes": [route(1, stages=(1, 2)), route(2)],
             },
             "same stages",
@@ -199,7 +218,11 @@ def test_route_contract_rejects_ambiguous_input(payload, message):
 
 def test_route_contract_accepts_configurable_stage_count():
     request = RunSlotRequest.model_validate(
-        {"slot_id": 1, "routes": [route(1, stages=(1, 2, 3, 4))]}
+        {
+            "datapath_mode": "kernel",
+            "slot_id": 1,
+            "routes": [route(1, stages=(1, 2, 3, 4))],
+        }
     )
 
     assert [hop.stage for hop in request.routes[0].hops] == [1, 2, 3, 4]
@@ -222,7 +245,11 @@ def test_downstream_failures_are_correlated_and_reported(network, message):
     with pytest.raises(FlowExecutionError, match=message):
         asyncio.run(
             generator.run_slot(
-                RunSlotRequest(slot_id=1, routes=[route(1)])
+                RunSlotRequest(
+                    datapath_mode="kernel",
+                    slot_id=1,
+                    routes=[route(1)],
+                )
             )
         )
     assert all(active == 0 for active in network.active.values())
@@ -244,14 +271,18 @@ def test_http_service_exposes_health_and_maps_downstream_failure_to_502():
             health = await client.get("/health")
             failed = await client.post(
                 "/run-slot",
-                json={"slot_id": 1, "routes": [route(1)]},
+                json={
+                    "datapath_mode": "kernel",
+                    "slot_id": 1,
+                    "routes": [route(1)],
+                },
             )
             return health, failed
 
     health, failed = asyncio.run(scenario())
 
     assert health.status_code == 200
-    assert health.json() == {"status": "ok"}
+    assert health.json() == {"status": "ok", "datapath_mode": "kernel"}
     assert failed.status_code == 502
     assert "stage 2 request failed" in failed.json()["detail"]
 
@@ -259,3 +290,14 @@ def test_http_service_exposes_health_and_maps_downstream_failure_to_502():
 def test_flow_generator_config_rejects_nonpositive_timeout():
     with pytest.raises(ValueError, match="request_timeout_seconds"):
         FlowGeneratorConfig(request_timeout_seconds=0)
+
+
+def test_flow_generator_rejects_unimplemented_datapath_mode():
+    with pytest.raises(ValueError, match="unsupported datapath mode"):
+        RunSlotRequest.model_validate(
+            {
+                "datapath_mode": "dpdk-vpp",
+                "slot_id": 1,
+                "routes": [route(1)],
+            }
+        )

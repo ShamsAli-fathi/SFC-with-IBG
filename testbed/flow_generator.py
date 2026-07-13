@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 import httpx
 from pydantic import AnyHttpUrl, BaseModel, Field, ValidationError, model_validator
 
+from IBG.datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
 from testbed.cnf_service import ProcessResponse
 
 
@@ -33,11 +34,16 @@ class FlowRoute(BaseModel):
 
 
 class RunSlotRequest(BaseModel):
+    datapath_mode: str
     slot_id: int = Field(ge=1)
     routes: list[FlowRoute] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_unique_flows(self):
+        self.datapath_mode = require_datapath_mode(
+            self.datapath_mode,
+            runtime=True,
+        )
         flow_ids = [route.flow_id for route in self.routes]
         if len(flow_ids) != len(set(flow_ids)):
             raise ValueError("flow_id values must be unique within a slot")
@@ -51,9 +57,11 @@ class RunSlotRequest(BaseModel):
 
 class GeneratorHealthResponse(BaseModel):
     status: str
+    datapath_mode: str
 
 
 class HopTelemetry(BaseModel):
+    datapath_mode: str
     slot_id: int
     flow_id: int
     stage: int
@@ -66,6 +74,7 @@ class HopTelemetry(BaseModel):
     legacy_congestion: int
     processing_latency_ms: float
     request_latency_ms: float
+    transport_overhead_ms: float = Field(ge=0)
     signal_latency_ms: float
     state_estimate: int
     state_likelihood: tuple[float, float, float, float]
@@ -79,6 +88,7 @@ class FlowTelemetry(BaseModel):
 
 
 class RunSlotResponse(BaseModel):
+    datapath_mode: str
     slot_id: int
     elapsed_ms: float
     flows: list[FlowTelemetry]
@@ -87,17 +97,27 @@ class RunSlotResponse(BaseModel):
 @dataclass(frozen=True)
 class FlowGeneratorConfig:
     request_timeout_seconds: float = 10.0
+    datapath_mode: str = KERNEL_DATAPATH_MODE
 
     def __post_init__(self):
         if self.request_timeout_seconds <= 0:
             raise ValueError("request_timeout_seconds must be positive")
+        object.__setattr__(
+            self,
+            "datapath_mode",
+            require_datapath_mode(self.datapath_mode, runtime=True),
+        )
 
     @classmethod
     def from_env(cls):
         return cls(
             request_timeout_seconds=float(
                 os.environ.get("REQUEST_TIMEOUT_SECONDS", "10")
-            )
+            ),
+            datapath_mode=os.environ.get(
+                "DATAPATH_MODE",
+                KERNEL_DATAPATH_MODE,
+            ),
         )
 
 
@@ -115,6 +135,12 @@ class FlowGenerator:
         self.transport = transport
 
     async def run_slot(self, request: RunSlotRequest):
+        if request.datapath_mode != self.config.datapath_mode:
+            raise FlowExecutionError(
+                "requested datapath mode "
+                f"{request.datapath_mode!r} does not match flow-generator mode "
+                f"{self.config.datapath_mode!r}"
+            )
         started_at = time.perf_counter()
         planned_congestion = Counter(
             (hop.stage, hop.replica_id)
@@ -143,6 +169,7 @@ class FlowGenerator:
             raise FlowExecutionError(str(failures[0])) from failures[0]
 
         return RunSlotResponse(
+            datapath_mode=self.config.datapath_mode,
             slot_id=request.slot_id,
             elapsed_ms=(time.perf_counter() - started_at) * 1000,
             flows=outcomes,
@@ -215,7 +242,9 @@ class FlowGenerator:
                 f"{replica_response.assigned_load}"
             )
 
+        request_latency_ms = (time.perf_counter() - started_at) * 1000
         return HopTelemetry(
+            datapath_mode=self.config.datapath_mode,
             slot_id=slot_id,
             flow_id=flow_id,
             stage=replica_response.stage,
@@ -229,7 +258,11 @@ class FlowGenerator:
             ),
             legacy_congestion=replica_response.legacy_congestion,
             processing_latency_ms=replica_response.processing_latency_ms,
-            request_latency_ms=(time.perf_counter() - started_at) * 1000,
+            request_latency_ms=request_latency_ms,
+            transport_overhead_ms=max(
+                0.0,
+                request_latency_ms - replica_response.processing_latency_ms,
+            ),
             signal_latency_ms=replica_response.signal_latency_ms,
             state_estimate=replica_response.state_estimate,
             state_likelihood=replica_response.state_likelihood,
@@ -245,7 +278,10 @@ def create_app(generator: FlowGenerator | None = None):
 
     @application.get("/health", response_model=GeneratorHealthResponse)
     async def health():
-        return GeneratorHealthResponse(status="ok")
+        return GeneratorHealthResponse(
+            status="ok",
+            datapath_mode=runtime.config.datapath_mode,
+        )
 
     @application.post("/run-slot", response_model=RunSlotResponse)
     async def run_slot(request: RunSlotRequest):

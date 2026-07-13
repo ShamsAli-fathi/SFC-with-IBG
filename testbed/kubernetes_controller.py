@@ -6,6 +6,7 @@ import time
 import httpx
 import numpy as np
 
+from datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
 from runner import run_decoupled_slot
 from testbed.experiment import run_until_equilibrium
 from testbed.kubernetes_adapters import (
@@ -19,14 +20,23 @@ from testbed.profiles import load_profiles
 from testbed.validation import summarize_slot
 
 
-def wait_for_flow_generator(url, timeout_seconds=120.0):
+def wait_for_flow_generator(
+    url,
+    datapath_mode=KERNEL_DATAPATH_MODE,
+    timeout_seconds=120.0,
+):
+    expected_mode = require_datapath_mode(datapath_mode, runtime=True)
     deadline = time.monotonic() + timeout_seconds
     last_error = None
     while time.monotonic() < deadline:
         try:
             response = httpx.get(f"{url.rstrip('/')}/health", timeout=5.0)
             response.raise_for_status()
-            if response.json().get("status") == "ok":
+            payload = response.json()
+            if (
+                payload.get("status") == "ok"
+                and payload.get("datapath_mode") == expected_mode
+            ):
                 return
         except (httpx.HTTPError, ValueError) as error:
             last_error = error
@@ -36,6 +46,10 @@ def wait_for_flow_generator(url, timeout_seconds=120.0):
 
 def main():
     namespace = os.environ.get("POD_NAMESPACE", "ibg-testbed")
+    datapath_mode = require_datapath_mode(
+        os.environ.get("DATAPATH_MODE", KERNEL_DATAPATH_MODE),
+        runtime=True,
+    )
     num_of_stages = int(os.environ.get("NUM_STAGES", "3"))
     num_of_replicas = int(os.environ.get("EXPECTED_REPLICAS", "2"))
     num_of_flows = int(os.environ.get("NUM_FLOWS", "3"))
@@ -69,11 +83,14 @@ def main():
         "FLOW_GENERATOR_URL",
         "http://flow-generator:8080",
     )
+    environment = json.loads(os.environ.get("EXPERIMENT_ENVIRONMENT", "{}"))
+    if not isinstance(environment, dict):
+        raise ValueError("EXPERIMENT_ENVIRONMENT must contain a JSON object")
 
     profiles = load_profiles(profile_path)
     api = KubernetesApi(namespace)
     discovery = KubernetesReplicaDiscovery(api, namespace, num_of_replicas)
-    wait_for_flow_generator(flow_generator_url)
+    wait_for_flow_generator(flow_generator_url, datapath_mode)
 
     for offset, seed in enumerate(seeds):
         run_first_slot_id = first_slot_id + (offset * max_iterations)
@@ -89,7 +106,11 @@ def main():
             replica_list,
             num_of_stages,
         )
-        adapters = make_kubernetes_adapters(discovery, flow_generator_url)
+        adapters = make_kubernetes_adapters(
+            discovery,
+            flow_generator_url,
+            datapath_mode=datapath_mode,
+        )
         flow_list = list(range(1, num_of_flows + 1))
 
         def run_slot(slot_id):
@@ -136,6 +157,12 @@ def main():
             emit=emit,
             run_metadata={
                 "backend": "kubernetes",
+                "datapath_mode": datapath_mode,
+                "runtime_image": os.environ.get(
+                    "RUNTIME_IMAGE",
+                    "unknown",
+                ),
+                "environment": environment,
                 "seed": seed,
                 "configuration": {
                     "stages": num_of_stages,

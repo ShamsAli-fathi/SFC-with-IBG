@@ -179,6 +179,7 @@ def test_experiment_job_receives_requested_dimensions(monkeypatch):
         num_of_stages=4,
         num_of_replicas=6,
         num_of_flows=5,
+        environment_metadata={"kubernetes_server": "v1.35.0"},
     )
 
     container = applied["spec"]["template"]["spec"]["containers"][0]
@@ -186,6 +187,11 @@ def test_experiment_job_receives_requested_dimensions(monkeypatch):
     assert environment["NUM_STAGES"] == "4"
     assert environment["EXPECTED_REPLICAS"] == "6"
     assert environment["NUM_FLOWS"] == "5"
+    assert environment["DATAPATH_MODE"] == "kernel"
+    assert environment["RUNTIME_IMAGE"] == launcher.IMAGE
+    assert json.loads(environment["EXPERIMENT_ENVIRONMENT"]) == {
+        "kubernetes_server": "v1.35.0"
+    }
 
 
 def test_stale_stage_cleanup_removes_only_stages_above_request(monkeypatch):
@@ -215,6 +221,7 @@ def test_render_event_prints_iteration_details(capsys):
     render_event(
         {
             "event": "iteration_completed",
+            "datapath_mode": "kernel",
             "iteration": 2,
             "slot_id": 2,
             "max_belief_delta": 0.02,

@@ -30,7 +30,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: flow-generator
-          image: ibg-testbed:phase6
+          image: ibg-testbed:kernel-phase3
           imagePullPolicy: Never
           command:
             - python3
@@ -41,6 +41,9 @@ spec:
             - 0.0.0.0
             - --port
             - "8080"
+          env:
+            - name: DATAPATH_MODE
+              value: kernel
           ports:
             - name: http
               containerPort: 8080

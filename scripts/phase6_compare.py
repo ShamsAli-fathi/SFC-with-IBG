@@ -96,7 +96,7 @@ def build_report(kubernetes_results, profiles):
         },
         "discrepancy_explanation": {
             "mathematical_fields": (
-                "placements, sampled utility grids, legacy observations, beliefs, "
+                "placements, sampled utility grids, processing-latency observations, beliefs, "
                 "SLA, fairness, and utility must match within tolerance"
             ),
             "timing": (
@@ -104,7 +104,8 @@ def build_report(kubernetes_results, profiles):
                 "telemetry overhead and is expected to exceed in-process simulation"
             ),
             "runtime_metadata": (
-                "Pod, node, endpoint, admitted concurrency, and measured latency "
+                "Kernel mode, Pod, node, endpoint, admitted concurrency, measured "
+                "latency, and non-negative transport overhead "
                 "exist only in the Kubernetes backend"
             ),
         },

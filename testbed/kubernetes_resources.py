@@ -144,7 +144,7 @@ def build_runtime_resources(
     num_of_stages,
     num_of_replicas,
     namespace="ibg-testbed",
-    image="ibg-testbed:phase6",
+    image="ibg-testbed:kernel-phase3",
 ):
     document = profiles_document(profiles)
     profile_json = json.dumps(document, sort_keys=True, separators=(",", ":"))

@@ -39,6 +39,7 @@ def make_replicas():
 
 
 def assert_slot_results_match(left, right):
+    assert left.datapath_mode == right.datapath_mode
     assert left.embed_dict == right.embed_dict
     assert left.assignments_by_stage == right.assignments_by_stage
     assert left.aggregate_utility_total == right.aggregate_utility_total

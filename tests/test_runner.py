@@ -49,6 +49,7 @@ def test_seeded_latency_slot_is_repeatable():
     second = run_decoupled_slot(second_flows, second_replicas, 3, 2)
 
     assert first_flows == second_flows
+    assert first.datapath_mode == second.datapath_mode == "simulation"
     assert first.embed_dict == second.embed_dict
     assert first.assignments_by_stage == second.assignments_by_stage
     assert first.aggregate_utility_total == second.aggregate_utility_total

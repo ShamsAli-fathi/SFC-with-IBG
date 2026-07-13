@@ -177,6 +177,7 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
                     "flow_id": route["flow_id"],
                     "hops": [
                         {
+                            "datapath_mode": "kernel",
                             "slot_id": payload["slot_id"],
                             "flow_id": route["flow_id"],
                             "stage": hop["stage"],
@@ -193,6 +194,7 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
                                 ],
                                 "processing_latency_ms": 40.0,
                             "request_latency_ms": 41.0,
+                            "transport_overhead_ms": 1.0,
                             "signal_latency_ms": 40.0,
                             "state_estimate": 3,
                             "state_likelihood": [0.1, 0.2, 0.3, 0.4],
@@ -206,7 +208,12 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
         return Response(
             200,
             request=request,
-            json={"slot_id": payload["slot_id"], "elapsed_ms": 123.0, "flows": flows},
+            json={
+                "datapath_mode": "kernel",
+                "slot_id": payload["slot_id"],
+                "elapsed_ms": 123.0,
+                "flows": flows,
+            },
         )
 
     adapters = make_kubernetes_adapters(
@@ -226,12 +233,14 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
     )
 
     assert captured["payload"]["slot_id"] == 7
+    assert captured["payload"]["datapath_mode"] == "kernel"
     assert len(captured["payload"]["routes"]) == 3
     assert all(
         len(route["hops"]) == num_of_stages
         for route in captured["payload"]["routes"]
     )
     assert result.traffic_telemetry.slot_id == 7
+    assert result.datapath_mode == "kernel"
     assert all(len(items) == 3 for items in result.observations_by_stage.values())
     assert all(
         observation.measured_latency_ms == 40.0

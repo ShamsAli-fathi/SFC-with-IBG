@@ -5,6 +5,7 @@ import time
 
 import httpx
 
+from datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
 from header import Replica, embedding
 from ports import AdapterBundle, Observation, StageExecution
 from simulation_adapters import NullResultSink
@@ -143,10 +144,15 @@ class KubernetesSlotTrafficExecutor:
         *,
         timeout_seconds=30.0,
         transport=None,
+        datapath_mode=KERNEL_DATAPATH_MODE,
     ):
         self.flow_generator_url = flow_generator_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.transport = transport
+        self.datapath_mode = require_datapath_mode(
+            datapath_mode,
+            runtime=True,
+        )
         self.telemetry = None
 
     def execute_slot(self, slot_id, assignments_by_stage, discovered_by_stage):
@@ -180,7 +186,11 @@ class KubernetesSlotTrafficExecutor:
         ) as client:
             response = client.post(
                 f"{self.flow_generator_url}/run-slot",
-                json={"slot_id": slot_id, "routes": routes},
+                json={
+                    "datapath_mode": self.datapath_mode,
+                    "slot_id": slot_id,
+                    "routes": routes,
+                },
             )
             try:
                 response.raise_for_status()
@@ -190,6 +200,12 @@ class KubernetesSlotTrafficExecutor:
                     f"HTTP {response.status_code} {response.text}"
                 ) from error
             self.telemetry = RunSlotResponse.model_validate(response.json())
+            if self.telemetry.datapath_mode != self.datapath_mode:
+                raise RuntimeError(
+                    "flow generator returned datapath mode "
+                    f"{self.telemetry.datapath_mode!r}; expected "
+                    f"{self.datapath_mode!r}"
+                )
         return self.telemetry
 
 
@@ -242,7 +258,7 @@ class KubernetesLinkLatencyCollector:
             raise RuntimeError("slot traffic has not completed")
         return {
             flow.flow_id: sum(
-                max(0.0, hop.request_latency_ms - hop.processing_latency_ms)
+                hop.transport_overhead_ms
                 for hop in flow.hops
             )
             for flow in traffic_telemetry.flows
@@ -295,10 +311,12 @@ def make_kubernetes_adapters(
     *,
     result_sink=None,
     transport=None,
+    datapath_mode=KERNEL_DATAPATH_MODE,
 ):
     slot_traffic = KubernetesSlotTrafficExecutor(
         flow_generator_url,
         transport=transport,
+        datapath_mode=datapath_mode,
     )
     return AdapterBundle(
         replica_discovery=discovery,
@@ -307,4 +325,5 @@ def make_kubernetes_adapters(
         result_sink=result_sink or NullResultSink(),
         slot_traffic_executor=slot_traffic,
         link_latency_collector=KubernetesLinkLatencyCollector(),
+        datapath_mode=slot_traffic.datapath_mode,
     )

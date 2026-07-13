@@ -16,13 +16,17 @@ spec:
       serviceAccountName: ibg-controller
       containers:
         - name: controller
-          image: ibg-testbed:phase6
+          image: ibg-testbed:kernel-phase3
           imagePullPolicy: Never
           command:
             - python3
             - -m
             - testbed.kubernetes_controller
           env:
+            - name: DATAPATH_MODE
+              value: kernel
+            - name: RUNTIME_IMAGE
+              value: ibg-testbed:kernel-phase3
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

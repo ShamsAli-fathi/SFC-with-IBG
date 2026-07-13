@@ -6,6 +6,7 @@ from scripts.phase6_compare import build_report, parse_kubernetes_results
 from testbed.profiles import load_profiles
 from testbed.validation import (
     compare_backend_summaries,
+    replay_kernel_trace,
     run_controlled_simulation,
 )
 
@@ -17,6 +18,7 @@ PROFILES = ROOT / "deploy" / "kubernetes" / "profiles.json"
 def kubernetes_shape(simulation):
     kubernetes = copy.deepcopy(simulation)
     kubernetes["backend"] = "kubernetes"
+    kubernetes["datapath_mode"] = "kernel"
     placements = {
         (item["stage"], item["flow_id"]): item
         for item in kubernetes["placements"]
@@ -47,6 +49,7 @@ def kubernetes_shape(simulation):
             observation = observations[(stage, flow_id)]
             hops.append(
                 {
+                    "datapath_mode": "kernel",
                     "slot_id": simulation["slot_id"],
                     "flow_id": flow_id,
                     "stage": stage,
@@ -59,6 +62,7 @@ def kubernetes_shape(simulation):
                     "legacy_congestion": observation["congestion"],
                     "processing_latency_ms": observation["signal"],
                     "request_latency_ms": observation["signal"] + 1.0,
+                    "transport_overhead_ms": 1.0,
                     "signal_latency_ms": observation["signal"],
                     "state_estimate": observation["estimated_state"],
                     "state_likelihood": observation["likelihood"],
@@ -68,6 +72,7 @@ def kubernetes_shape(simulation):
             )
         flows.append({"flow_id": flow_id, "hops": hops})
     kubernetes["traffic"] = {
+        "datapath_mode": "kernel",
         "slot_id": simulation["slot_id"],
         "elapsed_ms": 150.0,
         "flows": flows,
@@ -96,6 +101,7 @@ def test_controlled_simulation_completes_supported_size():
     assert len(summary["placements"]) == 9
     assert len(summary["observations"]) == 9
     assert len(summary["beliefs"]) == 15
+    assert summary["datapath_mode"] == "simulation"
     assert all(len(grid) == 5 for grid in summary["utility_grids"].values())
 
 
@@ -115,6 +121,12 @@ def test_comparison_accepts_math_parity_and_runtime_only_differences():
     assert comparison["observations"]["signal_matches"] == 9
     assert comparison["belief_max_abs"] == 0
     assert comparison["kubernetes_telemetry"]["metadata_complete"] is True
+    assert comparison["kubernetes_telemetry"]["datapath_mode"] == "kernel"
+    assert comparison["kubernetes_telemetry"]["selected_only"] is True
+    assert (
+        comparison["kubernetes_telemetry"]["transport_telemetry_complete"]
+        is True
+    )
 
 
 def test_comparison_rejects_legacy_congestion_drift():
@@ -130,6 +142,60 @@ def test_comparison_rejects_legacy_congestion_drift():
 
     assert comparison["gate_passed"] is False
     assert comparison["observations"]["congestion_matches"] == 8
+
+
+def test_comparison_rejects_datapath_mode_or_transport_drift():
+    simulation = run_controlled_simulation(
+        load_profiles(PROFILES),
+        seed=2050,
+        slot_id=1,
+    )
+    kubernetes = kubernetes_shape(simulation)
+    kubernetes["traffic"]["flows"][0]["hops"][0][
+        "transport_overhead_ms"
+    ] = -1.0
+
+    comparison = compare_backend_summaries(simulation, kubernetes)
+
+    assert comparison["gate_passed"] is False
+    assert (
+        comparison["kubernetes_telemetry"]["transport_telemetry_complete"]
+        is False
+    )
+
+
+def test_kernel_signal_replay_preserves_the_unchanged_runner_math():
+    profiles = load_profiles(PROFILES)
+    simulation = run_controlled_simulation(
+        profiles,
+        seed=2050,
+        slot_id=1,
+    )
+    kubernetes = kubernetes_shape(simulation)
+    metadata = {
+        "backend": "kubernetes",
+        "datapath_mode": "kernel",
+        "runtime_image": "ibg-testbed:kernel-phase3",
+        "environment": {"kubernetes_server": "v1.35.0"},
+        "seed": 2050,
+        "configuration": simulation["configuration"],
+    }
+    replay = replay_kernel_trace(
+        [
+            {"event": "run_started", **metadata},
+            {
+                "event": "iteration_completed",
+                **metadata,
+                "slot_id": 1,
+                "summary": kubernetes,
+            },
+        ],
+        profiles,
+    )
+
+    assert replay["gate_passed"] is True
+    assert replay["iterations"] == 1
+    assert replay["max_mathematical_abs"] == 0
 
 
 def test_repeated_report_quantifies_only_runtime_difference():
