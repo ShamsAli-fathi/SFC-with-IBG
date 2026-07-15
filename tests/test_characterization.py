@@ -163,7 +163,7 @@ def test_metrics_are_characterized():
 def test_sla_and_equilibrium_rules_are_characterized():
     replicas = {(1, 1): make_replica(stage=1, state=4)}
 
-    assert SLA_v({1: 176.0, 2: 175.0}, threshold_ms=175.0) == 1
+    assert SLA_v({1: 111.0, 2: 110.0}, threshold_ms=110.0) == 1
     assert is_equilibrium(replicas, [[0.24] * 4]) == 1
     assert is_equilibrium(replicas, [[0.218] * 4]) == 1
     assert is_equilibrium(replicas, [[0.217] * 4]) == 0
