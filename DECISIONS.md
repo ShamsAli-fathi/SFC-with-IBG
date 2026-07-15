@@ -19,6 +19,7 @@
 - Read or update `Tutorial.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
 - Read or update `Report.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
 - Read or update `EVIDENCE_SUMMARY.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
+- Treat the user-added `Chart/` directory as a legacy plot-script work area. Read it only when explicitly directed, inspect only `.py` scripts, edit only on explicit request, and require separate explicit approval before staging, committing, or pushing any of its content.
 - Characterize the reference behavior before refactoring, then introduce simulation-backed adapter contracts before Kubernetes implementations.
 - The completed baseline kept HTTP latency separate from its synthetic belief observation. Phase 1 explicitly supersedes that choice: selected processing latency is now the belief signal, while request/transport latency and concurrency remain separate telemetry.
 - Make the slot runner depend on explicit discovery, traffic, observation, and result-sink ports. Keep simulation implementations as the behavioral baseline for future infrastructure adapters.

@@ -16,6 +16,7 @@ Build the SFC-with-IBG testbed incrementally. The current implemented roadmap mi
 - Do not read or edit `Tutorial.md` unless the user explicitly asks for it in the current request.
 - Do not read or edit `Report.md` unless the user explicitly asks for it in the current request.
 - Do not read or edit `EVIDENCE_SUMMARY.md` unless the user explicitly asks for it in the current request.
+- Treat `Chart/` as a user-controlled legacy plot-script area. Do not inspect it unless the user explicitly directs that work in the current request; then read only its `.py` scripts. Edit those scripts only on explicit request, and never stage, commit, or push any `Chart/` content without the user's explicit approval for that content.
 - Do not claim real DPDK, VPP, SR-IOV, hugepage, or line-rate validation.
 - Before declaring a task complete, run the relevant focused tests/checks and report what was actually verified.
 
