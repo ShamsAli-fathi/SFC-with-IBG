@@ -52,8 +52,25 @@ def test_runtime_resources_match_requested_dimensions():
     assert list(stateful_sets) == ["stage-1", "stage-2", "stage-3", "stage-4"]
     assert len(services) == 4
     assert all(item["spec"]["replicas"] == 7 for item in stateful_sets.values())
-    assert stateful_sets["stage-4"]["spec"]["template"]["spec"]["containers"][0][
-        "env"
-    ][0] == {"name": "STAGE", "value": "4"}
+    containers = stateful_sets["stage-4"]["spec"]["template"]["spec"][
+        "containers"
+    ]
+    assert [container["name"] for container in containers] == [
+        "replica",
+        "forwarder",
+    ]
+    assert containers[0]["env"][0] == {"name": "STAGE", "value": "4"}
+    assert containers[0]["command"][-1] == "8081"
+    assert containers[0]["ports"] == [
+        {"name": "processor", "containerPort": 8081}
+    ]
+    assert containers[0]["readinessProbe"]["httpGet"]["path"] == "/warmup"
+    assert containers[1]["command"][-1] == "8080"
+    assert containers[1]["ports"] == [
+        {"name": "http", "containerPort": 8080}
+    ]
+    assert {
+        item["name"]: item.get("value") for item in containers[1]["env"]
+    }["PROCESSOR_URL"] == "http://127.0.0.1:8081"
     assert len(document["stages"]) == 4
     assert len(document["stages"]["4"]) == 7

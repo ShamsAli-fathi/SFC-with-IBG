@@ -40,7 +40,7 @@ def main():
 
     response = httpx.post(
         f"{BASE_URL}/run-slot",
-        json={"slot_id": 1, "routes": routes},
+        json={"datapath_mode": "kernel", "slot_id": 1, "routes": routes},
         timeout=30,
     )
     response.raise_for_status()

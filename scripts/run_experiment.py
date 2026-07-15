@@ -41,6 +41,12 @@ def csv_run_hash(timestamp, seed, num_of_flows, num_of_stages, num_of_replicas):
     return hashlib.sha256(provenance.encode("utf-8")).hexdigest()[:6]
 
 
+def run_identifier(timestamp, run_number, num_of_runs):
+    if num_of_runs == 1:
+        return timestamp
+    return f"{timestamp}-run{run_number:03d}"
+
+
 def command_text(command):
     return " ".join(str(part) for part in command)
 
@@ -633,6 +639,46 @@ def export_legacy_csv(trace_path, output_dir, run_id):
     ]
 
 
+def run_experiment_series(args, context, environment_metadata):
+    args.trace_dir.mkdir(parents=True, exist_ok=True)
+    trace_paths = []
+    for run_number in range(1, args.num_of_runs + 1):
+        if args.num_of_runs > 1:
+            print(f"\nExperiment run {run_number}/{args.num_of_runs}")
+        start_experiment_job(
+            context,
+            args.seed,
+            args.max_iterations,
+            args.timeout,
+            num_of_stages=args.num_of_stages,
+            num_of_replicas=args.num_of_replicas,
+            num_of_flows=args.num_of_flows,
+            environment_metadata=environment_metadata,
+        )
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        identifier = run_identifier(timestamp, run_number, args.num_of_runs)
+        trace_path = args.trace_dir / f"ibg-experiment-{identifier}.jsonl"
+        follow_logs(context, trace_path, args.timeout)
+        trace_paths.append(trace_path)
+        print(f"\nDetailed JSONL trace: {trace_path}")
+        if args.csv == 1:
+            csv_paths = export_legacy_csv(
+                trace_path,
+                CSV_OUTPUT_DIR,
+                csv_run_hash(
+                    identifier,
+                    args.seed,
+                    args.num_of_flows,
+                    args.num_of_stages,
+                    args.num_of_replicas,
+                ),
+            )
+            print(f"CSV reports: {CSV_OUTPUT_DIR}")
+            for csv_path in csv_paths:
+                print(f"  {csv_path.name}")
+    return trace_paths
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Start the IBG kind testbed and stream an equilibrium run."
@@ -663,6 +709,13 @@ def parse_args(argv=None):
         help="number of replicas in every stage",
     )
     parser.add_argument("--max-iterations", type=int, default=100)
+    parser.add_argument(
+        "--runs",
+        dest="num_of_runs",
+        type=int,
+        default=1,
+        help="number of independent experiment runs to execute",
+    )
     parser.add_argument("--cluster", default="ibg")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument(
@@ -693,18 +746,19 @@ def main():
     args = parse_args()
     if min(
         args.max_iterations,
+        args.num_of_runs,
         args.num_of_flows,
         args.num_of_stages,
         args.num_of_replicas,
     ) < 1:
         raise ValueError(
-            "--flow, --stage, --replica, and --max-iterations must be positive"
+            "--flow, --stage, --replica, --max-iterations, and --runs must be positive"
         )
     require_commands("docker", "kind", "kubectl")
     print(
         "Requested configuration: "
         f"flows={args.num_of_flows}, stages={args.num_of_stages}, "
-        f"replicas/stage={args.num_of_replicas}"
+        f"replicas/stage={args.num_of_replicas}, runs={args.num_of_runs}"
     )
     base_profiles = load_profiles(ROOT / "deploy/kubernetes/profiles.json")
     profiles = expand_profiles(
@@ -724,34 +778,11 @@ def main():
         num_of_replicas=args.num_of_replicas,
         profiles=profiles,
     )
-    start_experiment_job(
+    run_experiment_series(
+        args,
         context,
-        args.seed,
-        args.max_iterations,
-        args.timeout,
-        num_of_stages=args.num_of_stages,
-        num_of_replicas=args.num_of_replicas,
-        num_of_flows=args.num_of_flows,
-        environment_metadata=collect_environment_metadata(context),
+        collect_environment_metadata(context),
     )
-
-    args.trace_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    trace_path = args.trace_dir / f"ibg-experiment-{timestamp}.jsonl"
-    follow_logs(context, trace_path, args.timeout)
-    print(f"\nDetailed JSONL trace: {trace_path}")
-    if args.csv == 1:
-        run_id = csv_run_hash(
-            timestamp,
-            args.seed,
-            args.num_of_flows,
-            args.num_of_stages,
-            args.num_of_replicas,
-        )
-        csv_paths = export_legacy_csv(trace_path, CSV_OUTPUT_DIR, run_id)
-        print(f"CSV reports: {CSV_OUTPUT_DIR}")
-        for csv_path in csv_paths:
-            print(f"  {csv_path.name}")
 
 
 if __name__ == "__main__":

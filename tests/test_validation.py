@@ -100,8 +100,8 @@ def pairwise_kubernetes_shape(simulation):
                     "target_pod_name": target["pod_name"],
                     "target_endpoint": target["endpoint"],
                     "request_latency_ms": 50.0,
-                    "callee_elapsed_ms": 49.25,
-                    "link_cost_ms": 0.75,
+                    "callee_elapsed_ms": 50.0,
+                    "link_cost_ms": 0.0,
                 }
             )
     return kubernetes
@@ -215,6 +215,24 @@ def test_comparison_accepts_pairwise_links_and_separate_ingress_telemetry():
     )
 
 
+def test_comparison_normalizes_endpoint_root_slashes():
+    simulation = run_controlled_simulation(
+        load_profiles(PROFILES),
+        seed=2050,
+        slot_id=1,
+    )
+    kubernetes = pairwise_kubernetes_shape(simulation)
+    for flow in kubernetes["traffic"]["flows"]:
+        for hop in flow["hops"]:
+            hop["endpoint"] += "/"
+        for link in flow["links"]:
+            link["target_endpoint"] += "/"
+
+    comparison = compare_backend_summaries(simulation, kubernetes)
+
+    assert comparison["gate_passed"] is True
+
+
 def test_comparison_rejects_pairwise_link_cost_drift():
     simulation = run_controlled_simulation(
         load_profiles(PROFILES),
@@ -233,6 +251,49 @@ def test_comparison_rejects_pairwise_link_cost_drift():
         ]
         is False
     )
+
+
+def test_comparison_rejects_pairwise_link_metric_sum_drift():
+    simulation = run_controlled_simulation(
+        load_profiles(PROFILES),
+        seed=2050,
+        slot_id=1,
+    )
+    kubernetes = pairwise_kubernetes_shape(simulation)
+    link = kubernetes["traffic"]["flows"][0]["links"][0]
+    link["callee_elapsed_ms"] = 49.0
+    link["link_cost_ms"] = 1.0
+
+    comparison = compare_backend_summaries(simulation, kubernetes)
+
+    assert comparison["gate_passed"] is False
+    assert (
+        comparison["kubernetes_telemetry"][
+            "pairwise_link_telemetry_complete"
+        ]
+        is False
+    )
+
+
+def test_comparison_rejects_pairwise_pod_or_endpoint_drift():
+    simulation = run_controlled_simulation(
+        load_profiles(PROFILES),
+        seed=2050,
+        slot_id=1,
+    )
+    for field in ("source_pod_name", "target_pod_name", "target_endpoint"):
+        kubernetes = pairwise_kubernetes_shape(simulation)
+        kubernetes["traffic"]["flows"][0]["links"][0][field] = "wrong"
+
+        comparison = compare_backend_summaries(simulation, kubernetes)
+
+        assert comparison["gate_passed"] is False
+        assert (
+            comparison["kubernetes_telemetry"][
+                "pairwise_link_telemetry_complete"
+            ]
+            is False
+        )
 
 
 def test_kernel_signal_replay_preserves_the_unchanged_runner_math():
@@ -267,6 +328,45 @@ def test_kernel_signal_replay_preserves_the_unchanged_runner_math():
     assert replay["gate_passed"] is True
     assert replay["iterations"] == 1
     assert replay["max_mathematical_abs"] == 0
+
+
+def test_kernel_signal_replay_rejects_mixed_transport_schemas():
+    profiles = load_profiles(PROFILES)
+    simulation = run_controlled_simulation(
+        profiles,
+        seed=2050,
+        slot_id=1,
+    )
+    metadata = {
+        "backend": "kubernetes",
+        "datapath_mode": "kernel",
+        "runtime_image": "ibg-testbed:kernel-phase3",
+        "environment": {"kubernetes_server": "v1.35.0"},
+        "seed": 2050,
+        "configuration": simulation["configuration"],
+    }
+    replay = replay_kernel_trace(
+        [
+            {"event": "run_started", **metadata},
+            {
+                "event": "iteration_completed",
+                **metadata,
+                "slot_id": 1,
+                "summary": kubernetes_shape(simulation),
+            },
+            {
+                "event": "iteration_completed",
+                **metadata,
+                "slot_id": 2,
+                "summary": pairwise_kubernetes_shape(simulation),
+            },
+        ],
+        profiles,
+    )
+
+    assert replay["gate_passed"] is False
+    assert replay["transport_schema_consistent"] is False
+    assert replay["transport_schemas"] == ["historical", "pairwise"]
 
 
 def test_repeated_report_quantifies_only_runtime_difference():

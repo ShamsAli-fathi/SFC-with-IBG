@@ -15,9 +15,28 @@ x-healthcheck: &healthcheck
   timeout: 2s
   retries: 30
 
+x-processor-healthcheck: &processor-healthcheck
+  test:
+    - CMD
+    - python3
+    - -c
+    - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/warmup')"
+  interval: 2s
+  timeout: 2s
+  retries: 30
+
 services:
-  stage-1-0:
+  stage-1-processor:
     <<: *testbed-service
+    command:
+      - python3
+      - -m
+      - uvicorn
+      - testbed.cnf_service:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8081"
     environment:
       STAGE: "1"
       REPLICA_ID: "1"
@@ -26,10 +45,19 @@ services:
       CAPACITY: "2000"
       BASE_DELAY_MS: "40"
       CONGESTION_DELAY_MS: "10"
-    healthcheck: *healthcheck
+    healthcheck: *processor-healthcheck
 
-  stage-2-0:
+  stage-2-processor:
     <<: *testbed-service
+    command:
+      - python3
+      - -m
+      - uvicorn
+      - testbed.cnf_service:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8081"
     environment:
       STAGE: "2"
       REPLICA_ID: "1"
@@ -38,10 +66,19 @@ services:
       CAPACITY: "5000"
       BASE_DELAY_MS: "40"
       CONGESTION_DELAY_MS: "10"
-    healthcheck: *healthcheck
+    healthcheck: *processor-healthcheck
 
-  stage-3-0:
+  stage-3-processor:
     <<: *testbed-service
+    command:
+      - python3
+      - -m
+      - uvicorn
+      - testbed.cnf_service:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8081"
     environment:
       STAGE: "3"
       REPLICA_ID: "1"
@@ -50,6 +87,42 @@ services:
       CAPACITY: "5000"
       BASE_DELAY_MS: "40"
       CONGESTION_DELAY_MS: "10"
+    healthcheck: *processor-healthcheck
+
+  stage-1-0:
+    <<: *testbed-service
+    environment:
+      STAGE: "1"
+      REPLICA_ID: "1"
+      POD_NAME: stage-1-0
+      PROCESSOR_URL: http://stage-1-processor:8081
+    depends_on:
+      stage-1-processor:
+        condition: service_healthy
+    healthcheck: *healthcheck
+
+  stage-2-0:
+    <<: *testbed-service
+    environment:
+      STAGE: "2"
+      REPLICA_ID: "1"
+      POD_NAME: stage-2-0
+      PROCESSOR_URL: http://stage-2-processor:8081
+    depends_on:
+      stage-2-processor:
+        condition: service_healthy
+    healthcheck: *healthcheck
+
+  stage-3-0:
+    <<: *testbed-service
+    environment:
+      STAGE: "3"
+      REPLICA_ID: "1"
+      POD_NAME: stage-3-0
+      PROCESSOR_URL: http://stage-3-processor:8081
+    depends_on:
+      stage-3-processor:
+        condition: service_healthy
     healthcheck: *healthcheck
 
   flow-generator:

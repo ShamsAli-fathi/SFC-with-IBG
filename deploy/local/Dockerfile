@@ -16,6 +16,6 @@ COPY testbed ./testbed
 
 USER 10001:10001
 
-EXPOSE 8080
+EXPOSE 8080 8081
 
-CMD ["python3", "-m", "uvicorn", "testbed.cnf_service:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python3", "-m", "uvicorn", "testbed.route_forwarder:app", "--host", "0.0.0.0", "--port", "8080"]

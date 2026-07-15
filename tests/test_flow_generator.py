@@ -4,11 +4,13 @@ from collections import Counter, defaultdict
 
 from httpx import ASGITransport, AsyncClient, MockTransport, Request, Response
 import pytest
+from pydantic import ValidationError
 
 from testbed.flow_generator import (
     FlowExecutionError,
     FlowGenerator,
     FlowGeneratorConfig,
+    RunSlotResponse,
     RunSlotRequest,
     create_app,
 )
@@ -37,11 +39,15 @@ class RecordingReplicaNetwork:
         mismatch_host=None,
         mismatch_correlation_host=None,
         mismatch_link=False,
+        mismatch_link_metadata=None,
+        omit_links=False,
     ):
         self.failing_host = failing_host
         self.mismatch_host = mismatch_host
         self.mismatch_correlation_host = mismatch_correlation_host
         self.mismatch_link = mismatch_link
+        self.mismatch_link_metadata = mismatch_link_metadata
+        self.omit_links = omit_links
         self.calls = []
         self.payloads = []
         self.active = Counter()
@@ -130,17 +136,21 @@ class RecordingReplicaNetwork:
             ]
             if self.mismatch_link:
                 links[0]["target_replica_id"] += 1
+            if self.mismatch_link_metadata:
+                links[0][self.mismatch_link_metadata] = "wrong"
+            response_body = {
+                "datapath_mode": payload["datapath_mode"],
+                "slot_id": payload["slot_id"],
+                "flow_id": payload["flow_id"],
+                "elapsed_ms": 30.0 + len(links),
+                "hops": hops,
+            }
+            if not self.omit_links:
+                response_body["links"] = links
             return Response(
                 200,
                 request=request,
-                json={
-                    "datapath_mode": payload["datapath_mode"],
-                    "slot_id": payload["slot_id"],
-                    "flow_id": payload["flow_id"],
-                    "elapsed_ms": 30.0 + len(links),
-                    "hops": hops,
-                    "links": links,
-                },
+                json=response_body,
             )
         finally:
             for host in hosts:
@@ -244,6 +254,29 @@ def test_hop_telemetry_preserves_correlation_and_latency_fields():
 
 
 @pytest.mark.parametrize(
+    "missing_field",
+    ["links", "ingress_request_latency_ms", "ingress_overhead_ms"],
+)
+def test_current_flow_telemetry_requires_pairwise_and_ingress_fields(
+    missing_field,
+):
+    generator = FlowGenerator(transport=MockTransport(RecordingReplicaNetwork()))
+    response = asyncio.run(
+        generator.run_slot(
+            RunSlotRequest(
+                datapath_mode="kernel",
+                slot_id=4,
+                routes=[route(9)],
+            )
+        )
+    ).model_dump(mode="json")
+    response["flows"][0].pop(missing_field)
+
+    with pytest.raises(ValidationError):
+        RunSlotResponse.model_validate(response)
+
+
+@pytest.mark.parametrize(
     "payload, message",
     [
         (
@@ -309,6 +342,28 @@ def test_route_contract_accepts_configurable_stage_count():
         (
             RecordingReplicaNetwork(mismatch_link=True),
             "mismatched pairwise link telemetry",
+        ),
+        (
+            RecordingReplicaNetwork(
+                mismatch_link_metadata="source_pod_name"
+            ),
+            "mismatched pairwise link telemetry",
+        ),
+        (
+            RecordingReplicaNetwork(
+                mismatch_link_metadata="target_pod_name"
+            ),
+            "mismatched pairwise link telemetry",
+        ),
+        (
+            RecordingReplicaNetwork(
+                mismatch_link_metadata="target_endpoint"
+            ),
+            "mismatched pairwise link telemetry",
+        ),
+        (
+            RecordingReplicaNetwork(omit_links=True),
+            "forwarded route failed",
         ),
     ],
 )

@@ -1,3 +1,4 @@
+import copy
 from types import SimpleNamespace
 
 from testbed.kernel_baseline import build_kernel_baseline_report
@@ -29,6 +30,8 @@ def complete_trace():
                     "stage": stage,
                     "flow_id": flow_id,
                     "replica_id": flow_id,
+                    "pod_name": f"stage-{stage}-pod",
+                    "endpoint": f"http://stage-{stage}/",
                 }
             )
             likelihood = [0.0, 0.0, 0.0, 0.0]
@@ -50,6 +53,8 @@ def complete_trace():
                     "flow_id": flow_id,
                     "stage": stage,
                     "replica_id": flow_id,
+                    "pod_name": f"stage-{stage}-pod",
+                    "endpoint": f"http://stage-{stage}",
                     "assigned_load": load,
                     "modeled_processing_latency_ms": processing - 1.0,
                     "processing_latency_ms": processing,
@@ -93,8 +98,10 @@ def complete_trace():
     )
 
 
-def add_pairwise_telemetry(events):
-    traffic = events[1]["summary"]["traffic"]
+def add_pairwise_telemetry(events, iteration_index=1):
+    summary = events[iteration_index]["summary"]
+    traffic = summary["traffic"]
+    summary["metrics"] = {"link_latency_ms_per_flow": {}}
     for flow in traffic["flows"]:
         flow["ingress_request_latency_ms"] = 120.0
         flow["ingress_overhead_ms"] = 0.5
@@ -110,12 +117,15 @@ def add_pairwise_telemetry(events):
                     "target_stage": target["stage"],
                     "target_replica_id": target["replica_id"],
                     "target_pod_name": f"stage-{target['stage']}-pod",
-                    "target_endpoint": f"http://stage-{target['stage']}",
+                    "target_endpoint": f"http://stage-{target['stage']}/",
                     "request_latency_ms": 20.0,
                     "callee_elapsed_ms": 19.25,
                     "link_cost_ms": 0.75,
                 }
             )
+        summary["metrics"]["link_latency_ms_per_flow"][str(flow["flow_id"])] = (
+            sum(link["link_cost_ms"] for link in flow["links"])
+        )
 
 
 def test_kernel_baseline_accepts_complete_selected_only_trace():
@@ -187,3 +197,45 @@ def test_kernel_baseline_rejects_pairwise_link_cost_drift():
         report["checks"]["pairwise_link_cost_complete_and_correlated"]
         is False
     )
+
+
+def test_kernel_baseline_rejects_pairwise_link_metric_sum_drift():
+    events, profiles = complete_trace()
+    add_pairwise_telemetry(events)
+    events[1]["summary"]["metrics"]["link_latency_ms_per_flow"]["1"] = 0.0
+
+    report = build_kernel_baseline_report(events, profiles)
+
+    assert report["gate_passed"] is False
+    assert (
+        report["checks"]["pairwise_link_cost_complete_and_correlated"]
+        is False
+    )
+
+
+def test_kernel_baseline_rejects_pairwise_pod_or_endpoint_drift():
+    for field in ("source_pod_name", "target_pod_name", "target_endpoint"):
+        events, profiles = complete_trace()
+        add_pairwise_telemetry(events)
+        events[1]["summary"]["traffic"]["flows"][0]["links"][0][
+            field
+        ] = "wrong"
+
+        report = build_kernel_baseline_report(events, profiles)
+
+        assert report["gate_passed"] is False
+        assert (
+            report["checks"]["pairwise_link_cost_complete_and_correlated"]
+            is False
+        )
+
+
+def test_kernel_baseline_rejects_mixed_transport_schemas():
+    events, profiles = complete_trace()
+    events.insert(2, copy.deepcopy(events[1]))
+    add_pairwise_telemetry(events, iteration_index=2)
+
+    report = build_kernel_baseline_report(events, profiles)
+
+    assert report["gate_passed"] is False
+    assert report["checks"]["transport_schema_consistent"] is False

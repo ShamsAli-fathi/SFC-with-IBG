@@ -9,7 +9,7 @@ import httpx
 from pydantic import AnyHttpUrl, BaseModel, Field, ValidationError, model_validator
 
 from IBG.datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
-from testbed.cnf_service import (
+from testbed.route_forwarder import (
     PairwiseLinkTelemetry,
     RouteProcessResponse,
 )
@@ -88,9 +88,9 @@ class HopTelemetry(BaseModel):
 class FlowTelemetry(BaseModel):
     flow_id: int
     hops: list[HopTelemetry]
-    links: list[PairwiseLinkTelemetry] = Field(default_factory=list)
-    ingress_request_latency_ms: float = Field(default=0.0, ge=0)
-    ingress_overhead_ms: float = Field(default=0.0, ge=0)
+    links: list[PairwiseLinkTelemetry]
+    ingress_request_latency_ms: float = Field(ge=0)
+    ingress_overhead_ms: float = Field(ge=0)
 
 
 class RunSlotResponse(BaseModel):
@@ -244,6 +244,8 @@ class FlowGenerator:
             route.hops[1:],
             route_response.links,
         ):
+            observed_source = route_response.hops[expected_source.stage - 1]
+            observed_target = route_response.hops[expected_target.stage - 1]
             expected_link_cost = max(
                 0.0,
                 observed_link.request_latency_ms
@@ -254,8 +256,11 @@ class FlowGenerator:
                 or observed_link.flow_id != route.flow_id
                 or observed_link.source_stage != expected_source.stage
                 or observed_link.source_replica_id != expected_source.replica_id
+                or observed_link.source_pod_name != observed_source.pod_name
                 or observed_link.target_stage != expected_target.stage
                 or observed_link.target_replica_id != expected_target.replica_id
+                or observed_link.target_pod_name != observed_target.pod_name
+                or observed_link.target_endpoint != str(expected_target.url)
                 or abs(observed_link.link_cost_ms - expected_link_cost) > 1e-9
             ):
                 raise FlowExecutionError(

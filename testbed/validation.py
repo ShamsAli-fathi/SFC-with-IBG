@@ -301,6 +301,30 @@ def replay_kernel_trace(events, profiles):
     ]
     if len(started) != 1 or not iterations:
         raise ValueError("expected one Kernel run with completed iterations")
+    transport_schemas = {
+        "pairwise"
+        if any(
+            "links" in flow
+            or "ingress_request_latency_ms" in flow
+            or "ingress_overhead_ms" in flow
+            for flow in (event["summary"].get("traffic") or {}).get(
+                "flows", []
+            )
+        )
+        else "historical"
+        for event in iterations
+    }
+    transport_schema_consistent = len(transport_schemas) == 1
+    if not transport_schema_consistent:
+        return {
+            "gate_passed": False,
+            "transport_schema_consistent": False,
+            "transport_schemas": sorted(transport_schemas),
+            "iterations": len(iterations),
+            "slots": [],
+            "max_belief_abs": 0.0,
+            "max_mathematical_abs": 0.0,
+        }
     metadata = started[0]
     configuration = metadata["configuration"]
     seed = metadata["seed"]
@@ -348,7 +372,10 @@ def replay_kernel_trace(events, profiles):
         )
         comparisons.append(compare_backend_summaries(replayed, captured))
     return {
-        "gate_passed": all(item["gate_passed"] for item in comparisons),
+        "gate_passed": transport_schema_consistent
+        and all(item["gate_passed"] for item in comparisons),
+        "transport_schema_consistent": transport_schema_consistent,
+        "transport_schemas": sorted(transport_schemas),
         "iterations": len(comparisons),
         "slots": [
             {
@@ -394,6 +421,12 @@ def _max_abs(left, right):
         (abs(float(a) - float(b)) for a, b in zip(left, right)),
         default=0.0,
     )
+
+
+def _normalized_endpoint(value):
+    if not isinstance(value, str) or not value:
+        return None
+    return value.rstrip("/")
 
 
 def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
@@ -541,6 +574,7 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
             kubernetes["configuration"]["stages"] - 1,
         )
         for flow in traffic_flows:
+            flow_id = int(flow.get("flow_id", -1))
             hops_by_stage = {
                 int(hop["stage"]): hop for hop in flow.get("hops", [])
             }
@@ -556,23 +590,42 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
                 ]
             )
             observed_stage_pairs = set()
+            link_cost_sum = 0.0
             for link in links:
                 source_stage = int(link.get("source_stage", -1))
                 target_stage = int(link.get("target_stage", -1))
                 source_hop = hops_by_stage.get(source_stage, {})
                 target_hop = hops_by_stage.get(target_stage, {})
+                source_placement = kubernetes_placements.get(
+                    (source_stage, flow_id), {}
+                )
+                target_placement = kubernetes_placements.get(
+                    (target_stage, flow_id), {}
+                )
                 request_latency = float(link.get("request_latency_ms", -1.0))
                 callee_elapsed = float(link.get("callee_elapsed_ms", -1.0))
                 cost = float(link.get("link_cost_ms", -1.0))
+                link_cost_sum += cost
                 observed_stage_pairs.add((source_stage, target_stage))
                 pairwise_link_checks.append(
                     target_stage == source_stage + 1
                     and int(link.get("slot_id", -1)) == kubernetes["slot_id"]
-                    and int(link.get("flow_id", -1)) == flow.get("flow_id")
+                    and int(link.get("flow_id", -1)) == flow_id
                     and link.get("source_replica_id")
                     == source_hop.get("replica_id")
+                    == source_placement.get("replica_id")
+                    and link.get("source_pod_name")
+                    == source_hop.get("pod_name")
+                    == source_placement.get("pod_name")
                     and link.get("target_replica_id")
                     == target_hop.get("replica_id")
+                    == target_placement.get("replica_id")
+                    and link.get("target_pod_name")
+                    == target_hop.get("pod_name")
+                    == target_placement.get("pod_name")
+                    and _normalized_endpoint(link.get("target_endpoint"))
+                    == _normalized_endpoint(target_hop.get("endpoint"))
+                    == _normalized_endpoint(target_placement.get("endpoint"))
                     and request_latency >= 0
                     and callee_elapsed >= 0
                     and cost >= 0
@@ -587,6 +640,13 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
                     (stage, stage + 1)
                     for stage in range(1, expected_links_per_flow + 1)
                 }
+            )
+            link_metric = kubernetes_metrics[
+                "link_latency_ms_per_flow"
+            ].get(str(flow_id))
+            pairwise_link_checks.append(
+                link_metric is not None
+                and abs(link_cost_sum - float(link_metric)) <= tolerance
             )
         pairwise_link_telemetry_complete = bool(pairwise_link_checks) and all(
             pairwise_link_checks

@@ -89,7 +89,19 @@ def _stage_stateful_set(
                             "name": "replica",
                             "image": image,
                             "imagePullPolicy": "Never",
-                            "ports": [{"name": "http", "containerPort": 8080}],
+                            "command": [
+                                "python3",
+                                "-m",
+                                "uvicorn",
+                                "testbed.cnf_service:app",
+                                "--host",
+                                "0.0.0.0",
+                                "--port",
+                                "8081",
+                            ],
+                            "ports": [
+                                {"name": "processor", "containerPort": 8081}
+                            ],
                             "env": [
                                 {"name": "STAGE", "value": str(stage)},
                                 {
@@ -111,6 +123,55 @@ def _stage_stateful_set(
                                 }
                             ],
                             "readinessProbe": {
+                                "httpGet": {
+                                    "path": "/warmup",
+                                    "port": "processor",
+                                },
+                                "periodSeconds": 2,
+                                "failureThreshold": 30,
+                            },
+                            "livenessProbe": {
+                                "httpGet": {
+                                    "path": "/health",
+                                    "port": "processor",
+                                },
+                                "initialDelaySeconds": 10,
+                                "periodSeconds": 10,
+                            },
+                            "resources": {
+                                "requests": {"cpu": "50m", "memory": "128Mi"},
+                                "limits": {"cpu": "1", "memory": "768Mi"},
+                            },
+                        },
+                        {
+                            "name": "forwarder",
+                            "image": image,
+                            "imagePullPolicy": "Never",
+                            "command": [
+                                "python3",
+                                "-m",
+                                "uvicorn",
+                                "testbed.route_forwarder:app",
+                                "--host",
+                                "0.0.0.0",
+                                "--port",
+                                "8080",
+                            ],
+                            "ports": [{"name": "http", "containerPort": 8080}],
+                            "env": [
+                                {"name": "STAGE", "value": str(stage)},
+                                {
+                                    "name": "POD_NAME",
+                                    "valueFrom": {
+                                        "fieldRef": {"fieldPath": "metadata.name"}
+                                    },
+                                },
+                                {
+                                    "name": "PROCESSOR_URL",
+                                    "value": "http://127.0.0.1:8081",
+                                },
+                            ],
+                            "readinessProbe": {
                                 "httpGet": {"path": "/health", "port": "http"},
                                 "periodSeconds": 2,
                                 "failureThreshold": 30,
@@ -121,10 +182,10 @@ def _stage_stateful_set(
                                 "periodSeconds": 10,
                             },
                             "resources": {
-                                "requests": {"cpu": "50m", "memory": "128Mi"},
-                                "limits": {"cpu": "1", "memory": "768Mi"},
+                                "requests": {"cpu": "25m", "memory": "64Mi"},
+                                "limits": {"cpu": "500m", "memory": "256Mi"},
                             },
-                        }
+                        },
                     ],
                     "volumes": [
                         {

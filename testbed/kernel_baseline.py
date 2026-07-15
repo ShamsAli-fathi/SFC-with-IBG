@@ -14,6 +14,12 @@ MINIMUM_CLASSIFICATION_ACCURACY = 0.80
 MINIMUM_OVERSHOOT_PASS_RATE = 0.95
 
 
+def _normalized_endpoint(value):
+    if not isinstance(value, str) or not value:
+        return None
+    return value.rstrip("/")
+
+
 def _percentile(values, fraction):
     if not values:
         return None
@@ -64,6 +70,7 @@ def build_kernel_baseline_report(events, profiles):
     pairwise_link_values = []
     ingress_overhead_values = []
     pairwise_schema_seen = False
+    transport_schemas = set()
     classified = 0
     total_hops = 0
     groups = {}
@@ -84,6 +91,9 @@ def build_kernel_baseline_report(events, profiles):
             for flow in flows
         )
         pairwise_schema_seen = pairwise_schema_seen or pairwise_schema_declared
+        transport_schemas.add(
+            "pairwise" if pairwise_schema_declared else "historical"
+        )
         placements = {
             (item["stage"], item["flow_id"]): item
             for item in summary["placements"]
@@ -163,7 +173,11 @@ def build_kernel_baseline_report(events, profiles):
 
         if pairwise_schema_declared:
             expected_links = max(0, configuration.get("stages", 0) - 1)
+            link_metrics = summary.get("metrics", {}).get(
+                "link_latency_ms_per_flow", {}
+            )
             for flow in flows:
+                flow_id = int(flow.get("flow_id", -1))
                 flow_hops = {hop["stage"]: hop for hop in flow.get("hops", [])}
                 links = flow.get("links", [])
                 pairwise_link_checks.append("links" in flow)
@@ -178,23 +192,46 @@ def build_kernel_baseline_report(events, profiles):
                 if ingress >= 0:
                     ingress_overhead_values.append(ingress)
                 observed_stage_pairs = set()
+                link_cost_sum = 0.0
                 for link in links:
                     source_stage = int(link["source_stage"])
                     target_stage = int(link["target_stage"])
                     request_latency = float(link["request_latency_ms"])
                     callee_elapsed = float(link["callee_elapsed_ms"])
                     cost = float(link["link_cost_ms"])
+                    link_cost_sum += cost
                     observed_stage_pairs.add((source_stage, target_stage))
                     source_hop = flow_hops.get(source_stage, {})
                     target_hop = flow_hops.get(target_stage, {})
+                    source_placement = placements.get(
+                        (source_stage, flow_id), {}
+                    )
+                    target_placement = placements.get(
+                        (target_stage, flow_id), {}
+                    )
                     pairwise_link_checks.append(
                         target_stage == source_stage + 1
                         and int(link["slot_id"]) == int(traffic["slot_id"])
                         and int(link["flow_id"]) == int(flow["flow_id"])
                         and link["source_replica_id"]
                         == source_hop.get("replica_id")
+                        == source_placement.get("replica_id")
+                        and link.get("source_pod_name")
+                        == source_hop.get("pod_name")
+                        == source_placement.get("pod_name")
                         and link["target_replica_id"]
                         == target_hop.get("replica_id")
+                        == target_placement.get("replica_id")
+                        and link.get("target_pod_name")
+                        == target_hop.get("pod_name")
+                        == target_placement.get("pod_name")
+                        and _normalized_endpoint(link.get("target_endpoint"))
+                        == _normalized_endpoint(target_hop.get("endpoint"))
+                        == _normalized_endpoint(
+                            target_placement.get("endpoint")
+                        )
+                        and request_latency >= 0
+                        and callee_elapsed >= 0
                         and cost >= 0
                         and abs(
                             cost
@@ -209,6 +246,11 @@ def build_kernel_baseline_report(events, profiles):
                         (stage, stage + 1)
                         for stage in range(1, expected_links + 1)
                     }
+                )
+                link_metric = link_metrics.get(str(flow_id))
+                pairwise_link_checks.append(
+                    link_metric is not None
+                    and abs(link_cost_sum - float(link_metric)) <= 1e-9
                 )
 
     group_statistics = [
@@ -271,6 +313,7 @@ def build_kernel_baseline_report(events, profiles):
             classification_accuracy >= MINIMUM_CLASSIFICATION_ACCURACY
         ),
         "equilibrium_reached": completed.get("reached_equilibrium") is True,
+        "transport_schema_consistent": len(transport_schemas) == 1,
     }
     if pairwise_schema_seen:
         checks["pairwise_link_cost_complete_and_correlated"] = bool(

@@ -10,6 +10,8 @@ from scripts.run_experiment import (
     parse_args,
     remove_stale_stage_resources,
     render_event,
+    run_experiment_series,
+    run_identifier,
     set_env,
     start_experiment_job,
 )
@@ -63,6 +65,60 @@ def test_csv_flag_is_disabled_by_default_and_accepts_zero_or_one():
     assert parse_args([]).csv == 0
     assert parse_args(["--csv", "0"]).csv == 0
     assert parse_args(["--csv", "1"]).csv == 1
+
+
+def test_runs_flag_defaults_to_one_and_accepts_requested_count():
+    assert parse_args([]).num_of_runs == 1
+    assert parse_args(["--runs", "5"]).num_of_runs == 5
+
+
+def test_multi_run_identifiers_are_unique_while_single_run_stays_compatible():
+    timestamp = "20260715T190000Z"
+
+    assert run_identifier(timestamp, 1, 1) == timestamp
+    assert run_identifier(timestamp, 1, 5) == f"{timestamp}-run001"
+    assert run_identifier(timestamp, 5, 5) == f"{timestamp}-run005"
+
+
+def test_run_series_starts_each_requested_run_and_keeps_separate_traces(
+    monkeypatch,
+    tmp_path,
+):
+    args = parse_args(
+        ["--runs", "3", "--skip-build", "--trace-dir", str(tmp_path)]
+    )
+    started = []
+    traces = []
+
+    monkeypatch.setattr(
+        launcher,
+        "start_experiment_job",
+        lambda *arguments, **kwargs: started.append((arguments, kwargs)),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "follow_logs",
+        lambda context, trace_path, timeout: traces.append(trace_path),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "datetime",
+        SimpleNamespace(
+            now=lambda timezone: SimpleNamespace(
+                strftime=lambda format: "20260715T190000Z"
+            )
+        ),
+    )
+
+    result = run_experiment_series(args, "kind-ibg", {"kind": "test"})
+
+    assert len(started) == 3
+    assert result == traces
+    assert [path.name for path in traces] == [
+        "ibg-experiment-20260715T190000Z-run001.jsonl",
+        "ibg-experiment-20260715T190000Z-run002.jsonl",
+        "ibg-experiment-20260715T190000Z-run003.jsonl",
+    ]
 
 
 def test_csv_output_defaults_to_the_ignored_project_figures_directory():

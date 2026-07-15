@@ -1,6 +1,5 @@
 import asyncio
 
-import httpx
 from httpx import ASGITransport, AsyncClient
 import numpy as np
 import pytest
@@ -24,17 +23,6 @@ async def request(app, method, path, **kwargs):
 
 def fixed_latency(assigned_load):
     return 2.0
-
-
-class HostRoutingTransport(httpx.AsyncBaseTransport):
-    def __init__(self):
-        self.apps = {}
-        self.calls = []
-
-    async def handle_async_request(self, request):
-        self.calls.append((request.url.host, request.url.path))
-        transport = ASGITransport(app=self.apps[request.url.host])
-        return await transport.handle_async_request(request)
 
 
 def test_health_exposes_stable_identity():
@@ -91,67 +79,59 @@ def test_process_returns_identity_and_latency_observation():
     assert app.state.runtime.active_requests == 0
 
 
-def test_selected_route_is_forwarded_replica_to_replica_with_pairwise_links():
-    router = HostRoutingTransport()
-    apps = {
-        f"stage-{stage}-1": create_app(
-            ReplicaConfig(
-                stage=stage,
-                replica_id=1,
-                pod_name=f"stage-{stage}-1",
-            ),
-            observation_source=fixed_latency,
-            forwarding_transport=router,
-        )
-        for stage in (1, 2, 3)
-    }
-    router.apps = apps
+def test_warmup_absorbs_first_use_without_consuming_observation_source():
+    def forbidden_observation(assigned_load):
+        raise AssertionError("warmup must not sample a processing observation")
 
-    response = asyncio.run(
-        request(
-            apps["stage-1-1"],
-            "POST",
-            "/process-route",
-            json={
-                "datapath_mode": "kernel",
-                "slot_id": 4,
-                "flow_id": 9,
-                "assigned_load": 1,
-                "remaining_hops": [
-                    {
-                        "stage": 2,
-                        "replica_id": 1,
-                        "url": "http://stage-2-1",
-                        "assigned_load": 1,
-                    },
-                    {
-                        "stage": 3,
-                        "replica_id": 1,
-                        "url": "http://stage-3-1",
-                        "assigned_load": 1,
-                    },
-                ],
-            },
-        )
+    app = create_app(
+        ReplicaConfig(stage=2, replica_id=3, pod_name="stage-2-2", state=4),
+        observation_source=forbidden_observation,
     )
-    body = response.json()
+
+    first = asyncio.run(request(app, "GET", "/warmup"))
+    repeated = asyncio.run(request(app, "GET", "/warmup"))
+
+    assert first.status_code == 200
+    assert repeated.status_code == 200
+    assert app.state.runtime.warmed is True
+    assert app.state.runtime.active_requests == 0
+    assert app.state.runtime.peak_concurrency == 0
+
+
+def test_seeded_warmup_does_not_shift_request_stable_processing_sample():
+    config = ReplicaConfig(
+        stage=2,
+        replica_id=3,
+        pod_name="stage-2-2",
+        state=4,
+        observation_seed=1203,
+    )
+    expected = SeededLatencyObservationSource(config)(
+        assigned_load=2,
+        slot_id=7,
+        flow_id=4,
+    )
+    app = create_app(config)
+
+    async def scenario():
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            await client.get("/warmup")
+            return await client.post(
+                "/process",
+                json={
+                    "slot_id": 7,
+                    "flow_id": 4,
+                    "assigned_load": 2,
+                },
+            )
+
+    response = asyncio.run(scenario())
 
     assert response.status_code == 200
-    assert [(hop["stage"], hop["replica_id"]) for hop in body["hops"]] == [
-        (1, 1),
-        (2, 1),
-        (3, 1),
-    ]
-    assert [
-        (link["source_stage"], link["target_stage"])
-        for link in body["links"]
-    ] == [(1, 2), (2, 3)]
-    assert all(link["link_cost_ms"] >= 0 for link in body["links"])
-    assert router.calls == [
-        ("stage-2-1", "/process-route"),
-        ("stage-3-1", "/process-route"),
-    ]
-    assert all(app.state.runtime.active_requests == 0 for app in apps.values())
+    assert response.json()["modeled_processing_latency_ms"] == expected
 
 
 def test_latency_model_uses_final_assignment_load_not_admission_order():
