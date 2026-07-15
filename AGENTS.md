@@ -15,6 +15,7 @@ Build the SFC-with-IBG testbed incrementally. The current implemented roadmap mi
 - Do not read large result files wholesale; inspect only targeted rows, columns, or summaries.
 - Do not read or edit `Tutorial.md` unless the user explicitly asks for it in the current request.
 - Do not read or edit `Report.md` unless the user explicitly asks for it in the current request.
+- Do not read or edit `EVIDENCE_SUMMARY.md` unless the user explicitly asks for it in the current request.
 - Do not claim real DPDK, VPP, SR-IOV, hugepage, or line-rate validation.
 - Before declaring a task complete, run the relevant focused tests/checks and report what was actually verified.
 
@@ -26,3 +27,4 @@ Build the SFC-with-IBG testbed incrementally. The current implemented roadmap mi
 - `STATUS.md`: environment facts, current progress, blockers, and the next action.
 - `Tutorial.md`: user-directed beginner-friendly report and operating guide. It is outside the default handoff workflow and may be read or edited only when explicitly requested by the user.
 - `Report.md`: user-directed comparison of the paper draft and lightweight testbed. It is outside the default handoff workflow and may be read or edited only when explicitly requested by the user.
+- `EVIDENCE_SUMMARY.md`: user-directed Phase 4 evidence inventory. It is outside the default handoff workflow and may be read or edited only when explicitly requested by the user.

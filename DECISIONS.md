@@ -18,6 +18,7 @@
 - Validate simulation/Kubernetes behavior at the supported small size; no scaling phase is planned for the exact algorithm.
 - Read or update `Tutorial.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
 - Read or update `Report.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
+- Read or update `EVIDENCE_SUMMARY.md` only when the user explicitly requests it; it is not part of automatic phase maintenance.
 - Characterize the reference behavior before refactoring, then introduce simulation-backed adapter contracts before Kubernetes implementations.
 - The completed baseline kept HTTP latency separate from its synthetic belief observation. Phase 1 explicitly supersedes that choice: selected processing latency is now the belief signal, while request/transport latency and concurrency remain separate telemetry.
 - Make the slot runner depend on explicit discovery, traffic, observation, and result-sink ports. Keep simulation implementations as the behavioral baseline for future infrastructure adapters.
@@ -85,7 +86,8 @@
 - Define Kernel transport overhead per selected hop as $\max(0,L_{\mathrm{request}}-Q_{\mathrm{processing}})$ in milliseconds. Report it as mode-specific telemetry and include its per-flow sum in realized utility and end-to-end SLA as before; do not call it a direct consecutive-Pod link measurement or impose an unsupported upper bound.
 - Accept the Kubernetes Kernel scheduling tolerance when at least 95% of selected hops satisfy measured-minus-modeled processing overshoot $\le\max(10\text{ ms},10\%\text{ of modeled latency})$. Continue to require at least 80% categorical accuracy, load-1 state ordering, observed non-decreasing congestion groups, and exact signal/likelihood/correlation boundaries.
 - Validate Kernel mathematical equivalence by replaying the captured selected processing signals, likelihoods, and per-flow transport values through the unchanged runner with deferred complete-route observations. Live measurements are distributional; replayed placements, grids, beliefs, utility, SLA, fairness, and equilibrium must be exact within numerical tolerance.
-- Insert a user-directed evidence and report-curation phase before DPDK/VPP design. It may organize, summarize, visualize, and explain existing reproducible Kernel/simulation evidence, but it does not alter the solver, utility, belief signal, SLA, admission boundary, or datapath implementation. `Tutorial.md` and `Report.md` remain opt-in: read or edit either only when the user explicitly requests that file.
+- Insert a user-directed evidence and report-curation phase before DPDK/VPP design. It may organize, summarize, visualize, and explain existing reproducible Kernel/simulation evidence, but it does not alter the solver, utility, belief signal, SLA, admission boundary, or datapath implementation. `Tutorial.md`, `Report.md`, and `EVIDENCE_SUMMARY.md` remain opt-in: read or edit one only when the user explicitly requests that file.
+- Treat replay evidence as code-version-specific. The accepted Phase 3 trace predates the global belief-retention change from 0.6 to 0.8: its live Kernel telemetry remains directly summarizable, but its historical zero-drift replay claim must not be presented as current-HEAD parity. A fresh supported-size trace is required before claiming replay parity under retention 0.8.
 
 ## Deliberately deferred
 

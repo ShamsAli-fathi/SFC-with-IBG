@@ -98,17 +98,19 @@ Gate: complete. `kernel` is explicit from adapters through traces, while the Fas
 
 ## Phase 4: Curate evidence and user-directed reports
 
-Status: planned.
+Status: in progress.
 
 Suggested Codex reasoning: `high` — evidence must remain traceable to a reproducible run and must not silently turn synthetic testbed results into hardware or datapath claims.
 
 - Help the user gather, inspect, summarize, and explain existing simulation and `kernel` evidence, including structured JSONL traces, host-side CSV exports, validation summaries, calibration results, and focused test outcomes.
 - Preserve provenance for every reported figure or claim: record the source command/trace, seed, dimensions, image/mode, and whether a result is mathematical replay, modeled calibration, localhost FastAPI conformance, or live Kubernetes telemetry.
 - Keep claims bounded: the HTTP/Kubernetes route is the validated `kernel` baseline; do not imply DPDK/VPP, SR-IOV, hugepages, hardware offload, line-rate, or real CNF validation.
-- Treat report content as user-directed work. Do not read or edit `Tutorial.md` or `Report.md` unless the user explicitly requests that file in the current task. Do not rewrite generated evidence files; derive new summaries or figures only when requested.
+- Treat report content as user-directed work. Do not read or edit `Tutorial.md`, `Report.md`, or `EVIDENCE_SUMMARY.md` unless the user explicitly requests that file in the current task. Do not rewrite generated evidence files; derive new summaries or figures only when requested.
 - Answer user questions and add narrowly scoped reproducibility aids when needed, without changing the decoupled solver, processing-latency observation/likelihood boundary, hard 250 ms SLA, or one-of-M no-rejection behavior.
 
 Gate: the requested evidence is traceable to committed code and identified run artifacts, its scope/units/limitations are clear, and no IBG or datapath behavior has changed.
+
+Initial curation result: `EVIDENCE_SUMMARY.md` identifies the accepted calibration command and supported Kernel traces, separates modeled, localhost, live-cluster, and replay claims, and is opt-in-only. The Phase 2 synthetic calibration reproduces under current code. The historical Phase 3 trace still passes its live telemetry gate but predates the belief-retention change from 0.6 to 0.8. A fresh supported-size retention-0.8 Kernel trace now replays exactly across 11 slots and 99 placements/observations, restoring current-HEAD mathematical parity; its 89.90% server-overshoot pass rate remains below the 95% live scheduling threshold, so it is not a replacement accepted live Kernel gate. No solver or datapath change is implied.
 
 ## Phase 5: Design and prove the DPDK/VPP integration boundary
 
