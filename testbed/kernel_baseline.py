@@ -60,6 +60,10 @@ def build_kernel_baseline_report(events, profiles):
     overshoot_values = []
     transport_values = []
     request_values = []
+    pairwise_link_checks = []
+    pairwise_link_values = []
+    ingress_overhead_values = []
+    pairwise_schema_seen = False
     classified = 0
     total_hops = 0
     groups = {}
@@ -72,6 +76,14 @@ def build_kernel_baseline_report(events, profiles):
             for flow in traffic.get("flows", [])
             for hop in flow.get("hops", [])
         ]
+        flows = traffic.get("flows", [])
+        pairwise_schema_declared = any(
+            "links" in flow
+            or "ingress_request_latency_ms" in flow
+            or "ingress_overhead_ms" in flow
+            for flow in flows
+        )
+        pairwise_schema_seen = pairwise_schema_seen or pairwise_schema_declared
         placements = {
             (item["stage"], item["flow_id"]): item
             for item in summary["placements"]
@@ -131,7 +143,12 @@ def build_kernel_baseline_report(events, profiles):
             )
             transport_checks.append(
                 transport >= 0
-                and abs(transport - max(0.0, request - processing)) <= 1e-9
+                and (
+                    pairwise_schema_declared
+                    or abs(
+                        transport - max(0.0, request - processing)
+                    ) <= 1e-9
+                )
             )
             overshoot_checks.append(overshoot <= tolerance)
             processing_values.append(processing)
@@ -143,6 +160,56 @@ def build_kernel_baseline_report(events, profiles):
             groups.setdefault((profile.state, hop["assigned_load"]), []).append(
                 processing
             )
+
+        if pairwise_schema_declared:
+            expected_links = max(0, configuration.get("stages", 0) - 1)
+            for flow in flows:
+                flow_hops = {hop["stage"]: hop for hop in flow.get("hops", [])}
+                links = flow.get("links", [])
+                pairwise_link_checks.append("links" in flow)
+                pairwise_link_checks.append(len(links) == expected_links)
+                ingress_request = float(
+                    flow.get("ingress_request_latency_ms", -1.0)
+                )
+                ingress = float(flow.get("ingress_overhead_ms", -1.0))
+                pairwise_link_checks.append(
+                    ingress_request >= 0 and ingress >= 0
+                )
+                if ingress >= 0:
+                    ingress_overhead_values.append(ingress)
+                observed_stage_pairs = set()
+                for link in links:
+                    source_stage = int(link["source_stage"])
+                    target_stage = int(link["target_stage"])
+                    request_latency = float(link["request_latency_ms"])
+                    callee_elapsed = float(link["callee_elapsed_ms"])
+                    cost = float(link["link_cost_ms"])
+                    observed_stage_pairs.add((source_stage, target_stage))
+                    source_hop = flow_hops.get(source_stage, {})
+                    target_hop = flow_hops.get(target_stage, {})
+                    pairwise_link_checks.append(
+                        target_stage == source_stage + 1
+                        and int(link["slot_id"]) == int(traffic["slot_id"])
+                        and int(link["flow_id"]) == int(flow["flow_id"])
+                        and link["source_replica_id"]
+                        == source_hop.get("replica_id")
+                        and link["target_replica_id"]
+                        == target_hop.get("replica_id")
+                        and cost >= 0
+                        and abs(
+                            cost
+                            - max(0.0, request_latency - callee_elapsed)
+                        )
+                        <= 1e-9
+                    )
+                    pairwise_link_values.append(cost)
+                pairwise_link_checks.append(
+                    observed_stage_pairs
+                    == {
+                        (stage, stage + 1)
+                        for stage in range(1, expected_links + 1)
+                    }
+                )
 
     group_statistics = [
         {
@@ -205,6 +272,10 @@ def build_kernel_baseline_report(events, profiles):
         ),
         "equilibrium_reached": completed.get("reached_equilibrium") is True,
     }
+    if pairwise_schema_seen:
+        checks["pairwise_link_cost_complete_and_correlated"] = bool(
+            pairwise_link_checks
+        ) and all(pairwise_link_checks)
     return {
         "gate_passed": all(checks.values()),
         "checks": checks,
@@ -221,12 +292,17 @@ def build_kernel_baseline_report(events, profiles):
                 "at least 95% of hops within max(10 ms, 10% modeled "
                 "processing latency)"
             ),
-            "transport_overhead": "non-negative; distribution reported without an upper gate",
+            "transport_overhead": (
+                "non-negative compatibility telemetry; distribution reported "
+                "without an upper gate"
+            ),
         },
         "processing_latency_ms": _distribution(processing_values),
         "server_overshoot_ms": _distribution(overshoot_values),
         "request_latency_ms": _distribution(request_values),
         "transport_overhead_ms": _distribution(transport_values),
+        "pairwise_link_cost_ms": _distribution(pairwise_link_values),
+        "ingress_overhead_ms": _distribution(ingress_overhead_values),
         "state_load_groups": group_statistics,
         "congestion_comparisons": congestion_comparisons,
     }

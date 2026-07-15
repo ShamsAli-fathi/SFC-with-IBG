@@ -93,6 +93,31 @@ def complete_trace():
     )
 
 
+def add_pairwise_telemetry(events):
+    traffic = events[1]["summary"]["traffic"]
+    for flow in traffic["flows"]:
+        flow["ingress_request_latency_ms"] = 120.0
+        flow["ingress_overhead_ms"] = 0.5
+        flow["links"] = []
+        for source, target in zip(flow["hops"], flow["hops"][1:]):
+            flow["links"].append(
+                {
+                    "slot_id": traffic["slot_id"],
+                    "flow_id": flow["flow_id"],
+                    "source_stage": source["stage"],
+                    "source_replica_id": source["replica_id"],
+                    "source_pod_name": f"stage-{source['stage']}-pod",
+                    "target_stage": target["stage"],
+                    "target_replica_id": target["replica_id"],
+                    "target_pod_name": f"stage-{target['stage']}-pod",
+                    "target_endpoint": f"http://stage-{target['stage']}",
+                    "request_latency_ms": 20.0,
+                    "callee_elapsed_ms": 19.25,
+                    "link_cost_ms": 0.75,
+                }
+            )
+
+
 def test_kernel_baseline_accepts_complete_selected_only_trace():
     events, profiles = complete_trace()
 
@@ -129,5 +154,36 @@ def test_kernel_baseline_rejects_transport_or_unselected_observation_drift():
     assert report["checks"]["selected_only_correlation"] is False
     assert (
         report["checks"]["transport_overhead_non_negative_and_correlated"]
+        is False
+    )
+
+
+def test_kernel_baseline_accepts_pairwise_links_and_separate_ingress():
+    events, profiles = complete_trace()
+    add_pairwise_telemetry(events)
+
+    report = build_kernel_baseline_report(events, profiles)
+
+    assert report["gate_passed"] is True
+    assert report["pairwise_link_cost_ms"]["count"] == 6
+    assert report["ingress_overhead_ms"]["count"] == 3
+    assert (
+        report["checks"]["pairwise_link_cost_complete_and_correlated"]
+        is True
+    )
+
+
+def test_kernel_baseline_rejects_pairwise_link_cost_drift():
+    events, profiles = complete_trace()
+    add_pairwise_telemetry(events)
+    events[1]["summary"]["traffic"]["flows"][0]["links"][0][
+        "link_cost_ms"
+    ] = 2.0
+
+    report = build_kernel_baseline_report(events, profiles)
+
+    assert report["gate_passed"] is False
+    assert (
+        report["checks"]["pairwise_link_cost_complete_and_correlated"]
         is False
     )

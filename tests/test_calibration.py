@@ -10,7 +10,7 @@ from IBG.calibration import (
     sensitivity_report,
     zero_crossings,
 )
-from IBG.latency_model import latency_likelihood
+from IBG.latency_model import DEFAULT_SLA_LATENCY_MS, latency_likelihood
 from testbed.profiles import load_profiles
 
 
@@ -51,6 +51,8 @@ def test_seeded_calibration_report_passes_model_gate():
 
     assert report["calibration_kind"] == "synthetic-design-calibration"
     assert report["model_gate_passed"] is True
+    assert DEFAULT_SLA_LATENCY_MS == 175.0
+    assert report["policy"]["sla_latency_ms"] == 175.0
     assert report["classification"]["minimum_accuracy"] >= 0.90
     assert report["sla_probability"]["probability_by_state"][1] >= 0.95
     assert report["sla_probability"]["probability_by_state"][4] <= 0.05

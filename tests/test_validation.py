@@ -81,6 +81,32 @@ def kubernetes_shape(simulation):
     return kubernetes
 
 
+def pairwise_kubernetes_shape(simulation):
+    kubernetes = kubernetes_shape(simulation)
+    for flow in kubernetes["traffic"]["flows"]:
+        flow["ingress_request_latency_ms"] = 125.0
+        flow["ingress_overhead_ms"] = 0.5
+        flow["links"] = []
+        for source, target in zip(flow["hops"], flow["hops"][1:]):
+            flow["links"].append(
+                {
+                    "slot_id": simulation["slot_id"],
+                    "flow_id": flow["flow_id"],
+                    "source_stage": source["stage"],
+                    "source_replica_id": source["replica_id"],
+                    "source_pod_name": source["pod_name"],
+                    "target_stage": target["stage"],
+                    "target_replica_id": target["replica_id"],
+                    "target_pod_name": target["pod_name"],
+                    "target_endpoint": target["endpoint"],
+                    "request_latency_ms": 50.0,
+                    "callee_elapsed_ms": 49.25,
+                    "link_cost_ms": 0.75,
+                }
+            )
+    return kubernetes
+
+
 def test_supported_profile_set_contains_five_seeded_replicas_per_stage():
     profiles = load_profiles(PROFILES)
 
@@ -160,6 +186,51 @@ def test_comparison_rejects_datapath_mode_or_transport_drift():
     assert comparison["gate_passed"] is False
     assert (
         comparison["kubernetes_telemetry"]["transport_telemetry_complete"]
+        is False
+    )
+
+
+def test_comparison_accepts_pairwise_links_and_separate_ingress_telemetry():
+    simulation = run_controlled_simulation(
+        load_profiles(PROFILES),
+        seed=2050,
+        slot_id=1,
+    )
+
+    comparison = compare_backend_summaries(
+        simulation,
+        pairwise_kubernetes_shape(simulation),
+    )
+
+    assert comparison["gate_passed"] is True
+    assert (
+        comparison["kubernetes_telemetry"]["pairwise_schema_declared"]
+        is True
+    )
+    assert (
+        comparison["kubernetes_telemetry"][
+            "pairwise_link_telemetry_complete"
+        ]
+        is True
+    )
+
+
+def test_comparison_rejects_pairwise_link_cost_drift():
+    simulation = run_controlled_simulation(
+        load_profiles(PROFILES),
+        seed=2050,
+        slot_id=1,
+    )
+    kubernetes = pairwise_kubernetes_shape(simulation)
+    kubernetes["traffic"]["flows"][0]["links"][0]["link_cost_ms"] = 2.0
+
+    comparison = compare_backend_summaries(simulation, kubernetes)
+
+    assert comparison["gate_passed"] is False
+    assert (
+        comparison["kubernetes_telemetry"][
+            "pairwise_link_telemetry_complete"
+        ]
         is False
     )
 

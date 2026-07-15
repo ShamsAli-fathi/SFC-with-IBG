@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import scripts.run_experiment as launcher
 from scripts.run_experiment import (
+    csv_run_hash,
     export_legacy_csv,
     follow_logs,
     parse_args,
@@ -12,6 +13,15 @@ from scripts.run_experiment import (
     set_env,
     start_experiment_job,
 )
+
+
+def test_csv_run_hash_is_six_hex_characters_and_provenance_stable():
+    first = csv_run_hash("20260715T140501Z", 2050, 12, 3, 5)
+
+    assert len(first) == 6
+    assert set(first) <= set("0123456789abcdef")
+    assert first == csv_run_hash("20260715T140501Z", 2050, 12, 3, 5)
+    assert first != csv_run_hash("20260715T140501Z", 2051, 12, 3, 5)
 
 
 def test_set_env_replaces_field_refs_and_adds_new_values():
@@ -77,6 +87,7 @@ def test_export_legacy_csv_writes_all_reports(tmp_path):
                     "elapsed_seconds": 0.3,
                     "sla_violations": 1,
                     "aggregate_utility_total": -2.5,
+                    "realized_utility_total": -3.5,
                     "jain_fairness": 0.9,
                 },
                 "beliefs": {
@@ -102,11 +113,16 @@ def test_export_legacy_csv_writes_all_reports(tmp_path):
         "time.csv",
         "sla_violations.csv",
         "aggregate_utility.csv",
+        "realized_end_to_end_utility.csv",
         "jain_index.csv",
         "replica_results.csv",
     }
     with (output_dir / "aggregate_utility.csv").open(newline="") as source:
         assert list(csv.DictReader(source)) == [{"test-run": "-2.5"}]
+    with (output_dir / "realized_end_to_end_utility.csv").open(
+        newline=""
+    ) as source:
+        assert list(csv.DictReader(source)) == [{"test-run": "-3.5"}]
     with (output_dir / "replica_results.csv").open(newline="") as source:
         beliefs = list(csv.DictReader(source))
     assert len(beliefs) == 2
@@ -131,6 +147,7 @@ def test_export_legacy_csv_appends_a_new_metric_column(tmp_path):
                     "elapsed_seconds": 0.1,
                     "sla_violations": 0,
                     "aggregate_utility_total": 1.0,
+                    "realized_utility_total": 0.5,
                     "jain_fairness": 1.0,
                 },
                 "beliefs": {"1:1": [0.1, 0.2, 0.3, 0.4]},

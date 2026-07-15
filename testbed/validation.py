@@ -502,6 +502,7 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
         for flow in traffic.get("flows", [])
         for hop in flow.get("hops", [])
     ]
+    traffic_flows = traffic.get("flows", [])
     traffic_keys = {
         (hop.get("stage"), hop.get("flow_id")) for hop in traffic_hops
     }
@@ -519,19 +520,93 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
     selected_only = (
         selected_keys == observation_selected_keys == traffic_keys
     )
-    transport_telemetry_complete = all(
-        float(hop.get("transport_overhead_ms", -1.0)) >= 0
-        and abs(
-            float(hop["transport_overhead_ms"])
-            - max(
-                0.0,
-                float(hop["request_latency_ms"])
-                - float(hop["processing_latency_ms"]),
-            )
-        )
-        <= tolerance
-        for hop in traffic_hops
+    pairwise_schema_declared = any(
+        "links" in flow
+        or "ingress_request_latency_ms" in flow
+        or "ingress_overhead_ms" in flow
+        for flow in traffic_flows
     )
+    if pairwise_schema_declared:
+        # New traces keep broad flow-generator ingress timing separate and
+        # report exactly one measured RPC/link cost for every selected
+        # consecutive-stage pair. Hop transport fields remain only as a
+        # backwards-compatible view and are not the pairwise utility cost.
+        transport_telemetry_complete = all(
+            float(hop.get("transport_overhead_ms", -1.0)) >= 0
+            for hop in traffic_hops
+        )
+        pairwise_link_checks = []
+        expected_links_per_flow = max(
+            0,
+            kubernetes["configuration"]["stages"] - 1,
+        )
+        for flow in traffic_flows:
+            hops_by_stage = {
+                int(hop["stage"]): hop for hop in flow.get("hops", [])
+            }
+            links = flow.get("links")
+            pairwise_link_checks.append(isinstance(links, list))
+            if not isinstance(links, list):
+                continue
+            pairwise_link_checks.extend(
+                [
+                    len(links) == expected_links_per_flow,
+                    float(flow.get("ingress_request_latency_ms", -1.0)) >= 0,
+                    float(flow.get("ingress_overhead_ms", -1.0)) >= 0,
+                ]
+            )
+            observed_stage_pairs = set()
+            for link in links:
+                source_stage = int(link.get("source_stage", -1))
+                target_stage = int(link.get("target_stage", -1))
+                source_hop = hops_by_stage.get(source_stage, {})
+                target_hop = hops_by_stage.get(target_stage, {})
+                request_latency = float(link.get("request_latency_ms", -1.0))
+                callee_elapsed = float(link.get("callee_elapsed_ms", -1.0))
+                cost = float(link.get("link_cost_ms", -1.0))
+                observed_stage_pairs.add((source_stage, target_stage))
+                pairwise_link_checks.append(
+                    target_stage == source_stage + 1
+                    and int(link.get("slot_id", -1)) == kubernetes["slot_id"]
+                    and int(link.get("flow_id", -1)) == flow.get("flow_id")
+                    and link.get("source_replica_id")
+                    == source_hop.get("replica_id")
+                    and link.get("target_replica_id")
+                    == target_hop.get("replica_id")
+                    and request_latency >= 0
+                    and callee_elapsed >= 0
+                    and cost >= 0
+                    and abs(
+                        cost - max(0.0, request_latency - callee_elapsed)
+                    )
+                    <= tolerance
+                )
+            pairwise_link_checks.append(
+                observed_stage_pairs
+                == {
+                    (stage, stage + 1)
+                    for stage in range(1, expected_links_per_flow + 1)
+                }
+            )
+        pairwise_link_telemetry_complete = bool(pairwise_link_checks) and all(
+            pairwise_link_checks
+        )
+    else:
+        # Historical traces measured each independent flow-generator request.
+        transport_telemetry_complete = all(
+            float(hop.get("transport_overhead_ms", -1.0)) >= 0
+            and abs(
+                float(hop["transport_overhead_ms"])
+                - max(
+                    0.0,
+                    float(hop["request_latency_ms"])
+                    - float(hop["processing_latency_ms"]),
+                )
+            )
+            <= tolerance
+            for hop in traffic_hops
+        )
+        pairwise_link_telemetry_complete = True
     metadata_complete = all(
         placement.get("pod_name")
         and placement.get("node_name")
@@ -594,6 +669,7 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
             len(traffic_hops) == expected_hops,
             selected_only,
             transport_telemetry_complete,
+            pairwise_link_telemetry_complete,
             metadata_complete,
         ]
     )
@@ -627,6 +703,10 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
             "complete_hops": len(traffic_hops),
             "selected_only": selected_only,
             "transport_telemetry_complete": transport_telemetry_complete,
+            "pairwise_link_telemetry_complete": (
+                pairwise_link_telemetry_complete
+            ),
+            "pairwise_schema_declared": pairwise_schema_declared,
             "metadata_complete": metadata_complete,
             "max_admitted_concurrency": max(
                 (hop["concurrency"] for hop in traffic_hops),

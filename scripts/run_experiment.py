@@ -2,6 +2,7 @@
 import argparse
 import csv
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import platform
@@ -27,8 +28,17 @@ CSV_METRICS = {
     "time.csv": "elapsed_seconds",
     "sla_violations.csv": "sla_violations",
     "aggregate_utility.csv": "aggregate_utility_total",
+    "realized_end_to_end_utility.csv": "realized_utility_total",
     "jain_index.csv": "jain_fairness",
 }
+
+
+def csv_run_hash(timestamp, seed, num_of_flows, num_of_stages, num_of_replicas):
+    provenance = (
+        f"{timestamp}-seed{seed}-f{num_of_flows}"
+        f"-s{num_of_stages}-r{num_of_replicas}"
+    )
+    return hashlib.sha256(provenance.encode("utf-8")).hexdigest()[:6]
 
 
 def command_text(command):
@@ -671,7 +681,8 @@ def parse_args(argv=None):
         choices=(0, 1),
         default=0,
         help=(
-            "write the five legacy CSV reports to "
+            "write the five legacy CSV reports and realized end-to-end "
+            "utility report to "
             f"{CSV_OUTPUT_DIR} (1=enabled, 0=disabled)"
         ),
     )
@@ -730,12 +741,15 @@ def main():
     follow_logs(context, trace_path, args.timeout)
     print(f"\nDetailed JSONL trace: {trace_path}")
     if args.csv == 1:
-        run_id = (
-            f"{timestamp}-seed{args.seed}-f{args.num_of_flows}"
-            f"-s{args.num_of_stages}-r{args.num_of_replicas}"
+        run_id = csv_run_hash(
+            timestamp,
+            args.seed,
+            args.num_of_flows,
+            args.num_of_stages,
+            args.num_of_replicas,
         )
         csv_paths = export_legacy_csv(trace_path, CSV_OUTPUT_DIR, run_id)
-        print(f"Legacy CSV reports: {CSV_OUTPUT_DIR}")
+        print(f"CSV reports: {CSV_OUTPUT_DIR}")
         for csv_path in csv_paths:
             print(f"  {csv_path.name}")
 

@@ -196,7 +196,7 @@ def embedding(policy, num_of_replicas, embed_dict, flow_list):  # Does the embed
     return embed_dict, last_embed
 
 
-def is_equilibrium(replica_list, previous_belief_list, threshold=0.04):
+def is_equilibrium(replica_list, previous_belief_list, threshold=0.03):
     current_belief_list = [replica.belief for replica in replica_list.values()]
     differences = [
         [abs(b - a) for a, b in zip(prev_row, curr_row)]

@@ -5,10 +5,12 @@ import os
 import re
 import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+import httpx
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field, ValidationError, model_validator
 
+from IBG.datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
 from IBG.latency_model import (
     estimate_state,
     latency_likelihood,
@@ -135,6 +137,60 @@ class ProcessResponse(BaseModel):
     state_likelihood: tuple[float, float, float, float]
     legacy_signal: int
     legacy_likelihood: tuple[float, float, float, float]
+
+
+class ForwardHop(BaseModel):
+    stage: int = Field(ge=1)
+    replica_id: int = Field(ge=1)
+    url: AnyHttpUrl
+    assigned_load: int = Field(ge=1)
+
+
+class RouteProcessRequest(BaseModel):
+    datapath_mode: str
+    slot_id: int = Field(ge=1)
+    flow_id: int = Field(ge=1)
+    assigned_load: int = Field(ge=1)
+    remaining_hops: list[ForwardHop] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_remaining_stage_order(self):
+        self.datapath_mode = require_datapath_mode(
+            self.datapath_mode,
+            runtime=True,
+        )
+        stages = [hop.stage for hop in self.remaining_hops]
+        if any(right != left + 1 for left, right in zip(stages, stages[1:])):
+            raise ValueError("remaining route stages must be contiguous and ordered")
+        return self
+
+
+class PairwiseLinkTelemetry(BaseModel):
+    slot_id: int
+    flow_id: int
+    source_stage: int
+    source_replica_id: int
+    source_pod_name: str
+    target_stage: int
+    target_replica_id: int
+    target_pod_name: str
+    target_endpoint: str
+    request_latency_ms: float = Field(ge=0)
+    callee_elapsed_ms: float = Field(ge=0)
+    link_cost_ms: float = Field(ge=0)
+
+
+class RouteProcessResponse(BaseModel):
+    datapath_mode: str
+    slot_id: int
+    flow_id: int
+    elapsed_ms: float = Field(ge=0)
+    hops: list[ProcessResponse] = Field(min_length=1)
+    links: list[PairwiseLinkTelemetry] = Field(default_factory=list)
+
+
+class RouteForwardingError(RuntimeError):
+    pass
 
 
 class LatencyObservationSource:
@@ -268,16 +324,147 @@ class ReplicaRuntime:
                 self._active_requests -= 1
 
 
+class ReplicaRouteForwarder:
+    """Execute an already-selected route without influencing placement."""
+
+    def __init__(
+        self,
+        runtime: ReplicaRuntime,
+        *,
+        request_timeout_seconds: float = 10.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
+        if request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive")
+        self.runtime = runtime
+        self.request_timeout_seconds = request_timeout_seconds
+        self.transport = transport
+
+    async def process_route(self, request: RouteProcessRequest):
+        if request.datapath_mode != KERNEL_DATAPATH_MODE:
+            raise RouteForwardingError(
+                f"unsupported forwarding mode {request.datapath_mode!r}"
+            )
+        if request.remaining_hops:
+            expected_next_stage = self.runtime.config.stage + 1
+            if request.remaining_hops[0].stage != expected_next_stage:
+                raise RouteForwardingError(
+                    "next forwarded stage must be "
+                    f"{expected_next_stage}, got {request.remaining_hops[0].stage}"
+                )
+
+        started_at = time.perf_counter()
+        local = await self.runtime.process(
+            ProcessRequest(
+                slot_id=request.slot_id,
+                flow_id=request.flow_id,
+                assigned_load=request.assigned_load,
+            )
+        )
+        hops = [local]
+        links = []
+
+        if request.remaining_hops:
+            next_hop = request.remaining_hops[0]
+            endpoint = f"{str(next_hop.url).rstrip('/')}/process-route"
+            downstream_request = RouteProcessRequest(
+                datapath_mode=request.datapath_mode,
+                slot_id=request.slot_id,
+                flow_id=request.flow_id,
+                assigned_load=next_hop.assigned_load,
+                remaining_hops=request.remaining_hops[1:],
+            )
+            edge_started_at = time.perf_counter()
+            try:
+                async with httpx.AsyncClient(
+                    timeout=self.request_timeout_seconds,
+                    transport=self.transport,
+                ) as client:
+                    response = await client.post(
+                        endpoint,
+                        json=downstream_request.model_dump(mode="json"),
+                    )
+                    response.raise_for_status()
+                    downstream = RouteProcessResponse.model_validate(
+                        response.json()
+                    )
+            except (httpx.HTTPError, ValidationError, ValueError) as error:
+                raise RouteForwardingError(
+                    f"flow {request.flow_id} stage {next_hop.stage} "
+                    f"forwarding failed: {error}"
+                ) from error
+            edge_request_latency_ms = (
+                time.perf_counter() - edge_started_at
+            ) * 1000
+
+            first_downstream = downstream.hops[0]
+            if (
+                downstream.datapath_mode != request.datapath_mode
+                or downstream.slot_id != request.slot_id
+                or downstream.flow_id != request.flow_id
+                or first_downstream.stage != next_hop.stage
+                or first_downstream.replica_id != next_hop.replica_id
+                or first_downstream.assigned_load != next_hop.assigned_load
+            ):
+                raise RouteForwardingError(
+                    f"flow {request.flow_id} stage {next_hop.stage} "
+                    "returned mismatched route telemetry"
+                )
+
+            links.append(
+                PairwiseLinkTelemetry(
+                    slot_id=request.slot_id,
+                    flow_id=request.flow_id,
+                    source_stage=local.stage,
+                    source_replica_id=local.replica_id,
+                    source_pod_name=local.pod_name,
+                    target_stage=first_downstream.stage,
+                    target_replica_id=first_downstream.replica_id,
+                    target_pod_name=first_downstream.pod_name,
+                    target_endpoint=str(next_hop.url),
+                    request_latency_ms=edge_request_latency_ms,
+                    callee_elapsed_ms=downstream.elapsed_ms,
+                    link_cost_ms=max(
+                        0.0,
+                        edge_request_latency_ms - downstream.elapsed_ms,
+                    ),
+                )
+            )
+            hops.extend(downstream.hops)
+            links.extend(downstream.links)
+
+        return RouteProcessResponse(
+            datapath_mode=request.datapath_mode,
+            slot_id=request.slot_id,
+            flow_id=request.flow_id,
+            elapsed_ms=(time.perf_counter() - started_at) * 1000,
+            hops=hops,
+            links=links,
+        )
+
+
 def create_app(
     config: ReplicaConfig | None = None,
     observation_source: LatencySource | None = None,
+    forwarding_transport: httpx.AsyncBaseTransport | None = None,
+    forwarding_timeout_seconds: float | None = None,
 ):
     runtime = ReplicaRuntime(
         config or ReplicaConfig.from_env(),
         observation_source=observation_source,
     )
+    forwarder = ReplicaRouteForwarder(
+        runtime,
+        request_timeout_seconds=(
+            forwarding_timeout_seconds
+            if forwarding_timeout_seconds is not None
+            else float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "10"))
+        ),
+        transport=forwarding_transport,
+    )
     application = FastAPI(title="IBG HTTP Replica", version="0.1.0")
     application.state.runtime = runtime
+    application.state.forwarder = forwarder
 
     @application.get("/health", response_model=HealthResponse)
     async def health():
@@ -286,6 +473,13 @@ def create_app(
     @application.post("/process", response_model=ProcessResponse)
     async def process(request: ProcessRequest):
         return await runtime.process(request)
+
+    @application.post("/process-route", response_model=RouteProcessResponse)
+    async def process_route(request: RouteProcessRequest):
+        try:
+            return await forwarder.process_route(request)
+        except RouteForwardingError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     return application
 

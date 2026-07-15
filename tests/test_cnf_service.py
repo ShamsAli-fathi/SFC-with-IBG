@@ -1,5 +1,6 @@
 import asyncio
 
+import httpx
 from httpx import ASGITransport, AsyncClient
 import numpy as np
 import pytest
@@ -23,6 +24,17 @@ async def request(app, method, path, **kwargs):
 
 def fixed_latency(assigned_load):
     return 2.0
+
+
+class HostRoutingTransport(httpx.AsyncBaseTransport):
+    def __init__(self):
+        self.apps = {}
+        self.calls = []
+
+    async def handle_async_request(self, request):
+        self.calls.append((request.url.host, request.url.path))
+        transport = ASGITransport(app=self.apps[request.url.host])
+        return await transport.handle_async_request(request)
 
 
 def test_health_exposes_stable_identity():
@@ -77,6 +89,69 @@ def test_process_returns_identity_and_latency_observation():
     assert body["legacy_likelihood"] == body["state_likelihood"]
     assert sum(body["state_likelihood"]) == pytest.approx(1.0)
     assert app.state.runtime.active_requests == 0
+
+
+def test_selected_route_is_forwarded_replica_to_replica_with_pairwise_links():
+    router = HostRoutingTransport()
+    apps = {
+        f"stage-{stage}-1": create_app(
+            ReplicaConfig(
+                stage=stage,
+                replica_id=1,
+                pod_name=f"stage-{stage}-1",
+            ),
+            observation_source=fixed_latency,
+            forwarding_transport=router,
+        )
+        for stage in (1, 2, 3)
+    }
+    router.apps = apps
+
+    response = asyncio.run(
+        request(
+            apps["stage-1-1"],
+            "POST",
+            "/process-route",
+            json={
+                "datapath_mode": "kernel",
+                "slot_id": 4,
+                "flow_id": 9,
+                "assigned_load": 1,
+                "remaining_hops": [
+                    {
+                        "stage": 2,
+                        "replica_id": 1,
+                        "url": "http://stage-2-1",
+                        "assigned_load": 1,
+                    },
+                    {
+                        "stage": 3,
+                        "replica_id": 1,
+                        "url": "http://stage-3-1",
+                        "assigned_load": 1,
+                    },
+                ],
+            },
+        )
+    )
+    body = response.json()
+
+    assert response.status_code == 200
+    assert [(hop["stage"], hop["replica_id"]) for hop in body["hops"]] == [
+        (1, 1),
+        (2, 1),
+        (3, 1),
+    ]
+    assert [
+        (link["source_stage"], link["target_stage"])
+        for link in body["links"]
+    ] == [(1, 2), (2, 3)]
+    assert all(link["link_cost_ms"] >= 0 for link in body["links"])
+    assert router.calls == [
+        ("stage-2-1", "/process-route"),
+        ("stage-3-1", "/process-route"),
+    ]
+    assert all(app.state.runtime.active_requests == 0 for app in apps.values())
 
 
 def test_latency_model_uses_final_assignment_load_not_admission_order():

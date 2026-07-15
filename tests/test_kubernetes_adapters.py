@@ -182,17 +182,20 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
                             "flow_id": route["flow_id"],
                             "stage": hop["stage"],
                             "replica_id": hop["replica_id"],
-                            "pod_name": f"stage-{hop['stage']}-{hop['replica_id'] - 1}",
-                                "endpoint": hop["url"],
-                                "concurrency": 1,
-                                "assigned_load": planned_congestion[
-                                    (hop["stage"], hop["replica_id"])
-                                ],
-                                "modeled_processing_latency_ms": 40.0,
-                                "legacy_congestion": planned_congestion[
-                                    (hop["stage"], hop["replica_id"])
-                                ],
-                                "processing_latency_ms": 40.0,
+                            "pod_name": (
+                                f"stage-{hop['stage']}-"
+                                f"{hop['replica_id'] - 1}"
+                            ),
+                            "endpoint": hop["url"],
+                            "concurrency": 1,
+                            "assigned_load": planned_congestion[
+                                (hop["stage"], hop["replica_id"])
+                            ],
+                            "modeled_processing_latency_ms": 40.0,
+                            "legacy_congestion": planned_congestion[
+                                (hop["stage"], hop["replica_id"])
+                            ],
+                            "processing_latency_ms": 40.0,
                             "request_latency_ms": 41.0,
                             "transport_overhead_ms": 1.0,
                             "signal_latency_ms": 40.0,
@@ -203,6 +206,33 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
                         }
                         for hop in route["hops"]
                     ],
+                    "links": [
+                        {
+                            "slot_id": payload["slot_id"],
+                            "flow_id": route["flow_id"],
+                            "source_stage": left["stage"],
+                            "source_replica_id": left["replica_id"],
+                            "source_pod_name": (
+                                f"stage-{left['stage']}-"
+                                f"{left['replica_id'] - 1}"
+                            ),
+                            "target_stage": right["stage"],
+                            "target_replica_id": right["replica_id"],
+                            "target_pod_name": (
+                                f"stage-{right['stage']}-"
+                                f"{right['replica_id'] - 1}"
+                            ),
+                            "target_endpoint": right["url"],
+                            "request_latency_ms": 41.0,
+                            "callee_elapsed_ms": 40.0,
+                            "link_cost_ms": 1.0,
+                        }
+                        for left, right in zip(
+                            route["hops"], route["hops"][1:]
+                        )
+                    ],
+                    "ingress_request_latency_ms": 41.0,
+                    "ingress_overhead_ms": 1.0,
                 }
             )
         return Response(
@@ -255,7 +285,7 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
             for observation in observations
         )
     assert all(
-        latency == pytest.approx(num_of_stages)
+        latency == pytest.approx(num_of_stages - 1)
         for latency in result.link_latency_ms_per_flow.values()
     )
     assert all(
@@ -263,11 +293,15 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
         for latency in result.processing_latency_ms_per_flow.values()
     )
     assert all(
-        latency == pytest.approx(num_of_stages * 41.0)
+        latency == pytest.approx(
+            num_of_stages * 40.0 + num_of_stages - 1
+        )
         for latency in result.end_to_end_latency_ms_per_flow.values()
     )
     assert all(
-        utility == pytest.approx(num_of_stages * 58.0)
+        utility == pytest.approx(
+            num_of_stages * 59.0 - (num_of_stages - 1)
+        )
         for utility in result.realized_utility_per_flow.values()
     )
     assert result.sla_violations == 0

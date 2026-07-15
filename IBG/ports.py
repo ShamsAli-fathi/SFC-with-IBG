@@ -76,7 +76,7 @@ class ObservationCollector(Protocol):
 
 class LinkLatencyCollector(Protocol):
     def collect(self, traffic_telemetry: Any) -> Mapping[int, float]:
-        """Return per-flow transport/link latency in milliseconds."""
+        """Return summed consecutive-stage link cost per flow in milliseconds."""
 
 
 class ResultSink(Protocol):

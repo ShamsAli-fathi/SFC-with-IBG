@@ -9,7 +9,10 @@ import httpx
 from pydantic import AnyHttpUrl, BaseModel, Field, ValidationError, model_validator
 
 from IBG.datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
-from testbed.cnf_service import ProcessResponse
+from testbed.cnf_service import (
+    PairwiseLinkTelemetry,
+    RouteProcessResponse,
+)
 
 
 class HopTarget(BaseModel):
@@ -85,6 +88,9 @@ class HopTelemetry(BaseModel):
 class FlowTelemetry(BaseModel):
     flow_id: int
     hops: list[HopTelemetry]
+    links: list[PairwiseLinkTelemetry] = Field(default_factory=list)
+    ingress_request_latency_ms: float = Field(default=0.0, ge=0)
+    ingress_overhead_ms: float = Field(default=0.0, ge=0)
 
 
 class RunSlotResponse(BaseModel):
@@ -176,98 +182,151 @@ class FlowGenerator:
         )
 
     async def _run_flow(self, client, slot_id, route, planned_congestion):
-        telemetry = []
-        for hop in route.hops:
-            telemetry.append(
-                await self._run_hop(
-                    client,
-                    slot_id,
-                    route.flow_id,
-                    hop,
-                    planned_congestion[(hop.stage, hop.replica_id)],
-                )
-            )
-        return FlowTelemetry(flow_id=route.flow_id, hops=telemetry)
-
-    async def _run_hop(
-        self,
-        client,
-        slot_id,
-        flow_id,
-        hop,
-        assigned_load,
-    ):
-        endpoint = f"{str(hop.url).rstrip('/')}/process"
+        first_hop = route.hops[0]
+        endpoint = f"{str(first_hop.url).rstrip('/')}/process-route"
+        remaining_hops = [
+            {
+                "stage": hop.stage,
+                "replica_id": hop.replica_id,
+                "url": str(hop.url),
+                "assigned_load": planned_congestion[(hop.stage, hop.replica_id)],
+            }
+            for hop in route.hops[1:]
+        ]
         started_at = time.perf_counter()
         try:
             response = await client.post(
                 endpoint,
                 json={
+                    "datapath_mode": self.config.datapath_mode,
                     "slot_id": slot_id,
-                    "flow_id": flow_id,
-                    "assigned_load": assigned_load,
+                    "flow_id": route.flow_id,
+                    "assigned_load": planned_congestion[
+                        (first_hop.stage, first_hop.replica_id)
+                    ],
+                    "remaining_hops": remaining_hops,
                 },
             )
             response.raise_for_status()
-            replica_response = ProcessResponse.model_validate(response.json())
+            route_response = RouteProcessResponse.model_validate(response.json())
+        except httpx.HTTPStatusError as error:
+            raise FlowExecutionError(
+                f"flow {route.flow_id} forwarded route failed: "
+                f"HTTP {error.response.status_code} {error.response.text}"
+            ) from error
         except (httpx.HTTPError, ValidationError, ValueError) as error:
             raise FlowExecutionError(
-                f"flow {flow_id} stage {hop.stage} request failed: {error}"
+                f"flow {route.flow_id} forwarded route failed: {error}"
             ) from error
-
-        if (
-            replica_response.stage != hop.stage
-            or replica_response.replica_id != hop.replica_id
-        ):
-            raise FlowExecutionError(
-                f"flow {flow_id} stage {hop.stage} identity mismatch: "
-                f"expected replica {hop.replica_id}, got "
-                f"stage {replica_response.stage} replica {replica_response.replica_id}"
-            )
-
-        if (
-            replica_response.slot_id != slot_id
-            or replica_response.flow_id != flow_id
-        ):
-            raise FlowExecutionError(
-                f"flow {flow_id} stage {hop.stage} correlation mismatch: "
-                f"expected slot {slot_id} flow {flow_id}, got "
-                f"slot {replica_response.slot_id} flow {replica_response.flow_id}"
-            )
-
-        if replica_response.assigned_load != assigned_load:
-            raise FlowExecutionError(
-                f"flow {flow_id} stage {hop.stage} assigned load mismatch: "
-                f"expected {assigned_load}, got "
-                f"{replica_response.assigned_load}"
-            )
-
         request_latency_ms = (time.perf_counter() - started_at) * 1000
-        return HopTelemetry(
-            datapath_mode=self.config.datapath_mode,
-            slot_id=slot_id,
-            flow_id=flow_id,
-            stage=replica_response.stage,
-            replica_id=replica_response.replica_id,
-            pod_name=replica_response.pod_name,
-            endpoint=str(hop.url),
-            concurrency=replica_response.concurrency,
-            assigned_load=replica_response.assigned_load,
-            modeled_processing_latency_ms=(
-                replica_response.modeled_processing_latency_ms
-            ),
-            legacy_congestion=replica_response.legacy_congestion,
-            processing_latency_ms=replica_response.processing_latency_ms,
-            request_latency_ms=request_latency_ms,
-            transport_overhead_ms=max(
+
+        if (
+            route_response.datapath_mode != self.config.datapath_mode
+            or route_response.slot_id != slot_id
+            or route_response.flow_id != route.flow_id
+        ):
+            raise FlowExecutionError(
+                f"flow {route.flow_id} forwarded route correlation mismatch"
+            )
+        if len(route_response.hops) != len(route.hops):
+            raise FlowExecutionError(
+                f"flow {route.flow_id} returned {len(route_response.hops)} hops; "
+                f"expected {len(route.hops)}"
+            )
+        expected_link_count = max(0, len(route.hops) - 1)
+        if len(route_response.links) != expected_link_count:
+            raise FlowExecutionError(
+                f"flow {route.flow_id} returned {len(route_response.links)} links; "
+                f"expected {expected_link_count}"
+            )
+        for expected_source, expected_target, observed_link in zip(
+            route.hops,
+            route.hops[1:],
+            route_response.links,
+        ):
+            expected_link_cost = max(
                 0.0,
-                request_latency_ms - replica_response.processing_latency_ms,
-            ),
-            signal_latency_ms=replica_response.signal_latency_ms,
-            state_estimate=replica_response.state_estimate,
-            state_likelihood=replica_response.state_likelihood,
-            legacy_signal=replica_response.legacy_signal,
-            legacy_likelihood=replica_response.legacy_likelihood,
+                observed_link.request_latency_ms
+                - observed_link.callee_elapsed_ms,
+            )
+            if (
+                observed_link.slot_id != slot_id
+                or observed_link.flow_id != route.flow_id
+                or observed_link.source_stage != expected_source.stage
+                or observed_link.source_replica_id != expected_source.replica_id
+                or observed_link.target_stage != expected_target.stage
+                or observed_link.target_replica_id != expected_target.replica_id
+                or abs(observed_link.link_cost_ms - expected_link_cost) > 1e-9
+            ):
+                raise FlowExecutionError(
+                    f"flow {route.flow_id} returned mismatched pairwise "
+                    "link telemetry"
+                )
+
+        ingress_overhead_ms = max(
+            0.0,
+            request_latency_ms - route_response.elapsed_ms,
+        )
+        incoming_measurements = {
+            route.hops[0].stage: (request_latency_ms, ingress_overhead_ms)
+        }
+        for link in route_response.links:
+            incoming_measurements[link.target_stage] = (
+                link.request_latency_ms,
+                link.link_cost_ms,
+            )
+
+        telemetry = []
+        for expected, observed in zip(route.hops, route_response.hops):
+            expected_load = planned_congestion[
+                (expected.stage, expected.replica_id)
+            ]
+            if (
+                observed.stage != expected.stage
+                or observed.replica_id != expected.replica_id
+                or observed.slot_id != slot_id
+                or observed.flow_id != route.flow_id
+                or observed.assigned_load != expected_load
+            ):
+                raise FlowExecutionError(
+                    f"flow {route.flow_id} stage {expected.stage} returned "
+                    "mismatched hop telemetry"
+                )
+            incoming_request_ms, incoming_overhead_ms = incoming_measurements[
+                expected.stage
+            ]
+            telemetry.append(
+                HopTelemetry(
+                    datapath_mode=self.config.datapath_mode,
+                    slot_id=slot_id,
+                    flow_id=route.flow_id,
+                    stage=observed.stage,
+                    replica_id=observed.replica_id,
+                    pod_name=observed.pod_name,
+                    endpoint=str(expected.url),
+                    concurrency=observed.concurrency,
+                    assigned_load=observed.assigned_load,
+                    modeled_processing_latency_ms=(
+                        observed.modeled_processing_latency_ms
+                    ),
+                    legacy_congestion=observed.legacy_congestion,
+                    processing_latency_ms=observed.processing_latency_ms,
+                    request_latency_ms=incoming_request_ms,
+                    transport_overhead_ms=incoming_overhead_ms,
+                    signal_latency_ms=observed.signal_latency_ms,
+                    state_estimate=observed.state_estimate,
+                    state_likelihood=observed.state_likelihood,
+                    legacy_signal=observed.legacy_signal,
+                    legacy_likelihood=observed.legacy_likelihood,
+                )
+            )
+
+        return FlowTelemetry(
+            flow_id=route.flow_id,
+            hops=telemetry,
+            links=route_response.links,
+            ingress_request_latency_ms=request_latency_ms,
+            ingress_overhead_ms=ingress_overhead_ms,
         )
 
 

@@ -36,60 +36,115 @@ class RecordingReplicaNetwork:
         failing_host=None,
         mismatch_host=None,
         mismatch_correlation_host=None,
+        mismatch_link=False,
     ):
         self.failing_host = failing_host
         self.mismatch_host = mismatch_host
         self.mismatch_correlation_host = mismatch_correlation_host
+        self.mismatch_link = mismatch_link
         self.calls = []
         self.payloads = []
         self.active = Counter()
         self.peak = Counter()
 
     async def __call__(self, request: Request):
-        host = request.url.host
+        entry_host = request.url.host
         payload = json.loads(request.content)
-        self.calls.append((payload["flow_id"], host))
-        self.payloads.append((host, payload))
-        self.active[host] += 1
-        self.peak[host] = max(self.peak[host], self.active[host])
-        concurrency = self.active[host]
+        _, entry_stage, entry_replica_id = entry_host.split("-")
+        route_hops = [
+            {
+                "stage": int(entry_stage),
+                "replica_id": int(entry_replica_id),
+                "url": f"http://{entry_host}",
+                "assigned_load": payload["assigned_load"],
+            },
+            *payload["remaining_hops"],
+        ]
+        hosts = [
+            f"stage-{hop['stage']}-{hop['replica_id']}" for hop in route_hops
+        ]
+        for host, hop in zip(hosts, route_hops):
+            self.calls.append((payload["flow_id"], host))
+            self.payloads.append((host, hop))
+            self.active[host] += 1
+            self.peak[host] = max(self.peak[host], self.active[host])
 
         try:
             await asyncio.sleep(0.01)
-            if host == self.failing_host:
-                return Response(503, request=request, text="unavailable")
+            if self.failing_host in hosts:
+                failed_stage = self.failing_host.split("-")[1]
+                return Response(
+                    503,
+                    request=request,
+                    text=f"stage {failed_stage} request failed",
+                )
 
-            _, stage, replica_id = host.split("-")
-            response_stage = int(stage)
-            response_replica = int(replica_id)
-            if host == self.mismatch_host:
-                response_replica += 1
-            response_flow_id = payload["flow_id"]
-            if host == self.mismatch_correlation_host:
-                response_flow_id += 1
+            hops = []
+            for host, hop in zip(hosts, route_hops):
+                response_replica = hop["replica_id"]
+                if host == self.mismatch_host:
+                    response_replica += 1
+                response_flow_id = payload["flow_id"]
+                if host == self.mismatch_correlation_host:
+                    response_flow_id += 1
+                hops.append(
+                    {
+                        "slot_id": payload["slot_id"],
+                        "flow_id": response_flow_id,
+                        "stage": hop["stage"],
+                        "replica_id": response_replica,
+                        "pod_name": host,
+                        "concurrency": self.active[host],
+                        "assigned_load": hop["assigned_load"],
+                        "modeled_processing_latency_ms": 10.0,
+                        "legacy_congestion": hop["assigned_load"],
+                        "processing_latency_ms": 10.0,
+                        "signal_latency_ms": 10.0,
+                        "state_estimate": 3,
+                        "state_likelihood": [0.1, 0.2, 0.3, 0.4],
+                        "legacy_signal": 3,
+                        "legacy_likelihood": [0.1, 0.2, 0.3, 0.4],
+                    }
+                )
+            links = [
+                {
+                    "slot_id": payload["slot_id"],
+                    "flow_id": payload["flow_id"],
+                    "source_stage": left["stage"],
+                    "source_replica_id": left["replica_id"],
+                    "source_pod_name": left_host,
+                    "target_stage": right["stage"],
+                    "target_replica_id": right["replica_id"],
+                    "target_pod_name": right_host,
+                    "target_endpoint": right["url"],
+                    "request_latency_ms": 11.0,
+                    "callee_elapsed_ms": 10.0,
+                    "link_cost_ms": 1.0,
+                }
+                for left, right, left_host, right_host in zip(
+                    route_hops,
+                    route_hops[1:],
+                    hosts,
+                    hosts[1:],
+                )
+            ]
+            if self.mismatch_link:
+                links[0]["target_replica_id"] += 1
             return Response(
                 200,
                 request=request,
                 json={
+                    "datapath_mode": payload["datapath_mode"],
                     "slot_id": payload["slot_id"],
-                    "flow_id": response_flow_id,
-                    "stage": response_stage,
-                    "replica_id": response_replica,
-                    "pod_name": host,
-                    "concurrency": concurrency,
-                    "assigned_load": payload["assigned_load"],
-                    "modeled_processing_latency_ms": 10.0,
-                    "legacy_congestion": payload["assigned_load"],
-                    "processing_latency_ms": 10.0,
-                    "signal_latency_ms": 10.0,
-                    "state_estimate": 3,
-                    "state_likelihood": [0.1, 0.2, 0.3, 0.4],
-                    "legacy_signal": 3,
-                    "legacy_likelihood": [0.1, 0.2, 0.3, 0.4],
+                    "flow_id": payload["flow_id"],
+                    "elapsed_ms": 30.0 + len(links),
+                    "hops": hops,
+                    "links": links,
                 },
             )
         finally:
-            self.active[host] -= 1
+            for host in hosts:
+                self.active[host] -= 1
 
 
 def test_complete_routes_run_flows_concurrently_and_hops_sequentially():
@@ -160,14 +215,13 @@ def test_hop_telemetry_preserves_correlation_and_latency_fields():
         )
     )
 
-    for hop in response.flows[0].hops:
+    flow = response.flows[0]
+    for hop in flow.hops:
         assert hop.datapath_mode == "kernel"
         assert hop.slot_id == 4
         assert hop.flow_id == 9
         assert hop.request_latency_ms >= hop.processing_latency_ms
-        assert hop.transport_overhead_ms == pytest.approx(
-            hop.request_latency_ms - hop.processing_latency_ms
-        )
+        assert hop.transport_overhead_ms >= 0
         assert hop.assigned_load == 1
         assert hop.signal_latency_ms == hop.processing_latency_ms
         assert hop.state_estimate == 3
@@ -175,6 +229,18 @@ def test_hop_telemetry_preserves_correlation_and_latency_fields():
         assert hop.legacy_congestion == 1
         assert hop.legacy_signal == 3
         assert hop.legacy_likelihood == (0.1, 0.2, 0.3, 0.4)
+    assert len(flow.links) == 2
+    assert [(link.source_stage, link.target_stage) for link in flow.links] == [
+        (1, 2),
+        (2, 3),
+    ]
+    assert all(
+        link.link_cost_ms
+        == pytest.approx(link.request_latency_ms - link.callee_elapsed_ms)
+        for link in flow.links
+    )
+    assert flow.ingress_request_latency_ms >= 0
+    assert flow.ingress_overhead_ms >= 0
 
 
 @pytest.mark.parametrize(
@@ -232,10 +298,17 @@ def test_route_contract_accepts_configurable_stage_count():
     "network, message",
     [
         (RecordingReplicaNetwork(failing_host="stage-2-1"), "stage 2 request failed"),
-        (RecordingReplicaNetwork(mismatch_host="stage-2-1"), "identity mismatch"),
+        (
+            RecordingReplicaNetwork(mismatch_host="stage-2-1"),
+            "mismatched hop telemetry",
+        ),
         (
             RecordingReplicaNetwork(mismatch_correlation_host="stage-2-1"),
-            "correlation mismatch",
+            "mismatched hop telemetry",
+        ),
+        (
+            RecordingReplicaNetwork(mismatch_link=True),
+            "mismatched pairwise link telemetry",
         ),
     ],
 )

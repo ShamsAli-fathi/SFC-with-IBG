@@ -251,15 +251,15 @@ class KubernetesObservationCollector:
 
 
 class KubernetesLinkLatencyCollector:
-    """Extract measured transport overhead without claiming inter-Pod links."""
+    """Sum measured costs across consecutive selected replica pairs."""
 
     def collect(self, traffic_telemetry):
         if traffic_telemetry is None:
             raise RuntimeError("slot traffic has not completed")
         return {
             flow.flow_id: sum(
-                hop.transport_overhead_ms
-                for hop in flow.hops
+                link.link_cost_ms
+                for link in flow.links
             )
             for flow in traffic_telemetry.flows
         }

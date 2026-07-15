@@ -4,3 +4,5 @@
 __pycache__/
 .pytest_cache/
 *.py[cod]
+# User-controlled pre-correction snapshot; do not inspect without explicit request.
+ibg backup/
