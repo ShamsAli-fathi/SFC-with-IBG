@@ -305,3 +305,17 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
         for utility in result.realized_utility_per_flow.values()
     )
     assert result.sla_violations == (0 if num_of_stages == 2 else 3)
+    assert result.control_plane["schema"] == "control_plane_v1"
+    assert result.control_plane["messages"]["route_command_tx"] == 1
+    assert result.control_plane["messages"]["selected_telemetry_rx"] == 1
+    assert result.control_plane["messages"]["total"] == 2
+    assert result.control_plane["payload_bytes"]["route_command_tx"] > 0
+    assert result.control_plane["payload_bytes"]["selected_telemetry_rx"] > 0
+    assert result.learning_signal["schema"] == "learning_signal_v1"
+    assert result.learning_signal["selection_scope"] == "selected_hops_only"
+    assert result.learning_signal["records"] == 3 * num_of_stages
+    assert result.learning_signal["logical_payload_bytes"] > 0
+    assert result.control_plane["timing_ms"]["active"] == pytest.approx(
+        result.control_plane["timing_ms"]["admission"]
+        + result.control_plane["timing_ms"]["feedback"]
+    )

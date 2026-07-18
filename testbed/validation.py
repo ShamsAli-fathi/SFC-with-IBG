@@ -203,7 +203,7 @@ def summarize_slot(
         else result.traffic_telemetry.model_dump(mode="json")
     )
 
-    return {
+    summary = {
         "backend": backend,
         "datapath_mode": result.datapath_mode,
         "solver": "br_eibg_exact",
@@ -256,6 +256,11 @@ def summarize_slot(
             for (stage, replica_id), replica in sorted(replica_list.items())
         },
     }
+    if result.control_plane is not None:
+        summary["control_plane"] = result.control_plane
+    if result.learning_signal is not None:
+        summary["learning_signal"] = result.learning_signal
+    return summary
 
 
 def run_controlled_simulation(

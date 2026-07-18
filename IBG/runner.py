@@ -18,6 +18,7 @@ from latency_model import (
     DEFAULT_LINK_LATENCY_WEIGHT,
     DEFAULT_SLA_LATENCY_MS,
 )
+from learning_signal import build_learning_signal_snapshot
 
 
 @dataclass
@@ -40,6 +41,8 @@ class SlotResult:
     end_to_end_latency_ms_per_flow: dict | None = None
     realized_utility_total: float | None = None
     realized_utility_per_flow: dict | None = None
+    control_plane: dict | None = None
+    learning_signal: dict | None = None
 
 
 def run_decoupled_slot(
@@ -82,14 +85,23 @@ def run_decoupled_slot(
     previous_beliefs = [
         copy.deepcopy(replica.belief) for replica in replica_list.values()
     ]
+    control_plane_meter = adapters.control_plane_meter
+    if control_plane_meter is not None:
+        control_plane_meter.begin_slot()
 
     for stage in range(1, num_of_stages + 1):
         random_source.shuffle(flow_list)
         flow_order_by_stage[stage] = tuple(flow_list)
-        discovered_replicas = adapters.replica_discovery.discover(
-            stage,
-            replica_list,
-        )
+        if control_plane_meter is not None:
+            control_plane_meter.begin_discovery()
+        try:
+            discovered_replicas = adapters.replica_discovery.discover(
+                stage,
+                replica_list,
+            )
+        finally:
+            if control_plane_meter is not None:
+                control_plane_meter.end_discovery()
         if not discovered_replicas:
             raise RuntimeError(f"no replicas discovered for stage {stage}")
         discovered_by_stage[stage] = discovered_replicas
@@ -185,6 +197,16 @@ def run_decoupled_slot(
     )
     fairness = jain_index(aggregate_per_flow, aggregate_total)
     equilibrium = is_equilibrium(replica_list, previous_beliefs)
+    control_plane = None
+    learning_signal = None
+    if control_plane_meter is not None:
+        learning_signal = build_learning_signal_snapshot(
+            observation
+            for stage in sorted(observations_by_stage)
+            for observation in observations_by_stage[stage]
+        )
+        control_plane_meter.finish_slot()
+        control_plane = control_plane_meter.snapshot()
 
     result = SlotResult(
         datapath_mode=adapters.datapath_mode,
@@ -205,6 +227,8 @@ def run_decoupled_slot(
         end_to_end_latency_ms_per_flow=end_to_end_latency_by_flow,
         realized_utility_total=realized_total,
         realized_utility_per_flow=realized_per_flow,
+        control_plane=control_plane,
+        learning_signal=learning_signal,
     )
     adapters.result_sink.record_slot(result)
     return result

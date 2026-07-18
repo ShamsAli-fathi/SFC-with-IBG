@@ -92,6 +92,7 @@ class AdapterBundle:
     result_sink: ResultSink
     slot_traffic_executor: SlotTrafficExecutor | None = None
     link_latency_collector: LinkLatencyCollector | None = None
+    control_plane_meter: Any | None = None
     datapath_mode: str = SIMULATION_DATAPATH_MODE
 
     def __post_init__(self):

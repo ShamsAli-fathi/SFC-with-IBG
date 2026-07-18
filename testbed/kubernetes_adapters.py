@@ -5,6 +5,7 @@ import time
 
 import httpx
 
+from control_plane import ControlPlaneMeter
 from datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
 from header import Replica, embedding
 from ports import AdapterBundle, Observation, StageExecution
@@ -26,6 +27,7 @@ class KubernetesApi:
         verify=None,
         transport=None,
         timeout_seconds=10.0,
+        control_plane_meter=None,
     ):
         self.namespace = namespace
         self.base_url = base_url or self._in_cluster_url()
@@ -37,6 +39,7 @@ class KubernetesApi:
         )
         self.transport = transport
         self.timeout_seconds = timeout_seconds
+        self.control_plane_meter = control_plane_meter
 
     @staticmethod
     def _in_cluster_url():
@@ -70,6 +73,13 @@ class KubernetesApi:
             )
             response.raise_for_status()
             payload = response.json()
+            if self.control_plane_meter is not None:
+                self.control_plane_meter.record_exchange(
+                    request_field="kubernetes_discovery_tx",
+                    response_field="kubernetes_discovery_rx",
+                    request_payload_bytes=len(response.request.content),
+                    response_payload_bytes=len(response.content),
+                )
         return payload.get("items", [])
 
 
@@ -145,6 +155,7 @@ class KubernetesSlotTrafficExecutor:
         timeout_seconds=30.0,
         transport=None,
         datapath_mode=KERNEL_DATAPATH_MODE,
+        control_plane_meter=None,
     ):
         self.flow_generator_url = flow_generator_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
@@ -154,6 +165,7 @@ class KubernetesSlotTrafficExecutor:
             runtime=True,
         )
         self.telemetry = None
+        self.control_plane_meter = control_plane_meter
 
     def execute_slot(self, slot_id, assignments_by_stage, discovered_by_stage):
         stages = sorted(assignments_by_stage)
@@ -184,6 +196,8 @@ class KubernetesSlotTrafficExecutor:
             timeout=self.timeout_seconds,
             transport=self.transport,
         ) as client:
+            if self.control_plane_meter is not None:
+                self.control_plane_meter.mark_route_dispatch()
             response = client.post(
                 f"{self.flow_generator_url}/run-slot",
                 json={
@@ -192,6 +206,8 @@ class KubernetesSlotTrafficExecutor:
                     "routes": routes,
                 },
             )
+            if self.control_plane_meter is not None:
+                self.control_plane_meter.mark_telemetry_received()
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as error:
@@ -199,6 +215,13 @@ class KubernetesSlotTrafficExecutor:
                     f"flow generator rejected slot {slot_id}: "
                     f"HTTP {response.status_code} {response.text}"
                 ) from error
+            if self.control_plane_meter is not None:
+                self.control_plane_meter.record_exchange(
+                    request_field="route_command_tx",
+                    response_field="selected_telemetry_rx",
+                    request_payload_bytes=len(response.request.content),
+                    response_payload_bytes=len(response.content),
+                )
             self.telemetry = RunSlotResponse.model_validate(response.json())
             if self.telemetry.datapath_mode != self.datapath_mode:
                 raise RuntimeError(
@@ -312,11 +335,16 @@ def make_kubernetes_adapters(
     result_sink=None,
     transport=None,
     datapath_mode=KERNEL_DATAPATH_MODE,
+    control_plane_meter=None,
 ):
+    meter = control_plane_meter or ControlPlaneMeter()
+    if hasattr(discovery, "api"):
+        discovery.api.control_plane_meter = meter
     slot_traffic = KubernetesSlotTrafficExecutor(
         flow_generator_url,
         transport=transport,
         datapath_mode=datapath_mode,
+        control_plane_meter=meter,
     )
     return AdapterBundle(
         replica_discovery=discovery,
@@ -325,5 +353,6 @@ def make_kubernetes_adapters(
         result_sink=result_sink or NullResultSink(),
         slot_traffic_executor=slot_traffic,
         link_latency_collector=KubernetesLinkLatencyCollector(),
+        control_plane_meter=meter,
         datapath_mode=slot_traffic.datapath_mode,
     )

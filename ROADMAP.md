@@ -98,7 +98,7 @@ Gate: complete. `kernel` is explicit from adapters through traces, while the Fas
 
 ## Phase 4: Curate evidence and user-directed reports
 
-Status: in progress.
+Status: postponed pending completion of remaining reporting curation. The bounded control-plane measurement branch below is implemented within Phase 4; it does not authorize Phase 5 or later work.
 
 Suggested Codex reasoning: `high` — evidence must remain traceable to a reproducible run and must not silently turn synthetic testbed results into hardware or datapath claims.
 
@@ -107,6 +107,16 @@ Suggested Codex reasoning: `high` — evidence must remain traceable to a reprod
 - Keep claims bounded: the HTTP/Kubernetes route is the validated `kernel` baseline; do not imply DPDK/VPP, SR-IOV, hugepages, hardware offload, line-rate, or real CNF validation.
 - Treat report content as user-directed work. Do not read or edit `Tutorial.md`, `Report.md`, or `EVIDENCE_SUMMARY.md` unless the user explicitly requests that file in the current task. Do not rewrite generated evidence files; derive new summaries or figures only when requested.
 - Answer user questions and add narrowly scoped reproducibility aids when needed, without changing the decoupled solver, processing-latency observation/likelihood boundary, hard 110 ms SLA, or one-of-M no-rejection behavior. The user explicitly authorized the Phase 4 recalibration from 250 ms to 175 ms using the recorded exploratory 12-flow end-to-end-latency distribution, then recalibrated it to 110 ms from the final five slots of ten current forwarding-isolated 12-flow traces (mean 88.84 ms, p90 108.46 ms, 7.83% above 110 ms); this changes only SLA classification, not placement, utility, learning, admission, or datapath behavior. The user set the unchanged equilibrium check to strictly below 0.033 per belief entry after brief 0.03, 0.037, and 0.04 settings; this changes only when an experiment stops. The user also authorized `--runs N` repeated launcher execution: it runs N independent Jobs after one deployment preparation and preserves a separate trace/CSV column for each. The later explicit forwarding/reporting authorization is limited to executing an already-selected route and correcting its post-placement pairwise deduction; it does not authorize pair-dependent selection.
+
+### Phase 4 branch: control-plane metric and measurement
+
+Status: implemented and validated. Overall Phase 4 remains postponed pending completion of reporting curation.
+
+The versioned `control_plane_v1` block records monotonic-wall and controller-CPU timing for discovery, admission/planning through route dispatch, and feedback processing after telemetry arrives. It reports their sum as active control time and records selected-route wait separately as data-plane execution time. HTTP application-payload bytes and message counts cover controller boundaries only: Kubernetes discovery, route command, selected telemetry, and reserved future belief exchange. Forwarder-to-forwarder route RPCs are excluded, and no wire-byte claim is made.
+
+The separate `learning_signal_v1` block reports the selected-only logical learning footprint rather than the full telemetry envelope. Its canonical JSON projection contains only stage, flow, selected replica, assigned load, processing-latency signal, and likelihood vector. Exactly `flows * stages` records are required, so unselected replica count cannot inflate the metric. Logical payload bytes and mean bytes per selected hop are reported independently from the actual `selected_telemetry_rx` application-body bytes. This is not a wire-byte claim or a comparison with hypothetical raw telemetry.
+
+Gate: complete. Deterministic tests prove component sums, byte/message accounting, monotonic timing, one route-command/telemetry exchange regardless of route hop count, exact selected-signal scaling, canonical footprint consistency, and exclusion of diagnostic telemetry. `scripts/control_plane_summary.py` validates both schemas and reports per-run median/p95 values while retaining compatibility with older `control_plane_v1` traces. Fresh final-code normal-build supported trace `runs/ibg-experiment-20260718T123226Z.jsonl` passed every Kernel live gate with 98.99% classification, 100% server-overshoot compliance, and exact 11-slot zero-drift replay. Every slot recorded nine selected learning signals; median logical footprint was 1,861 bytes, or 206.78 bytes per selected hop. The full suite passes with 132 tests. The implementation leaves solver, selection, selected-only signal, learning, pairwise deduction, SLA, equilibrium, and datapath behavior unchanged. Earlier supported control-plane trace `runs/ibg-experiment-20260718T115336Z.jsonl` and its five matching repeats remain valid `control_plane_v1` evidence but predate `learning_signal_v1`.
 
 Gate: the requested evidence is traceable to committed code and identified run artifacts, its scope/units/limitations are clear, the authorized forwarding/reporting correction is validated and version-bounded, and no solver, learning, admission, or unapproved datapath behavior has changed.
 
