@@ -112,7 +112,7 @@ class KubernetesReplicaDiscovery:
             replica.node_name = pod.get("spec", {}).get("nodeName")
             replica.endpoint = (
                 f"http://{pod_name}.stage-{stage}.{self.namespace}"
-                ".svc.cluster.local:8080"
+                ".svc.cluster.local.:8080"
             )
             discovered[key] = replica
 

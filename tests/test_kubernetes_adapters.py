@@ -115,7 +115,7 @@ def test_discovery_maps_only_ready_statefulset_ordinals():
     assert discovered[(2, 1)].pod_name == "stage-2-0"
     assert discovered[(2, 1)].node_name == "worker-1"
     assert discovered[(2, 2)].endpoint == (
-        "http://stage-2-1.stage-2.ibg-testbed.svc.cluster.local:8080"
+        "http://stage-2-1.stage-2.ibg-testbed.svc.cluster.local.:8080"
     )
 
 
