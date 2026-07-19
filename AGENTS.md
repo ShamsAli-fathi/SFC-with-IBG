@@ -1,6 +1,6 @@
 # Codex Working Agreement
 
-Read `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md` before planning or changing this repository. Treat them as the project handoff record and update them when architecture, decisions, sequencing, or progress materially changes.
+Read `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, and `STATUS.md` before planning or changing this repository. Treat them as the project handoff record and update them when architecture, decisions, sequencing, or progress materially changes. Exception: during an explicitly authorized iterative visual adjustment to an already-authorized Chart plot (for example, range, title, label, or styling), do not reread or update handoffs unless the user explicitly asks to record the choice as final.
 
 ## Project goal
 
@@ -16,7 +16,7 @@ Build the SFC-with-IBG testbed incrementally. The current implemented roadmap mi
 - Do not read or edit `Tutorial.md` unless the user explicitly asks for it in the current request.
 - Do not read or edit `Report.md` unless the user explicitly asks for it in the current request.
 - Do not read or edit `EVIDENCE_SUMMARY.md` unless the user explicitly asks for it in the current request.
-- Treat `Chart/` as a user-controlled legacy plot-script area. Do not inspect it unless the user explicitly directs that work in the current request; then read only its `.py` scripts. Edit those scripts only on explicit request, and never stage, commit, or push any `Chart/` content without the user's explicit approval for that content.
+- Treat `Chart/` as a user-controlled legacy plot-script area. Do not inspect it unless the user explicitly directs that work in the current request; then read only its `.py` scripts. Edit those scripts only on explicit request, and never stage, commit, or push any `Chart/` content without the user's explicit approval for that content. Preserve the original script's visual design/theme and embedded text unless the user explicitly directs a change. Once a plot script is authorized, handle iterative visual tuning locally; do not read or update handoffs for those non-final tweaks unless the user explicitly requests a final record.
 - Do not claim real DPDK, VPP, SR-IOV, hugepage, or line-rate validation.
 - Before declaring a task complete, run the relevant focused tests/checks and report what was actually verified.
 

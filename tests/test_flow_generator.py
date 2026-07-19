@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections import Counter, defaultdict
 
+import httpx
 from httpx import ASGITransport, AsyncClient, MockTransport, Request, Response
 import pytest
 from pydantic import ValidationError
@@ -381,6 +382,28 @@ def test_downstream_failures_are_correlated_and_reported(network, message):
             )
         )
     assert all(active == 0 for active in network.active.values())
+
+
+def test_empty_httpx_error_retains_class_and_representation():
+    async def connection_dropped(request):
+        raise httpx.ReadError("", request=request)
+
+    generator = FlowGenerator(transport=MockTransport(connection_dropped))
+
+    with pytest.raises(FlowExecutionError) as raised:
+        asyncio.run(
+            generator.run_slot(
+                RunSlotRequest(
+                    datapath_mode="kernel",
+                    slot_id=1,
+                    routes=[route(2)],
+                )
+            )
+        )
+
+    assert str(raised.value) == (
+        "flow 2 forwarded route failed: ReadError: ReadError('')"
+    )
 
 
 def test_http_service_exposes_health_and_maps_downstream_failure_to_502():

@@ -225,6 +225,63 @@ def test_export_legacy_csv_appends_a_new_metric_column(tmp_path):
         ]
 
 
+def test_export_legacy_csv_writes_logical_learning_footprint_when_recorded(
+    tmp_path,
+):
+    trace_path = tmp_path / "trace.jsonl"
+    output_dir = tmp_path / "csv"
+    events = [
+        {
+            "event": "run_started",
+            "initial_replicas": [
+                {"stage": 1, "replica_id": 1, "belief": [0.25] * 4},
+            ],
+        },
+        {
+            "event": "iteration_completed",
+            "summary": {
+                "metrics": {
+                    "elapsed_seconds": 0.1,
+                    "sla_violations": 0,
+                    "aggregate_utility_total": 1.0,
+                    "realized_utility_total": 0.5,
+                    "jain_fairness": 1.0,
+                },
+                "beliefs": {"1:1": [0.1, 0.2, 0.3, 0.4]},
+                "learning_signal": {"logical_payload_bytes": 1200},
+            },
+        },
+        {
+            "event": "iteration_completed",
+            "summary": {
+                "metrics": {
+                    "elapsed_seconds": 0.2,
+                    "sla_violations": 1,
+                    "aggregate_utility_total": 2.0,
+                    "realized_utility_total": 1.5,
+                    "jain_fairness": 0.9,
+                },
+                "beliefs": {"1:1": [0.2, 0.3, 0.2, 0.3]},
+                "learning_signal": {"logical_payload_bytes": 1300},
+            },
+        },
+        {"event": "run_completed", "iterations": 2},
+    ]
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    paths = export_legacy_csv(trace_path, output_dir, "test-run")
+
+    assert paths[-1].name == "logical_learning_footprint.csv"
+    with paths[-1].open(newline="") as source:
+        assert list(csv.DictReader(source)) == [
+            {"test-run": "1200"},
+            {"test-run": "1300"},
+        ]
+
+
 def test_experiment_job_receives_requested_dimensions(monkeypatch):
     job = {
         "metadata": {"name": "ibg-controller"},

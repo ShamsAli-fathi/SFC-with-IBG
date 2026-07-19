@@ -153,7 +153,8 @@ class ReplicaRouteForwarder:
             health = HealthResponse.model_validate(response.json())
         except (httpx.HTTPError, ValidationError, ValueError) as error:
             raise RouteForwardingError(
-                f"local processor health failed: {error}"
+                "local processor health failed: "
+                f"{type(error).__name__}: {error!r}"
             ) from error
         self._validate_local_identity(health)
         return health
@@ -175,7 +176,8 @@ class ReplicaRouteForwarder:
             local = ProcessResponse.model_validate(response.json())
         except (httpx.HTTPError, ValidationError, ValueError) as error:
             raise RouteForwardingError(
-                f"flow {request.flow_id} local processing failed: {error}"
+                f"flow {request.flow_id} local processing failed: "
+                f"{type(error).__name__}: {error!r}"
             ) from error
         self._validate_local_identity(local)
         if (
@@ -229,7 +231,7 @@ class ReplicaRouteForwarder:
             except (httpx.HTTPError, ValidationError, ValueError) as error:
                 raise RouteForwardingError(
                     f"flow {request.flow_id} stage {next_hop.stage} "
-                    f"forwarding failed: {error}"
+                    f"forwarding failed: {type(error).__name__}: {error!r}"
                 ) from error
             edge_request_latency_ms = (
                 time.perf_counter() - edge_started_at

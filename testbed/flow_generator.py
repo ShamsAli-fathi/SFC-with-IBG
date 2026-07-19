@@ -216,7 +216,8 @@ class FlowGenerator:
             ) from error
         except (httpx.HTTPError, ValidationError, ValueError) as error:
             raise FlowExecutionError(
-                f"flow {route.flow_id} forwarded route failed: {error}"
+                f"flow {route.flow_id} forwarded route failed: "
+                f"{type(error).__name__}: {error!r}"
             ) from error
         request_latency_ms = (time.perf_counter() - started_at) * 1000
 

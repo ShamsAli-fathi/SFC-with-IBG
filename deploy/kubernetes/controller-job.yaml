@@ -42,7 +42,7 @@ spec:
             - name: IBG_SEEDS
               value: "2050,2051,2052"
             - name: FLOW_GENERATOR_URL
-              value: http://flow-generator:8080
+              value: http://flow-generator.$(POD_NAMESPACE).svc.cluster.local.:8080
             - name: REPLICA_PROFILES_PATH
               value: /etc/ibg/profiles.json
             - name: MPLCONFIGDIR

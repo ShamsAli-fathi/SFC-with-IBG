@@ -81,7 +81,7 @@ def main():
     )
     flow_generator_url = os.environ.get(
         "FLOW_GENERATOR_URL",
-        "http://flow-generator:8080",
+        f"http://flow-generator.{namespace}.svc.cluster.local.:8080",
     )
     environment = json.loads(os.environ.get("EXPERIMENT_ENVIRONMENT", "{}"))
     if not isinstance(environment, dict):

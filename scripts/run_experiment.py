@@ -31,6 +31,7 @@ CSV_METRICS = {
     "realized_end_to_end_utility.csv": "realized_utility_total",
     "jain_index.csv": "jain_fairness",
 }
+LEARNING_SIGNAL_CSV = "logical_learning_footprint.csv"
 
 
 def csv_run_hash(timestamp, seed, num_of_flows, num_of_stages, num_of_replicas):
@@ -604,6 +605,18 @@ def _append_belief_rows(path, snapshots):
     _write_csv_rows(path, fieldnames, rows)
 
 
+def _learning_signal_values(iterations):
+    snapshots = [event["summary"].get("learning_signal") for event in iterations]
+    if not any(snapshot is not None for snapshot in snapshots):
+        return None
+    if any(snapshot is None for snapshot in snapshots):
+        raise ValueError("trace mixes learning-signal schemas across iterations")
+    try:
+        return [snapshot["logical_payload_bytes"] for snapshot in snapshots]
+    except KeyError as error:
+        raise ValueError("learning-signal record lacks logical payload bytes") from error
+
+
 def export_legacy_csv(trace_path, output_dir, run_id):
     with trace_path.open(encoding="utf-8") as trace:
         events = [json.loads(line) for line in trace if line.strip()]
@@ -628,15 +641,25 @@ def export_legacy_csv(trace_path, output_dir, run_id):
             run_id,
             [event["summary"]["metrics"][metric_name] for event in iterations],
         )
+    learning_signal_values = _learning_signal_values(iterations)
+    if learning_signal_values is not None:
+        _append_metric_column(
+            output_dir / LEARNING_SIGNAL_CSV,
+            run_id,
+            learning_signal_values,
+        )
     _append_belief_rows(
         output_dir / "replica_results.csv",
         [_snapshot_beliefs(run_started)]
         + [_summary_beliefs(event) for event in iterations],
     )
-    return [
+    filenames = [
         output_dir / filename
         for filename in (*CSV_METRICS, "replica_results.csv")
     ]
+    if learning_signal_values is not None:
+        filenames.append(output_dir / LEARNING_SIGNAL_CSV)
+    return filenames
 
 
 def run_experiment_series(args, context, environment_metadata):
@@ -734,8 +757,8 @@ def parse_args(argv=None):
         choices=(0, 1),
         default=0,
         help=(
-            "write the five legacy CSV reports and realized end-to-end "
-            "utility report to "
+            "write the five legacy CSV reports, realized end-to-end utility, "
+            "and (when recorded) logical learning footprint report to "
             f"{CSV_OUTPUT_DIR} (1=enabled, 0=disabled)"
         ),
     )

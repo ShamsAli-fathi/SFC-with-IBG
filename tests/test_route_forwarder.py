@@ -222,3 +222,33 @@ def test_forwarder_maps_local_processor_failure_to_502():
 
     assert response.status_code == 502
     assert "local processing failed" in response.json()["detail"]
+
+
+def test_empty_httpx_error_retains_class_and_representation():
+    class ConnectionDroppedTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            raise httpx.ReadError("", request=request)
+
+    forwarder = create_forwarder_app(
+        ForwarderConfig(
+            stage=1,
+            replica_id=1,
+            pod_name="stage-1-0",
+            processor_url="http://processor-1",
+        ),
+        transport=ConnectionDroppedTransport(),
+    )
+
+    response = asyncio.run(
+        request(
+            forwarder,
+            "POST",
+            "/process-route",
+            json={**route_payload(), "remaining_hops": []},
+        )
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "flow 9 local processing failed: ReadError: ReadError('')"
+    )
