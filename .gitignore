@@ -1,4 +1,3 @@
-/runs/
 /figures/
 .venv/
 __pycache__/
@@ -6,3 +5,4 @@ __pycache__/
 *.py[cod]
 # User-controlled pre-correction snapshot; do not inspect without explicit request.
 ibg backup/
+/misc/*
