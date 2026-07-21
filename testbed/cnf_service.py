@@ -11,14 +11,17 @@ from pydantic import BaseModel, Field
 
 from IBG.latency_model import (
     estimate_state,
-    latency_likelihood,
+    learning_signal_likelihood,
     require_state_parameters,
+    sample_learning_signal_ms,
     sample_latency_ms,
+    sample_observation_jitter_ms,
 )
 from testbed.profiles import load_profiles, require_profile
 
 
 LatencySource = Callable[[int], float]
+ObservationJitterCallable = Callable[[int], float]
 
 
 @dataclass(frozen=True)
@@ -130,6 +133,7 @@ class ProcessResponse(BaseModel):
     modeled_processing_latency_ms: float
     legacy_congestion: int
     processing_latency_ms: float
+    observation_jitter_ms: float = Field(default=0.0, ge=0)
     signal_latency_ms: float
     state_estimate: int
     state_likelihood: tuple[float, float, float, float]
@@ -177,6 +181,39 @@ class SeededLatencyObservationSource(LatencyObservationSource):
         )
 
 
+class ObservationJitterSource:
+    """Sample separate nonnegative uncertainty for the learning signal."""
+
+    def __init__(self, config: ReplicaConfig):
+        self.state = config.state
+
+    def __call__(self, assigned_load: int) -> float:
+        return sample_observation_jitter_ms(self.state)
+
+
+class SeededObservationJitterSource(ObservationJitterSource):
+    """Generate request-stable observation-only learning noise."""
+
+    def __init__(self, config: ReplicaConfig):
+        if config.observation_seed is None:
+            raise ValueError("observation_seed is required for seeded observations")
+        super().__init__(config)
+        self.seed = config.observation_seed
+
+    def __call__(
+        self,
+        assigned_load: int,
+        slot_id: int,
+        flow_id: int,
+    ) -> float:
+        generator = np.random.default_rng(
+            np.random.SeedSequence(
+                [self.seed, slot_id, flow_id, assigned_load, 1]
+            )
+        )
+        return sample_observation_jitter_ms(self.state, generator)
+
+
 # Compatibility names for callers migrating from the completed baseline.
 LegacyObservationSource = LatencyObservationSource
 SeededLegacyObservationSource = SeededLatencyObservationSource
@@ -187,6 +224,7 @@ class ReplicaRuntime:
         self,
         config: ReplicaConfig,
         observation_source: LatencySource | None = None,
+        observation_jitter_source: ObservationJitterCallable | None = None,
     ):
         self.config = config
         if observation_source is not None:
@@ -198,6 +236,20 @@ class ReplicaRuntime:
         else:
             self.observation_source = LatencyObservationSource(config)
             self._request_seeded_observation = False
+        if observation_jitter_source is not None:
+            self.observation_jitter_source = observation_jitter_source
+            self._request_seeded_jitter = False
+        elif observation_source is not None:
+            self.observation_jitter_source = lambda assigned_load: 0.0
+            self._request_seeded_jitter = False
+        elif config.observation_seed is not None:
+            self.observation_jitter_source = SeededObservationJitterSource(
+                config
+            )
+            self._request_seeded_jitter = True
+        else:
+            self.observation_jitter_source = ObservationJitterSource(config)
+            self._request_seeded_jitter = False
         self._lock = asyncio.Lock()
         self._warmup_lock = asyncio.Lock()
         self._active_requests = 0
@@ -235,7 +287,16 @@ class ReplicaRuntime:
                     )
                 await asyncio.sleep(warmup_delay_ms / 1000)
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
-                latency_likelihood(elapsed_ms, 1)
+                warmup_signal_ms, _ = sample_learning_signal_ms(
+                    elapsed_ms,
+                    self.config.state,
+                    np.random.default_rng(
+                        np.random.SeedSequence(
+                            [0, self.config.stage, self.config.replica_id, 1]
+                        )
+                    ),
+                )
+                learning_signal_likelihood(warmup_signal_ms, 1)
                 self._warmed = True
         return await self.health()
 
@@ -273,7 +334,21 @@ class ReplicaRuntime:
                 modeled_delay_ms = self.observation_source(assigned_load)
             await asyncio.sleep(modeled_delay_ms / 1000)
             elapsed_ms = (time.perf_counter() - started_at) * 1000
-            likelihood = latency_likelihood(elapsed_ms, assigned_load)
+            if self._request_seeded_jitter:
+                observation_jitter_ms = self.observation_jitter_source(
+                    assigned_load,
+                    request.slot_id,
+                    request.flow_id,
+                )
+            else:
+                observation_jitter_ms = self.observation_jitter_source(
+                    assigned_load
+                )
+            signal_latency_ms = elapsed_ms + observation_jitter_ms
+            likelihood = learning_signal_likelihood(
+                signal_latency_ms,
+                assigned_load,
+            )
             state_estimate = estimate_state(likelihood)
             return ProcessResponse(
                 slot_id=request.slot_id,
@@ -286,7 +361,8 @@ class ReplicaRuntime:
                 modeled_processing_latency_ms=modeled_delay_ms,
                 legacy_congestion=assigned_load,
                 processing_latency_ms=elapsed_ms,
-                signal_latency_ms=elapsed_ms,
+                observation_jitter_ms=observation_jitter_ms,
+                signal_latency_ms=signal_latency_ms,
                 state_estimate=state_estimate,
                 state_likelihood=likelihood,
                 legacy_signal=state_estimate,
@@ -300,10 +376,12 @@ class ReplicaRuntime:
 def create_app(
     config: ReplicaConfig | None = None,
     observation_source: LatencySource | None = None,
+    observation_jitter_source: ObservationJitterCallable | None = None,
 ):
     runtime = ReplicaRuntime(
         config or ReplicaConfig.from_env(),
         observation_source=observation_source,
+        observation_jitter_source=observation_jitter_source,
     )
     application = FastAPI(title="IBG HTTP Replica", version="0.1.0")
     application.state.runtime = runtime

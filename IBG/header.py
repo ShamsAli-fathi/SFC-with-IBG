@@ -12,8 +12,9 @@ from latency_model import (
     DEFAULT_LATENCY_WEIGHT,
     DEFAULT_REWARD,
     estimate_state,
-    latency_likelihood,
+    learning_signal_likelihood,
     require_state_parameters,
+    sample_learning_signal_ms,
     sample_latency_ms,
 )
 
@@ -83,8 +84,19 @@ class Replica:
         parameters = require_state_parameters(self.state)
         if latency_ms is None:
             latency_ms = sample_latency_ms(load, parameters, random_source)
-        likelihood = latency_likelihood(latency_ms, load)
-        return float(latency_ms), estimate_state(likelihood), likelihood
+        signal_ms, observation_jitter_ms = sample_learning_signal_ms(
+            latency_ms,
+            self.state,
+            random_source,
+        )
+        likelihood = learning_signal_likelihood(signal_ms, load)
+        return (
+            float(latency_ms),
+            float(signal_ms),
+            float(observation_jitter_ms),
+            estimate_state(likelihood),
+            likelihood,
+        )
 
     def local_update(self, likelihood, signal):
         local_update_list = []

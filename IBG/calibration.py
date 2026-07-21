@@ -11,13 +11,17 @@ from latency_model import (
     DEFAULT_REWARD,
     DEFAULT_SLA_LATENCY_MS,
     JITTER_DISTRIBUTION,
+    OBSERVATION_JITTER_DISTRIBUTION,
+    OBSERVATION_JITTER_MS_BY_STATE,
     LatencyParameters,
     deterministic_latency_ms,
     estimate_state,
     expected_state_utility,
     first_negative_utility_load,
-    latency_likelihood,
+    learning_signal_likelihood,
+    require_observation_jitter_ms,
     require_state_parameters,
+    sample_learning_signal_ms,
     sample_latency_ms,
 )
 
@@ -27,7 +31,8 @@ SUPPORTED_EXACT_LOAD = 3
 CALIBRATION_SEED = 2050
 CALIBRATION_MONTE_CARLO_SAMPLES = 5_000
 CALIBRATION_SENSITIVITY_FRACTION = 0.10
-MINIMUM_STATE_CLASSIFICATION_ACCURACY = 0.90
+MINIMUM_STATE_CLASSIFICATION_ACCURACY = 0.80
+MAXIMUM_LOW_LOAD_MEAN_CLASSIFICATION_ACCURACY = 0.90
 MINIMUM_LIVE_CLASSIFICATION_ACCURACY = 0.80
 LIVE_ABSOLUTE_TOLERANCE_MS = 10.0
 LIVE_RELATIVE_TOLERANCE = 0.10
@@ -97,6 +102,21 @@ def state_ordering_report(
         == sorted(value.capacity_flows for value in parameters),
         "jitter_ms": [value.jitter_ms for value in parameters]
         == sorted((value.jitter_ms for value in parameters), reverse=True),
+        "observation_jitter_ms": [
+            require_observation_jitter_ms(state) for state in range(1, 5)
+        ]
+        == sorted(
+            (
+                require_observation_jitter_ms(state)
+                for state in range(1, 5)
+            ),
+            reverse=True,
+        ),
+        "observation_jitter_exceeds_physical": all(
+            require_observation_jitter_ms(state)
+            > parameters_by_state[state].jitter_ms
+            for state in range(1, 5)
+        ),
     }
     curve_checks = {}
     for load in range(1, CALIBRATION_LOAD_HORIZON + 1):
@@ -183,26 +203,44 @@ def classification_report(
         for state in range(1, 5):
             correct = 0
             for _ in range(samples_per_state_load):
-                latency = sample_latency_ms(
+                processing_latency = sample_latency_ms(
                     load,
                     require_state_parameters(state, parameters_by_state),
                     random_source,
                 )
+                signal, _ = sample_learning_signal_ms(
+                    processing_latency,
+                    state,
+                    random_source,
+                )
                 inferred = estimate_state(
-                    latency_likelihood(latency, load, parameters_by_state)
+                    learning_signal_likelihood(
+                        signal,
+                        load,
+                        parameters_by_state,
+                    )
                 )
                 correct += inferred == state
             accuracy = correct / samples_per_state_load
             accuracy_by_state[state] = accuracy
             minimum_accuracy = min(minimum_accuracy, accuracy)
         accuracy_by_load[load] = accuracy_by_state
+    low_load_mean_accuracy = sum(accuracy_by_load[1].values()) / 4.0
     return {
         "samples_per_state_load": samples_per_state_load,
         "seed": seed,
         "accuracy_by_load": accuracy_by_load,
         "minimum_accuracy": minimum_accuracy,
         "minimum_required": MINIMUM_STATE_CLASSIFICATION_ACCURACY,
-        "passed": minimum_accuracy >= MINIMUM_STATE_CLASSIFICATION_ACCURACY,
+        "low_load_mean_accuracy": low_load_mean_accuracy,
+        "low_load_mean_maximum": (
+            MAXIMUM_LOW_LOAD_MEAN_CLASSIFICATION_ACCURACY
+        ),
+        "passed": (
+            minimum_accuracy >= MINIMUM_STATE_CLASSIFICATION_ACCURACY
+            and low_load_mean_accuracy
+            <= MAXIMUM_LOW_LOAD_MEAN_CLASSIFICATION_ACCURACY
+        ),
     }
 
 
@@ -252,7 +290,8 @@ def assess_live_observation(payload: Mapping, *, state: int, load: int) -> dict:
     modeled = float(payload["modeled_processing_latency_ms"])
     measured = float(payload["processing_latency_ms"])
     signal = float(payload["signal_latency_ms"])
-    expected_likelihood = latency_likelihood(measured, load)
+    observation_jitter = float(payload["observation_jitter_ms"])
+    expected_likelihood = learning_signal_likelihood(signal, load)
     observed_likelihood = tuple(float(value) for value in payload["state_likelihood"])
     overshoot = measured - modeled
     overshoot_tolerance = max(
@@ -262,7 +301,14 @@ def assess_live_observation(payload: Mapping, *, state: int, load: int) -> dict:
     checks = {
         "assigned_load": int(payload["assigned_load"]) == load,
         "positive_latencies": modeled > 0 and measured > 0,
-        "signal_is_measured_processing": abs(signal - measured) <= 1e-9,
+        "signal_is_noisy_selected_processing": (
+            observation_jitter >= 0
+            and abs(signal - measured - observation_jitter) <= 1e-6
+        ),
+        "observation_jitter_within_four_sigma": (
+            observation_jitter
+            <= 4.0 * require_observation_jitter_ms(state)
+        ),
         "model_sample_within_four_sigma": (
             0.0
             <= modeled - deterministic_latency_ms(load, parameters)
@@ -333,6 +379,10 @@ def build_calibration_report(
         },
         "load_horizon": CALIBRATION_LOAD_HORIZON,
         "jitter_distribution": JITTER_DISTRIBUTION,
+        "observation_jitter_distribution": OBSERVATION_JITTER_DISTRIBUTION,
+        "observation_jitter_ms_by_state": dict(
+            OBSERVATION_JITTER_MS_BY_STATE
+        ),
         "supported_exact_load": SUPPORTED_EXACT_LOAD,
         "target_zero_crossing_bands": ZERO_CROSSING_TARGET_BANDS,
         "parameters_by_state": {

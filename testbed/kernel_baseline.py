@@ -127,6 +127,8 @@ def build_kernel_baseline_report(events, profiles):
             profile = profiles[(hop["stage"], hop["replica_id"])]
             modeled = float(hop["modeled_processing_latency_ms"])
             processing = float(hop["processing_latency_ms"])
+            observation_jitter = float(hop.get("observation_jitter_ms", 0.0))
+            signal = float(hop["signal_latency_ms"])
             request = float(hop["request_latency_ms"])
             transport = float(hop["transport_overhead_ms"])
             overshoot = processing - modeled
@@ -139,8 +141,14 @@ def build_kernel_baseline_report(events, profiles):
                 and hop["assigned_load"] == observation["congestion"]
             )
             signal_checks.append(
-                abs(float(observation["signal"]) - processing) <= 1e-9
-                and abs(float(hop["signal_latency_ms"]) - processing) <= 1e-9
+                observation_jitter >= 0
+                and abs(signal - processing - observation_jitter) <= 1e-6
+                and abs(float(observation["signal"]) - signal) <= 1e-9
+                and abs(
+                    float(observation.get("observation_jitter_ms", 0.0))
+                    - observation_jitter
+                )
+                <= 1e-9
             )
             likelihood_checks.append(
                 all(

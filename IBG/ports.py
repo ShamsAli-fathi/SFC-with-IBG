@@ -2,11 +2,15 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
 from datapath import SIMULATION_DATAPATH_MODE, require_datapath_mode
+from learning_mode import (
+    SEPARATED_LEARNING_SIGNAL_MODE,
+    require_learning_signal_mode,
+)
 
 
 @dataclass(frozen=True)
 class Observation:
-    """One selected-replica processing-latency observation."""
+    """One selected-replica noisy learning observation."""
 
     stage: int
     flow_id: int
@@ -16,6 +20,7 @@ class Observation:
     likelihood: tuple
     measured_latency_ms: float | None = None
     estimated_state: int | None = None
+    observation_jitter_ms: float = 0.0
 
     def __post_init__(self):
         if self.stage < 1:
@@ -26,6 +31,20 @@ class Observation:
             raise ValueError("congestion must be at least 1")
         if self.signal <= 0:
             raise ValueError("signal latency must be positive")
+        if self.observation_jitter_ms < 0:
+            raise ValueError("observation jitter must not be negative")
+        if (
+            self.measured_latency_ms is not None
+            and abs(
+                self.signal
+                - self.measured_latency_ms
+                - self.observation_jitter_ms
+            )
+            > 1e-6
+        ):
+            raise ValueError(
+                "signal must equal measured latency plus observation jitter"
+            )
         if len(self.likelihood) != 4:
             raise ValueError("likelihood must contain the four IBG states")
         if self.estimated_state is not None and self.estimated_state not in (1, 2, 3, 4):
@@ -94,10 +113,16 @@ class AdapterBundle:
     link_latency_collector: LinkLatencyCollector | None = None
     control_plane_meter: Any | None = None
     datapath_mode: str = SIMULATION_DATAPATH_MODE
+    learning_signal_mode: str = SEPARATED_LEARNING_SIGNAL_MODE
 
     def __post_init__(self):
         object.__setattr__(
             self,
             "datapath_mode",
             require_datapath_mode(self.datapath_mode),
+        )
+        object.__setattr__(
+            self,
+            "learning_signal_mode",
+            require_learning_signal_mode(self.learning_signal_mode),
         )

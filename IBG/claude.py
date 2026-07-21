@@ -45,22 +45,64 @@ class BREIBGPolicy:
         if not np.isfinite(self._utilities).all():
             raise ValueError("utility_grid must contain only finite values")
 
+        # The exact recurrence has one subgame per load vector.  Store that
+        # vector in a compact integer cache key rather than constructing a
+        # list/tuple for every candidate transition.  The high field records
+        # the number of assigned players, so the packed key still represents
+        # precisely the same state as ``loads`` in the recurrence below.
+        #
+        # ``num_players`` is the largest possible load, hence this many bits
+        # can represent every slot load from zero through ``num_players``.
+        state_bits = max(1, self.num_players.bit_length())
+        slot_shifts = tuple(
+            state_bits * slot for slot in range(self.num_replica_slots)
+        )
+        state_digit_mask = (1 << state_bits) - 1
+        assignment_count_shift = state_bits * self.num_replica_slots
+        assignment_count_increment = 1 << assignment_count_shift
+        load_vector_mask = assignment_count_increment - 1
+        candidate_choices = tuple(
+            (
+                replica_id,
+                1 << slot_shifts[replica_id - 1],
+                slot_shifts[replica_id - 1],
+                row,
+            )
+            for row, replica_id in enumerate(self.replica_ids)
+        )
+        # Keep the cache closure independent of ``self`` so the policy itself
+        # is not retained through the recursive cache.  The recursive cache
+        # wrapper still has a self-cycle, so callers clear its memo table once
+        # stage placement has completed.
+        num_players = self.num_players
+        utilities = self._utilities
+
         @lru_cache(maxsize=None)
-        def solve(loads):
-            if sum(loads) == self.num_players:
-                return 0, loads
+        def solve(packed_state):
+            if (
+                packed_state >> assignment_count_shift
+            ) == num_players:
+                return 0, packed_state & load_vector_mask
 
             best_replica = None
-            best_final_loads = None
+            best_final_load_vector = None
             best_utility = -np.inf
 
-            for row, replica_id in enumerate(self.replica_ids):
-                replica_position = replica_id - 1
-                next_loads = list(loads)
-                next_loads[replica_position] += 1
-                _, final_loads = solve(tuple(next_loads))
-                final_replica_load = final_loads[replica_position]
-                current_utility = self._utilities[row, final_replica_load - 1]
+            for (
+                replica_id,
+                replica_increment,
+                replica_shift,
+                row,
+            ) in candidate_choices:
+                _, final_load_vector = solve(
+                    packed_state
+                    + replica_increment
+                    + assignment_count_increment
+                )
+                final_replica_load = (
+                    final_load_vector >> replica_shift
+                ) & state_digit_mask
+                current_utility = utilities[row, final_replica_load - 1]
 
                 if (
                     current_utility > best_utility
@@ -73,12 +115,31 @@ class BREIBGPolicy:
                     )
                 ):
                     best_replica = replica_id
-                    best_final_loads = final_loads
+                    best_final_load_vector = final_load_vector
                     best_utility = current_utility
 
-            return best_replica, best_final_loads
+            return best_replica, best_final_load_vector
 
         self._solve = solve
+        self._state_bits = state_bits
+        self._slot_shifts = slot_shifts
+        self._state_digit_mask = state_digit_mask
+        self._assignment_count_shift = assignment_count_shift
+
+    def _pack_loads(self, loads):
+        load_vector = sum(
+            int(value) << shift
+            for value, shift in zip(loads, self._slot_shifts)
+        )
+        return load_vector | (
+            sum(loads) << self._assignment_count_shift
+        )
+
+    def _unpack_loads(self, packed_load_vector):
+        return tuple(
+            (packed_load_vector >> shift) & self._state_digit_mask
+            for shift in self._slot_shifts
+        )
 
     def _normalize_loads(self, loads):
         normalized = tuple(loads)
@@ -99,10 +160,26 @@ class BREIBGPolicy:
 
     def solve_state(self, loads):
         """Return the current SPNE action and predicted terminal load vector."""
-        return self._solve(self._normalize_loads(loads))
+        normalized_loads = self._normalize_loads(loads)
+        replica_id, final_load_vector = self._solve(
+            self._pack_loads(normalized_loads)
+        )
+        return replica_id, self._unpack_loads(final_load_vector)
 
     def cache_info(self):
         return self._solve.cache_info()
+
+    def clear_cache(self):
+        """Release this one-stage exact-policy memo table when placement ends.
+
+        A policy is needed only while ``embedding`` resolves the ordered
+        placements for its stage.  Its recursive ``lru_cache`` otherwise
+        retains every exact subgame state through the next garbage-collection
+        cycle, so callers that finish a stage should explicitly discard it.
+        This affects cache lifetime only; it does not alter the recurrence,
+        candidate set, or tie-breaking rule.
+        """
+        self._solve.cache_clear()
 
     def __getitem__(self, loads):
         replica_id, _ = self.solve_state(loads)

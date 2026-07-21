@@ -1,16 +1,20 @@
 import json
 import random
 from collections import Counter
+from types import SimpleNamespace
 
 from httpx import MockTransport, Request, Response
 import numpy as np
 import pytest
 
 from runner import run_decoupled_slot
+from latency_model import latency_likelihood
 from testbed.cnf_service import ReplicaConfig
 from testbed.kubernetes_adapters import (
     KubernetesApi,
+    KubernetesObservationCollector,
     KubernetesReplicaDiscovery,
+    KubernetesSlotTrafficExecutor,
     build_replica_list,
     make_kubernetes_adapters,
 )
@@ -139,6 +143,63 @@ def test_discovery_rejects_incomplete_ready_set():
         discovery.discover(1, build_replica_list(profiles(), 3, 2))
 
 
+def test_physical_only_diagnostic_mode_changes_only_controller_learning_input():
+    hop = SimpleNamespace(
+        stage=1,
+        replica_id=2,
+        assigned_load=3,
+        signal_latency_ms=51.0,
+        state_likelihood=(0.1, 0.2, 0.3, 0.4),
+        processing_latency_ms=40.0,
+        observation_jitter_ms=11.0,
+        state_estimate=4,
+    )
+    traffic_executor = SimpleNamespace(
+        telemetry=SimpleNamespace(flows=[SimpleNamespace(flow_id=7, hops=[hop])])
+    )
+    collector = KubernetesObservationCollector(
+        traffic_executor,
+        learning_signal_mode="physical-only-diagnostic-v1",
+    )
+
+    observation = collector.collect(1, {7: 2}, {})[0]
+
+    assert observation.measured_latency_ms == 40.0
+    assert observation.signal == 40.0
+    assert observation.observation_jitter_ms == 0.0
+    assert observation.likelihood == latency_likelihood(40.0, 3)
+    assert observation.estimated_state != hop.state_estimate
+
+
+def test_requested_forwarder_cgroup_diagnostics_must_be_returned():
+    def flow_generator(request: Request):
+        payload = json.loads(request.content)
+        assert payload["forwarder_cgroup_diagnostics"] is True
+        return Response(
+            200,
+            request=request,
+            json={
+                "datapath_mode": "kernel",
+                "slot_id": 1,
+                "elapsed_ms": 1.0,
+                "flows": [],
+            },
+        )
+
+    executor = KubernetesSlotTrafficExecutor(
+        "http://flow-generator",
+        transport=MockTransport(flow_generator),
+        forwarder_cgroup_diagnostics=True,
+    )
+
+    with pytest.raises(RuntimeError, match="omitted requested forwarder cgroup"):
+        executor.execute_slot(
+            1,
+            {1: {1: 1}},
+            {1: {(1, 1): SimpleNamespace(endpoint="http://stage-1-0")}},
+        )
+
+
 @pytest.mark.parametrize("num_of_stages", [2, 3, 4])
 def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
     num_of_stages,
@@ -196,9 +257,10 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
                                 (hop["stage"], hop["replica_id"])
                             ],
                             "processing_latency_ms": 40.0,
+                            "observation_jitter_ms": 5.0,
                             "request_latency_ms": 41.0,
                             "transport_overhead_ms": 1.0,
-                            "signal_latency_ms": 40.0,
+                            "signal_latency_ms": 45.0,
                             "state_estimate": 3,
                             "state_likelihood": [0.1, 0.2, 0.3, 0.4],
                             "legacy_signal": 3,

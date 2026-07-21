@@ -11,8 +11,16 @@ from simulation_adapters import (
     SimulationReplicaDiscovery,
     SimulationTrafficExecutor,
 )
-from IBG.latency_model import estimate_state, latency_likelihood
-from testbed.cnf_service import ReplicaConfig, SeededLatencyObservationSource
+from IBG.latency_model import estimate_state, learning_signal_likelihood
+from learning_mode import (
+    SEPARATED_LEARNING_SIGNAL_MODE,
+    require_learning_signal_mode,
+)
+from testbed.cnf_service import (
+    ReplicaConfig,
+    SeededLatencyObservationSource,
+    SeededObservationJitterSource,
+)
 from testbed.kubernetes_adapters import build_replica_list
 
 
@@ -22,6 +30,7 @@ class SeededSimulationObservationCollector:
     def __init__(self, profiles, slot_id):
         self.slot_id = slot_id
         self.sources = {}
+        self.jitter_sources = {}
         for (stage, replica_id), profile in profiles.items():
             if profile.observation_seed is None:
                 raise ValueError(
@@ -38,18 +47,27 @@ class SeededSimulationObservationCollector:
                 observation_seed=profile.observation_seed,
             )
             self.sources[(stage, replica_id)] = SeededLatencyObservationSource(config)
+            self.jitter_sources[(stage, replica_id)] = (
+                SeededObservationJitterSource(config)
+            )
 
     def collect(self, stage, assignments, replica_list):
         congestion_by_replica = Counter(assignments.values())
         observations = []
         for flow_id, replica_id in assignments.items():
             congestion = congestion_by_replica[replica_id]
-            signal = self.sources[(stage, replica_id)](
+            processing_latency = self.sources[(stage, replica_id)](
                 congestion,
                 self.slot_id,
                 flow_id,
             )
-            likelihood = latency_likelihood(signal, congestion)
+            observation_jitter = self.jitter_sources[(stage, replica_id)](
+                congestion,
+                self.slot_id,
+                flow_id,
+            )
+            signal = processing_latency + observation_jitter
+            likelihood = learning_signal_likelihood(signal, congestion)
             observations.append(
                 Observation(
                     stage=stage,
@@ -58,8 +76,9 @@ class SeededSimulationObservationCollector:
                     congestion=congestion,
                     signal=signal,
                     likelihood=tuple(likelihood),
-                    measured_latency_ms=signal,
+                    measured_latency_ms=processing_latency,
                     estimated_state=estimate_state(likelihood),
+                    observation_jitter_ms=observation_jitter,
                 )
             )
         return observations
@@ -103,6 +122,10 @@ class ReplayObservationCollector:
                     likelihood=tuple(item["likelihood"]),
                     measured_latency_ms=item["measured_latency_ms"],
                     estimated_state=item["estimated_state"],
+                    observation_jitter_ms=item.get(
+                        "observation_jitter_ms",
+                        item["signal"] - item["measured_latency_ms"],
+                    ),
                 )
             )
         return observations
@@ -185,6 +208,7 @@ def summarize_slot(
             "likelihood": [float(value) for value in observation.likelihood],
             "measured_latency_ms": observation.measured_latency_ms,
             "estimated_state": observation.estimated_state,
+            "observation_jitter_ms": observation.observation_jitter_ms,
         }
         for stage_observations in result.observations_by_stage.values()
         for observation in stage_observations
@@ -207,7 +231,8 @@ def summarize_slot(
         "backend": backend,
         "datapath_mode": result.datapath_mode,
         "solver": "br_eibg_exact",
-        "observation_mode": "processing-latency-conditioned-on-assigned-load",
+        "observation_mode": "noisy-learning-signal-v1",
+        "learning_signal_mode": result.learning_signal_mode,
         "seed": seed,
         "slot_id": slot_id,
         "configuration": {
@@ -333,6 +358,12 @@ def replay_kernel_trace(events, profiles):
     metadata = started[0]
     configuration = metadata["configuration"]
     seed = metadata["seed"]
+    learning_signal_mode = require_learning_signal_mode(
+        metadata.get(
+            "learning_signal_mode",
+            SEPARATED_LEARNING_SIGNAL_MODE,
+        )
+    )
     random.seed(seed)
     np.random.seed(seed)
     replica_list = build_replica_list(
@@ -350,6 +381,7 @@ def replay_kernel_trace(events, profiles):
         slot_traffic_executor=ReplaySlotTrafficExecutor(),
         link_latency_collector=link_collector,
         datapath_mode=SIMULATION_DATAPATH_MODE,
+        learning_signal_mode=learning_signal_mode,
     )
     flow_list = list(range(1, configuration["flows"] + 1))
     comparisons = []
@@ -553,6 +585,16 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
         "all_hops": all(
             hop.get("datapath_mode") == KERNEL_DATAPATH_MODE
             for hop in traffic_hops
+        ),
+        "learning_signal": (
+            simulation.get(
+                "learning_signal_mode",
+                SEPARATED_LEARNING_SIGNAL_MODE,
+            )
+            == kubernetes.get(
+                "learning_signal_mode",
+                SEPARATED_LEARNING_SIGNAL_MODE,
+            )
         ),
     }
     selected_only = (

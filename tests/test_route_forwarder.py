@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from testbed.cnf_service import ReplicaConfig, create_app as create_processor_app
 from testbed.route_forwarder import (
     ForwarderConfig,
+    ForwarderCgroupSnapshot,
     create_app as create_forwarder_app,
 )
 
@@ -190,6 +191,47 @@ def test_forwarder_health_requires_matching_local_processor():
         "current_concurrency": 0,
     }
     assert router.calls == [("processor-2", "/health")]
+
+
+def test_forwarder_exposes_its_own_cgroup_cpu_snapshot():
+    forwarder = create_forwarder_app(
+        ForwarderConfig(
+            stage=2,
+            replica_id=3,
+            pod_name="stage-2-2",
+            processor_url="http://processor-2",
+        ),
+        cgroup_reader=lambda config: ForwarderCgroupSnapshot(
+            stage=config.stage,
+            replica_id=config.replica_id,
+            pod_name=config.pod_name,
+            cgroup_version="v2",
+            usage_usec=101,
+            nr_periods=12,
+            nr_throttled=3,
+            throttled_usec=77,
+            quota_usec=50_000,
+            period_usec=100_000,
+            weight=6,
+        ),
+    )
+
+    response = asyncio.run(request(forwarder, "GET", "/runtime-cgroup"))
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "stage": 2,
+        "replica_id": 3,
+        "pod_name": "stage-2-2",
+        "cgroup_version": "v2",
+        "usage_usec": 101,
+        "nr_periods": 12,
+        "nr_throttled": 3,
+        "throttled_usec": 77,
+        "quota_usec": 50_000,
+        "period_usec": 100_000,
+        "weight": 6,
+    }
 
 
 def test_forwarder_maps_local_processor_failure_to_502():

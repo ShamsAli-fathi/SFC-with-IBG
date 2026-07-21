@@ -7,6 +7,10 @@ import httpx
 import numpy as np
 
 from datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
+from learning_mode import (
+    SEPARATED_LEARNING_SIGNAL_MODE,
+    require_learning_signal_mode,
+)
 from runner import run_decoupled_slot
 from testbed.experiment import run_until_equilibrium
 from testbed.kubernetes_adapters import (
@@ -44,6 +48,18 @@ def wait_for_flow_generator(
     raise RuntimeError(f"flow generator did not become ready: {last_error}")
 
 
+def read_boolean_environment(name, *, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
 def main():
     namespace = os.environ.get("POD_NAMESPACE", "ibg-testbed")
     datapath_mode = require_datapath_mode(
@@ -55,6 +71,15 @@ def main():
     num_of_flows = int(os.environ.get("NUM_FLOWS", "3"))
     first_slot_id = int(os.environ.get("SLOT_ID", "1"))
     max_iterations = int(os.environ.get("MAX_ITERATIONS", "1"))
+    learning_signal_mode = require_learning_signal_mode(
+        os.environ.get(
+            "LEARNING_SIGNAL_MODE",
+            SEPARATED_LEARNING_SIGNAL_MODE,
+        )
+    )
+    forwarder_cgroup_diagnostics = read_boolean_environment(
+        "FORWARDER_CGROUP_DIAGNOSTICS",
+    )
     if min(
         num_of_stages,
         num_of_replicas,
@@ -110,6 +135,8 @@ def main():
             discovery,
             flow_generator_url,
             datapath_mode=datapath_mode,
+            learning_signal_mode=learning_signal_mode,
+            forwarder_cgroup_diagnostics=forwarder_cgroup_diagnostics,
         )
         flow_list = list(range(1, num_of_flows + 1))
 
@@ -158,6 +185,8 @@ def main():
             run_metadata={
                 "backend": "kubernetes",
                 "datapath_mode": datapath_mode,
+                "learning_signal_mode": learning_signal_mode,
+                "forwarder_cgroup_diagnostics": forwarder_cgroup_diagnostics,
                 "runtime_image": os.environ.get(
                     "RUNTIME_IMAGE",
                     "unknown",

@@ -58,10 +58,19 @@ def kubernetes_shape(simulation):
                     "endpoint": placement["endpoint"],
                     "concurrency": observation["congestion"],
                     "assigned_load": observation["congestion"],
-                    "modeled_processing_latency_ms": observation["signal"],
+                    "modeled_processing_latency_ms": observation[
+                        "measured_latency_ms"
+                    ],
                     "legacy_congestion": observation["congestion"],
-                    "processing_latency_ms": observation["signal"],
-                    "request_latency_ms": observation["signal"] + 1.0,
+                    "processing_latency_ms": observation[
+                        "measured_latency_ms"
+                    ],
+                    "observation_jitter_ms": observation[
+                        "observation_jitter_ms"
+                    ],
+                    "request_latency_ms": (
+                        observation["measured_latency_ms"] + 1.0
+                    ),
                     "transport_overhead_ms": 1.0,
                     "signal_latency_ms": observation["signal"],
                     "state_estimate": observation["estimated_state"],

@@ -24,6 +24,7 @@ from learning_signal import build_learning_signal_snapshot
 @dataclass
 class SlotResult:
     datapath_mode: str
+    learning_signal_mode: str
     embed_dict: dict
     flow_order_by_stage: dict
     assignments_by_stage: dict
@@ -112,12 +113,19 @@ def run_decoupled_slot(
             stage,
             num_of_replicas,
         )
-        execution = adapters.traffic_executor.execute_stage(
-            policy,
-            num_of_replicas,
-            embed_dict,
-            flow_list,
-        )
+        try:
+            execution = adapters.traffic_executor.execute_stage(
+                policy,
+                num_of_replicas,
+                embed_dict,
+                flow_list,
+            )
+        finally:
+            # The policy's exhaustive memo table is only needed while the
+            # current stage is embedded.  Clear it promptly so a multi-slot
+            # controller run cannot retain complete exact state spaces until
+            # cyclic garbage collection happens to run.
+            policy.clear_cache()
         embed_dict = execution.embed_dict
         last_embed = execution.assignments
         ended_at = time.perf_counter()
@@ -162,11 +170,16 @@ def run_decoupled_slot(
     realized_per_flow = {flow: 0.0 for flow in flow_list}
     for observations in observations_by_stage.values():
         for observation in observations:
-            processing_latency_by_flow[observation.flow_id] += observation.signal
+            processing_latency = (
+                observation.measured_latency_ms
+                if observation.measured_latency_ms is not None
+                else observation.signal
+            )
+            processing_latency_by_flow[observation.flow_id] += processing_latency
             replica = replica_list[(observation.stage, observation.replica_id)]
             realized_per_flow[observation.flow_id] += replica.utility_kernel(
                 observation.congestion,
-                observation.signal,
+                processing_latency,
             )
 
     link_latency_by_flow = {flow: 0.0 for flow in flow_list}
@@ -210,6 +223,7 @@ def run_decoupled_slot(
 
     result = SlotResult(
         datapath_mode=adapters.datapath_mode,
+        learning_signal_mode=adapters.learning_signal_mode,
         embed_dict=embed_dict,
         flow_order_by_stage=flow_order_by_stage,
         assignments_by_stage=assignments_by_stage,

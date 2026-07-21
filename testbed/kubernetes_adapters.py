@@ -8,6 +8,12 @@ import httpx
 from control_plane import ControlPlaneMeter
 from datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
 from header import Replica, embedding
+from latency_model import estimate_state, latency_likelihood
+from learning_mode import (
+    SEPARATED_LEARNING_SIGNAL_MODE,
+    is_physical_only_diagnostic_mode,
+    require_learning_signal_mode,
+)
 from ports import AdapterBundle, Observation, StageExecution
 from simulation_adapters import NullResultSink
 from testbed.flow_generator import RunSlotResponse
@@ -156,6 +162,7 @@ class KubernetesSlotTrafficExecutor:
         transport=None,
         datapath_mode=KERNEL_DATAPATH_MODE,
         control_plane_meter=None,
+        forwarder_cgroup_diagnostics=False,
     ):
         self.flow_generator_url = flow_generator_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
@@ -166,6 +173,9 @@ class KubernetesSlotTrafficExecutor:
         )
         self.telemetry = None
         self.control_plane_meter = control_plane_meter
+        if not isinstance(forwarder_cgroup_diagnostics, bool):
+            raise ValueError("forwarder cgroup diagnostics must be boolean")
+        self.forwarder_cgroup_diagnostics = forwarder_cgroup_diagnostics
 
     def execute_slot(self, slot_id, assignments_by_stage, discovered_by_stage):
         stages = sorted(assignments_by_stage)
@@ -198,13 +208,16 @@ class KubernetesSlotTrafficExecutor:
         ) as client:
             if self.control_plane_meter is not None:
                 self.control_plane_meter.mark_route_dispatch()
+            payload = {
+                "datapath_mode": self.datapath_mode,
+                "slot_id": slot_id,
+                "routes": routes,
+            }
+            if self.forwarder_cgroup_diagnostics:
+                payload["forwarder_cgroup_diagnostics"] = True
             response = client.post(
                 f"{self.flow_generator_url}/run-slot",
-                json={
-                    "datapath_mode": self.datapath_mode,
-                    "slot_id": slot_id,
-                    "routes": routes,
-                },
+                json=payload,
             )
             if self.control_plane_meter is not None:
                 self.control_plane_meter.mark_telemetry_received()
@@ -229,12 +242,26 @@ class KubernetesSlotTrafficExecutor:
                     f"{self.telemetry.datapath_mode!r}; expected "
                     f"{self.datapath_mode!r}"
                 )
+            if (
+                self.forwarder_cgroup_diagnostics
+                and self.telemetry.forwarder_cgroup is None
+            ):
+                raise RuntimeError(
+                    "flow generator omitted requested forwarder cgroup diagnostics"
+                )
         return self.telemetry
 
 
 class KubernetesObservationCollector:
-    def __init__(self, traffic_executor):
+    def __init__(
+        self,
+        traffic_executor,
+        learning_signal_mode=SEPARATED_LEARNING_SIGNAL_MODE,
+    ):
         self.traffic_executor = traffic_executor
+        self.learning_signal_mode = require_learning_signal_mode(
+            learning_signal_mode
+        )
 
     def collect(self, stage, assignments, replica_list):
         telemetry = self.traffic_executor.telemetry
@@ -258,16 +285,27 @@ class KubernetesObservationCollector:
                 raise RuntimeError(
                     f"telemetry replica mismatch for flow {flow_id} stage {stage}"
                 )
+            if is_physical_only_diagnostic_mode(self.learning_signal_mode):
+                signal = hop.processing_latency_ms
+                likelihood = latency_likelihood(signal, hop.assigned_load)
+                observation_jitter_ms = 0.0
+                estimated_state = estimate_state(likelihood)
+            else:
+                signal = hop.signal_latency_ms
+                likelihood = tuple(hop.state_likelihood)
+                observation_jitter_ms = hop.observation_jitter_ms
+                estimated_state = hop.state_estimate
             observations.append(
                 Observation(
                     stage=stage,
                     flow_id=flow_id,
                     replica_id=replica_id,
                     congestion=hop.assigned_load,
-                    signal=hop.signal_latency_ms,
-                    likelihood=tuple(hop.state_likelihood),
+                    signal=signal,
+                    likelihood=tuple(likelihood),
                     measured_latency_ms=hop.processing_latency_ms,
-                    estimated_state=hop.state_estimate,
+                    estimated_state=estimated_state,
+                    observation_jitter_ms=observation_jitter_ms,
                 )
             )
         return observations
@@ -336,7 +374,10 @@ def make_kubernetes_adapters(
     transport=None,
     datapath_mode=KERNEL_DATAPATH_MODE,
     control_plane_meter=None,
+    learning_signal_mode=SEPARATED_LEARNING_SIGNAL_MODE,
+    forwarder_cgroup_diagnostics=False,
 ):
+    learning_signal_mode = require_learning_signal_mode(learning_signal_mode)
     meter = control_plane_meter or ControlPlaneMeter()
     if hasattr(discovery, "api"):
         discovery.api.control_plane_meter = meter
@@ -345,14 +386,19 @@ def make_kubernetes_adapters(
         transport=transport,
         datapath_mode=datapath_mode,
         control_plane_meter=meter,
+        forwarder_cgroup_diagnostics=forwarder_cgroup_diagnostics,
     )
     return AdapterBundle(
         replica_discovery=discovery,
         traffic_executor=KubernetesPlacementExecutor(),
-        observation_collector=KubernetesObservationCollector(slot_traffic),
+        observation_collector=KubernetesObservationCollector(
+            slot_traffic,
+            learning_signal_mode=learning_signal_mode,
+        ),
         result_sink=result_sink or NullResultSink(),
         slot_traffic_executor=slot_traffic,
         link_latency_collector=KubernetesLinkLatencyCollector(),
         control_plane_meter=meter,
         datapath_mode=slot_traffic.datapath_mode,
+        learning_signal_mode=learning_signal_mode,
     )

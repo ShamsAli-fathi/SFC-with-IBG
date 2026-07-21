@@ -53,9 +53,32 @@ class RecordingReplicaNetwork:
         self.payloads = []
         self.active = Counter()
         self.peak = Counter()
+        self.cgroup_snapshots = Counter()
 
     async def __call__(self, request: Request):
         entry_host = request.url.host
+        if request.method == "GET" and request.url.path == "/runtime-cgroup":
+            _, entry_stage, entry_replica_id = entry_host.split("-")
+            self.cgroup_snapshots[entry_host] += 1
+            sample = self.cgroup_snapshots[entry_host]
+            offset = 100 * int(entry_stage) + 10 * int(entry_replica_id)
+            return Response(
+                200,
+                request=request,
+                json={
+                    "stage": int(entry_stage),
+                    "replica_id": int(entry_replica_id),
+                    "pod_name": entry_host,
+                    "cgroup_version": "v2",
+                    "usage_usec": offset + (sample - 1) * 17,
+                    "nr_periods": offset + (sample - 1),
+                    "nr_throttled": int(entry_replica_id) + sample - 1,
+                    "throttled_usec": offset + (sample - 1) * 7,
+                    "quota_usec": 50_000,
+                    "period_usec": 100_000,
+                    "weight": 6,
+                },
+            )
         payload = json.loads(request.content)
         _, entry_stage, entry_replica_id = entry_host.split("-")
         route_hops = [
@@ -252,6 +275,48 @@ def test_hop_telemetry_preserves_correlation_and_latency_fields():
     )
     assert flow.ingress_request_latency_ms >= 0
     assert flow.ingress_overhead_ms >= 0
+
+
+def test_opt_in_forwarder_cgroup_diagnostics_delta_each_selected_forwarder_once():
+    network = RecordingReplicaNetwork()
+    generator = FlowGenerator(transport=MockTransport(network))
+
+    response = asyncio.run(
+        generator.run_slot(
+            RunSlotRequest(
+                datapath_mode="kernel",
+                slot_id=4,
+                forwarder_cgroup_diagnostics=True,
+                routes=[
+                    route(1, {1: 1, 2: 2, 3: 1}),
+                    route(2, {1: 1, 2: 1, 3: 1}),
+                ],
+            )
+        )
+    )
+
+    cgroup = response.forwarder_cgroup
+    assert cgroup.schema_version == "forwarder_cgroup_v1"
+    assert cgroup.selection_scope == "selected_forwarders_only"
+    assert len(cgroup.forwarders) == 4
+    assert cgroup.totals == {
+        "usage_usec_delta": 68,
+        "periods_delta": 4,
+        "throttled_periods_delta": 4,
+        "throttled_usec_delta": 28,
+    }
+    assert all(item.usage_usec_delta == 17 for item in cgroup.forwarders)
+    assert all(item.throttled_usec_delta == 7 for item in cgroup.forwarders)
+    assert {
+        (item.stage, item.replica_id, item.route_requests, item.source_pair_requests)
+        for item in cgroup.forwarders
+    } == {
+        (1, 1, 2, 2),
+        (2, 1, 1, 1),
+        (2, 2, 1, 1),
+        (3, 1, 2, 0),
+    }
+    assert all(count == 2 for count in network.cgroup_snapshots.values())
 
 
 @pytest.mark.parametrize(

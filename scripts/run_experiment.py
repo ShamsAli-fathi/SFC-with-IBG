@@ -17,6 +17,10 @@ sys.path.insert(0, str(ROOT))
 
 from testbed.kubernetes_resources import build_runtime_resources
 from testbed.profiles import expand_profiles, load_profiles
+from IBG.learning_mode import (
+    LEARNING_SIGNAL_MODES,
+    SEPARATED_LEARNING_SIGNAL_MODE,
+)
 
 
 IMAGE = "ibg-testbed:kernel-phase3"
@@ -248,6 +252,8 @@ def start_experiment_job(
     num_of_replicas,
     num_of_flows,
     environment_metadata=None,
+    learning_signal_mode=SEPARATED_LEARNING_SIGNAL_MODE,
+    forwarder_cgroup_diagnostics=False,
 ):
     rendered = run(
         [
@@ -272,6 +278,12 @@ def start_experiment_job(
     set_env(container, "EXPECTED_REPLICAS", num_of_replicas)
     set_env(container, "NUM_FLOWS", num_of_flows)
     set_env(container, "DATAPATH_MODE", DATAPATH_MODE)
+    set_env(container, "LEARNING_SIGNAL_MODE", learning_signal_mode)
+    set_env(
+        container,
+        "FORWARDER_CGROUP_DIAGNOSTICS",
+        str(bool(forwarder_cgroup_diagnostics)).lower(),
+    )
     set_env(container, "RUNTIME_IMAGE", IMAGE)
     set_env(
         container,
@@ -677,6 +689,8 @@ def run_experiment_series(args, context, environment_metadata):
             num_of_replicas=args.num_of_replicas,
             num_of_flows=args.num_of_flows,
             environment_metadata=environment_metadata,
+            learning_signal_mode=args.learning_signal_mode,
+            forwarder_cgroup_diagnostics=args.forwarder_cgroup_diagnostics,
         )
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         identifier = run_identifier(timestamp, run_number, args.num_of_runs)
@@ -733,6 +747,23 @@ def parse_args(argv=None):
     )
     parser.add_argument("--max-iterations", type=int, default=100)
     parser.add_argument(
+        "--learning-signal-mode",
+        choices=sorted(LEARNING_SIGNAL_MODES),
+        default=SEPARATED_LEARNING_SIGNAL_MODE,
+        help=(
+            "controller learning-observation mode; the physical-only mode is "
+            "an explicit same-deployment diagnostic"
+        ),
+    )
+    parser.add_argument(
+        "--forwarder-cgroup-diagnostics",
+        action="store_true",
+        help=(
+            "record selected-forwarder cgroup-v2 CPU deltas before/after each "
+            "route slot"
+        ),
+    )
+    parser.add_argument(
         "--runs",
         dest="num_of_runs",
         type=int,
@@ -781,7 +812,9 @@ def main():
     print(
         "Requested configuration: "
         f"flows={args.num_of_flows}, stages={args.num_of_stages}, "
-        f"replicas/stage={args.num_of_replicas}, runs={args.num_of_runs}"
+        f"replicas/stage={args.num_of_replicas}, runs={args.num_of_runs}, "
+        f"learning-signal={args.learning_signal_mode}, "
+        f"forwarder-cgroup-diagnostics={args.forwarder_cgroup_diagnostics}"
     )
     base_profiles = load_profiles(ROOT / "deploy/kubernetes/profiles.json")
     profiles = expand_profiles(

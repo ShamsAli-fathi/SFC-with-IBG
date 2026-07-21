@@ -1,0 +1,71 @@
+Kernel 15-flow x 8-replica latency baseline
+Recorded: 2026-07-21
+
+Purpose
+-------
+This is a small comparison baseline for future Kernel-route runs.  It records
+the two clean, same-configuration exploratory runs after the transient
+high pair-RPC residual period.  It is not a replacement for the supported
+3-flow/5-replica Kernel gate and does not change any SLA, utility, jitter, or
+pair-cost semantics.
+
+Common configuration
+--------------------
+datapath mode: kernel
+learning signal mode: separated-v1
+seed: 2050
+topology: 3 stages, 8 replicas per stage, 15 flows
+runtime image: ibg-testbed:kernel-phase3
+physical processing jitter sigma (states 1..4): [6, 5.25, 4, 3.25] ms
+observation-only jitter sigma (states 1..4): [7.2, 6.3, 4.8, 3.9] ms
+SLA threshold: 110 ms
+
+Relevant runtime allocation
+---------------------------
+WSL allocation: approximately 10 GB RAM, 4 GB swap
+kind cluster: 1 control-plane node, 2 worker nodes
+replica private processor: request 50m CPU / 128Mi memory; limit 1 CPU / 768Mi memory
+replica public forwarder: request 25m CPU / 64Mi memory; limit 500m CPU / 256Mi memory
+
+Trace final-slot values
+-----------------------
+trace                                      slots  processing  pair cost  end-to-end  realized utility  SLA violations
+ibg-experiment-20260721T154817Z-run001     15     66.735 ms   20.752 ms  87.487 ms   3142.689          0 / 15
+ibg-experiment-20260721T154949Z-run002     12     65.907 ms   21.543 ms  87.450 ms   3143.252          0 / 15
+
+Pooled final-slot per-flow latency distribution (30 flows)
+-----------------------------------------------------------
+component                 mean       median     p95        minimum    maximum
+physical processing       66.321 ms  65.541 ms  73.507 ms  56.808 ms  77.736 ms
+pair-route cost           21.147 ms  20.564 ms  29.276 ms  10.395 ms  34.041 ms
+end-to-end                87.469 ms  85.918 ms 100.019 ms  75.389 ms 102.339 ms
+
+Interpretation
+--------------
+The pair-route value is the measured post-placement forwarder-to-forwarder
+residual.  It is included in end-to-end latency and realized utility but never
+in replica selection.  These two traces show a healthy observed 15x8 runtime
+snapshot: all final flows met the 110-ms SLA.  Treat this as a comparison point,
+not a performance guarantee; reproduce with the same configuration before
+calling a future deviation a regression.
+
+Dynamic diagnostic capture (separate from the clean baseline)
+--------------------------------------------------------------
+trace: ibg-experiment-20260721T161704Z.jsonl
+mode: same 15x8 configuration, with forwarder cgroup diagnostics enabled
+result: equilibrium in 14 slots; final SLA violations 0 / 15
+final per-flow means: processing 66.440 ms; pair-route cost 22.720 ms;
+  end-to-end 89.161 ms; realized utility 3117.591
+all-slot pair-route cost: mean 23.653 ms; p95 36.769 ms
+selected pair locality: 202 same-worker pairs (48.10%); 218 cross-worker
+  pairs (51.90%); 420 selected pairs total
+selected-forwarder cgroup counters: 259 sampled forwarder-slot instances;
+  4,533,097 usec CPU usage; 638 CPU periods; 0 throttled periods and
+  0 throttled usec across all 14 slots
+replica health after capture: all 24 replica containers had restart count 0
+
+The diagnostic obtains cgroup snapshots before and after each slot, which adds
+measurement traffic.  Keep its timing values separate from the two clean
+latency-baseline traces above.  Its value is that it records a healthy run
+with both same-worker and cross-worker selected pairs and no observed
+forwarder CPU throttling.

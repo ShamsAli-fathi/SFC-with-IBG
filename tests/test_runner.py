@@ -7,6 +7,7 @@ import numpy as np
 
 from header import Replica
 from main import DEFAULT_EXPERIMENT_RUNS
+import runner as runner_module
 from runner import run_decoupled_slot
 
 
@@ -126,3 +127,25 @@ def test_exact_solver_completes_three_stages_with_three_flows_and_five_replicas(
         len(observations) == 3
         for observations in result.observations_by_stage.values()
     )
+
+
+def test_runner_releases_each_exact_stage_cache_after_embedding(monkeypatch):
+    policies = []
+    original = runner_module.br_eibg_exact
+
+    def track_policy(*args, **kwargs):
+        policy, utility_grid = original(*args, **kwargs)
+        policies.append(policy)
+        return policy, utility_grid
+
+    monkeypatch.setattr(runner_module, "br_eibg_exact", track_policy)
+
+    run_decoupled_slot(
+        [1, 2, 3],
+        make_replicas(),
+        num_of_stages=3,
+        num_of_replicas=2,
+    )
+
+    assert len(policies) == 3
+    assert all(policy.cache_info().currsize == 0 for policy in policies)

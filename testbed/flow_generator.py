@@ -10,6 +10,7 @@ from pydantic import AnyHttpUrl, BaseModel, Field, ValidationError, model_valida
 
 from IBG.datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
 from testbed.route_forwarder import (
+    ForwarderCgroupSnapshot,
     PairwiseLinkTelemetry,
     RouteProcessResponse,
 )
@@ -40,6 +41,7 @@ class RunSlotRequest(BaseModel):
     datapath_mode: str
     slot_id: int = Field(ge=1)
     routes: list[FlowRoute] = Field(min_length=1)
+    forwarder_cgroup_diagnostics: bool = False
 
     @model_validator(mode="after")
     def validate_unique_flows(self):
@@ -76,6 +78,7 @@ class HopTelemetry(BaseModel):
     modeled_processing_latency_ms: float
     legacy_congestion: int
     processing_latency_ms: float
+    observation_jitter_ms: float = Field(default=0.0, ge=0)
     request_latency_ms: float
     transport_overhead_ms: float = Field(ge=0)
     signal_latency_ms: float
@@ -93,11 +96,46 @@ class FlowTelemetry(BaseModel):
     ingress_overhead_ms: float = Field(ge=0)
 
 
+class ForwarderCgroupDelta(BaseModel):
+    stage: int = Field(ge=1)
+    replica_id: int = Field(ge=1)
+    pod_name: str = Field(min_length=1)
+    endpoint: str = Field(min_length=1)
+    route_requests: int = Field(ge=1)
+    source_pair_requests: int = Field(ge=0)
+    before: ForwarderCgroupSnapshot
+    after: ForwarderCgroupSnapshot
+    usage_usec_delta: int = Field(ge=0)
+    periods_delta: int = Field(ge=0)
+    throttled_periods_delta: int = Field(ge=0)
+    throttled_usec_delta: int = Field(ge=0)
+
+
+class ForwarderCgroupSummary(BaseModel):
+    schema_version: str
+    selection_scope: str
+    before_snapshot_elapsed_ms: float = Field(ge=0)
+    after_snapshot_elapsed_ms: float = Field(ge=0)
+    snapshot_elapsed_ms: float = Field(ge=0)
+    forwarders: list[ForwarderCgroupDelta] = Field(min_length=1)
+    totals: dict[str, int] = Field(min_length=4)
+
+
 class RunSlotResponse(BaseModel):
     datapath_mode: str
     slot_id: int
     elapsed_ms: float
     flows: list[FlowTelemetry]
+    forwarder_cgroup: ForwarderCgroupSummary | None = None
+
+
+@dataclass(frozen=True)
+class _SelectedForwarder:
+    stage: int
+    replica_id: int
+    endpoint: str
+    route_requests: int
+    source_pair_requests: int
 
 
 @dataclass(frozen=True)
@@ -140,6 +178,165 @@ class FlowGenerator:
         self.config = config or FlowGeneratorConfig.from_env()
         self.transport = transport
 
+    @staticmethod
+    def _selected_forwarders(request):
+        route_counts = Counter()
+        endpoint_by_forwarder = {}
+        stages = tuple(request.routes[0].hops[index].stage for index in range(
+            len(request.routes[0].hops)
+        ))
+        terminal_stage = stages[-1]
+        for route in request.routes:
+            for hop in route.hops:
+                key = (hop.stage, hop.replica_id)
+                endpoint = str(hop.url)
+                previous = endpoint_by_forwarder.setdefault(key, endpoint)
+                if previous != endpoint:
+                    raise FlowExecutionError(
+                        "one selected forwarder has inconsistent endpoints "
+                        f"for stage {hop.stage} replica {hop.replica_id}"
+                    )
+                route_counts[key] += 1
+        return tuple(
+            _SelectedForwarder(
+                stage=stage,
+                replica_id=replica_id,
+                endpoint=endpoint_by_forwarder[(stage, replica_id)],
+                route_requests=route_counts[(stage, replica_id)],
+                source_pair_requests=(
+                    route_counts[(stage, replica_id)]
+                    if stage != terminal_stage
+                    else 0
+                ),
+            )
+            for stage, replica_id in sorted(route_counts)
+        )
+
+    async def _snapshot_forwarders(self, client, selected_forwarders):
+        started_at = time.perf_counter()
+
+        async def snapshot(selected):
+            endpoint = f"{selected.endpoint.rstrip('/')}/runtime-cgroup"
+            try:
+                response = await client.get(endpoint)
+                response.raise_for_status()
+                value = ForwarderCgroupSnapshot.model_validate(response.json())
+            except httpx.HTTPStatusError as error:
+                raise FlowExecutionError(
+                    "forwarder cgroup snapshot failed for "
+                    f"stage {selected.stage} replica {selected.replica_id}: "
+                    f"HTTP {error.response.status_code} {error.response.text}"
+                ) from error
+            except (httpx.HTTPError, ValidationError, ValueError) as error:
+                raise FlowExecutionError(
+                    "forwarder cgroup snapshot failed for "
+                    f"stage {selected.stage} replica {selected.replica_id}: "
+                    f"{type(error).__name__}: {error!r}"
+                ) from error
+            if (
+                value.stage != selected.stage
+                or value.replica_id != selected.replica_id
+            ):
+                raise FlowExecutionError(
+                    "forwarder cgroup snapshot identity mismatch for "
+                    f"stage {selected.stage} replica {selected.replica_id}"
+                )
+            return (selected.stage, selected.replica_id), value
+
+        outcomes = await asyncio.gather(
+            *(snapshot(selected) for selected in selected_forwarders),
+            return_exceptions=True,
+        )
+        failures = [outcome for outcome in outcomes if isinstance(outcome, Exception)]
+        if failures:
+            raise FlowExecutionError(str(failures[0])) from failures[0]
+        return (
+            dict(outcomes),
+            (time.perf_counter() - started_at) * 1000,
+        )
+
+    @staticmethod
+    def _forwarder_cgroup_summary(
+        selected_forwarders,
+        before,
+        after,
+        before_elapsed_ms,
+        after_elapsed_ms,
+    ):
+        deltas = []
+        total_usage_usec = 0
+        total_periods = 0
+        total_throttled_periods = 0
+        total_throttled_usec = 0
+        for selected in selected_forwarders:
+            key = (selected.stage, selected.replica_id)
+            try:
+                start = before[key]
+                end = after[key]
+            except KeyError as error:
+                raise FlowExecutionError(
+                    "forwarder cgroup snapshots are incomplete for "
+                    f"stage {selected.stage} replica {selected.replica_id}"
+                ) from error
+            if (
+                start.stage != end.stage
+                or start.replica_id != end.replica_id
+                or start.pod_name != end.pod_name
+                or start.cgroup_version != end.cgroup_version
+                or start.quota_usec != end.quota_usec
+                or start.period_usec != end.period_usec
+                or start.weight != end.weight
+            ):
+                raise FlowExecutionError(
+                    "forwarder cgroup identity or CPU limit changed within "
+                    f"slot for stage {selected.stage} replica {selected.replica_id}"
+                )
+            counters = {
+                "usage_usec": end.usage_usec - start.usage_usec,
+                "periods": end.nr_periods - start.nr_periods,
+                "throttled_periods": end.nr_throttled - start.nr_throttled,
+                "throttled_usec": end.throttled_usec - start.throttled_usec,
+            }
+            if any(value < 0 for value in counters.values()):
+                raise FlowExecutionError(
+                    "forwarder cgroup counter decreased within slot for "
+                    f"stage {selected.stage} replica {selected.replica_id}"
+                )
+            total_usage_usec += counters["usage_usec"]
+            total_periods += counters["periods"]
+            total_throttled_periods += counters["throttled_periods"]
+            total_throttled_usec += counters["throttled_usec"]
+            deltas.append(
+                ForwarderCgroupDelta(
+                    stage=selected.stage,
+                    replica_id=selected.replica_id,
+                    pod_name=start.pod_name,
+                    endpoint=selected.endpoint,
+                    route_requests=selected.route_requests,
+                    source_pair_requests=selected.source_pair_requests,
+                    before=start,
+                    after=end,
+                    usage_usec_delta=counters["usage_usec"],
+                    periods_delta=counters["periods"],
+                    throttled_periods_delta=counters["throttled_periods"],
+                    throttled_usec_delta=counters["throttled_usec"],
+                )
+            )
+        return ForwarderCgroupSummary(
+            schema_version="forwarder_cgroup_v1",
+            selection_scope="selected_forwarders_only",
+            before_snapshot_elapsed_ms=before_elapsed_ms,
+            after_snapshot_elapsed_ms=after_elapsed_ms,
+            snapshot_elapsed_ms=before_elapsed_ms + after_elapsed_ms,
+            forwarders=deltas,
+            totals={
+                "usage_usec_delta": total_usage_usec,
+                "periods_delta": total_periods,
+                "throttled_periods_delta": total_throttled_periods,
+                "throttled_usec_delta": total_throttled_usec,
+            },
+        )
+
     async def run_slot(self, request: RunSlotRequest):
         if request.datapath_mode != self.config.datapath_mode:
             raise FlowExecutionError(
@@ -153,10 +350,18 @@ class FlowGenerator:
             for route in request.routes
             for hop in route.hops
         )
+        selected_forwarders = self._selected_forwarders(request)
         async with httpx.AsyncClient(
             timeout=self.config.request_timeout_seconds,
             transport=self.transport,
         ) as client:
+            before_cgroup = None
+            before_snapshot_elapsed_ms = 0.0
+            if request.forwarder_cgroup_diagnostics:
+                (
+                    before_cgroup,
+                    before_snapshot_elapsed_ms,
+                ) = await self._snapshot_forwarders(client, selected_forwarders)
             outcomes = await asyncio.gather(
                 *[
                     self._run_flow(
@@ -169,16 +374,34 @@ class FlowGenerator:
                 ],
                 return_exceptions=True,
             )
+            after_cgroup = None
+            after_snapshot_elapsed_ms = 0.0
+            if request.forwarder_cgroup_diagnostics:
+                (
+                    after_cgroup,
+                    after_snapshot_elapsed_ms,
+                ) = await self._snapshot_forwarders(client, selected_forwarders)
 
         failures = [outcome for outcome in outcomes if isinstance(outcome, Exception)]
         if failures:
             raise FlowExecutionError(str(failures[0])) from failures[0]
+
+        forwarder_cgroup = None
+        if request.forwarder_cgroup_diagnostics:
+            forwarder_cgroup = self._forwarder_cgroup_summary(
+                selected_forwarders,
+                before_cgroup,
+                after_cgroup,
+                before_snapshot_elapsed_ms,
+                after_snapshot_elapsed_ms,
+            )
 
         return RunSlotResponse(
             datapath_mode=self.config.datapath_mode,
             slot_id=request.slot_id,
             elapsed_ms=(time.perf_counter() - started_at) * 1000,
             flows=outcomes,
+            forwarder_cgroup=forwarder_cgroup,
         )
 
     async def _run_flow(self, client, slot_id, route, planned_congestion):
@@ -317,6 +540,7 @@ class FlowGenerator:
                     ),
                     legacy_congestion=observed.legacy_congestion,
                     processing_latency_ms=observed.processing_latency_ms,
+                    observation_jitter_ms=observed.observation_jitter_ms,
                     request_latency_ms=incoming_request_ms,
                     transport_overhead_ms=incoming_overhead_ms,
                     signal_latency_ms=observed.signal_latency_ms,

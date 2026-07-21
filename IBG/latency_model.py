@@ -11,6 +11,7 @@ DEFAULT_COST = 1.0
 DEFAULT_LINK_LATENCY_WEIGHT = 1.0
 DEFAULT_SLA_LATENCY_MS = 110.0
 JITTER_DISTRIBUTION = "half-normal-additive-v1"
+OBSERVATION_JITTER_DISTRIBUTION = "half-normal-observation-v1"
 HALF_NORMAL_MEAN_FACTOR = math.sqrt(2.0 / math.pi)
 
 
@@ -49,6 +50,16 @@ CALIBRATED_STATE_PARAMETERS: Mapping[int, LatencyParameters] = {
     4: LatencyParameters(10.0, 2.0, 2.0, 5, 3.25),
 }
 
+# Observation uncertainty is intentionally larger than physical processing
+# jitter. It affects only the selected learning signal, never the actual
+# processing latency used by SLA or realized utility.
+OBSERVATION_JITTER_MS_BY_STATE: Mapping[int, float] = {
+    1: 7.2,
+    2: 6.3,
+    3: 4.8,
+    4: 3.9,
+}
+
 # Transitional import alias for Phase 1 callers. Active code and new tests
 # should use CALIBRATED_STATE_PARAMETERS.
 PROVISIONAL_STATE_PARAMETERS = CALIBRATED_STATE_PARAMETERS
@@ -64,6 +75,21 @@ def require_state_parameters(
         return parameters_by_state[state]
     except KeyError as error:
         raise ValueError(f"unknown latency state {state}") from error
+
+
+def require_observation_jitter_ms(
+    state: int,
+    observation_jitter_by_state: Mapping[int, float] = (
+        OBSERVATION_JITTER_MS_BY_STATE
+    ),
+) -> float:
+    try:
+        jitter_ms = float(observation_jitter_by_state[state])
+    except KeyError as error:
+        raise ValueError(f"unknown observation-jitter state {state}") from error
+    if jitter_ms <= 0:
+        raise ValueError("observation jitter must be positive")
+    return jitter_ms
 
 
 def deterministic_latency_ms(load: int, parameters: LatencyParameters) -> float:
@@ -126,6 +152,120 @@ def latency_likelihood(
                 latency_ms,
                 load,
                 require_state_parameters(state, parameters_by_state),
+            )
+            for state in range(1, 5)
+        ],
+        dtype=float,
+    )
+    total = float(densities.sum())
+    if not math.isfinite(total) or total <= 0:
+        return (0.25, 0.25, 0.25, 0.25)
+    return tuple(float(value) for value in densities / total)
+
+
+def sample_observation_jitter_ms(
+    state: int,
+    random_source=None,
+    observation_jitter_by_state: Mapping[int, float] = (
+        OBSERVATION_JITTER_MS_BY_STATE
+    ),
+) -> float:
+    """Sample nonnegative noise applied only to the learning signal."""
+    random_source = random_source or np.random
+    scale = require_observation_jitter_ms(
+        state,
+        observation_jitter_by_state,
+    )
+    return abs(float(random_source.normal(0.0, scale)))
+
+
+def sample_learning_signal_ms(
+    processing_latency_ms: float,
+    state: int,
+    random_source=None,
+    observation_jitter_by_state: Mapping[int, float] = (
+        OBSERVATION_JITTER_MS_BY_STATE
+    ),
+) -> tuple[float, float]:
+    """Return processing latency plus a separate observation disturbance."""
+    if processing_latency_ms <= 0:
+        raise ValueError("processing latency must be positive")
+    disturbance = sample_observation_jitter_ms(
+        state,
+        random_source,
+        observation_jitter_by_state,
+    )
+    return processing_latency_ms + disturbance, disturbance
+
+
+def _standard_normal_cdf(value: float) -> float:
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def learning_signal_pdf(
+    signal_latency_ms: float,
+    load: int,
+    state: int,
+    parameters_by_state: Mapping[int, LatencyParameters] = (
+        CALIBRATED_STATE_PARAMETERS
+    ),
+    observation_jitter_by_state: Mapping[int, float] = (
+        OBSERVATION_JITTER_MS_BY_STATE
+    ),
+) -> float:
+    """Density of baseline plus independent physical/observation half-normals."""
+    parameters = require_state_parameters(state, parameters_by_state)
+    center = deterministic_latency_ms(load, parameters)
+    excess = signal_latency_ms - center
+    if excess <= 0:
+        return 0.0
+
+    physical_sigma = parameters.jitter_ms
+    observation_sigma = require_observation_jitter_ms(
+        state,
+        observation_jitter_by_state,
+    )
+    combined_sigma = math.sqrt(
+        physical_sigma**2 + observation_sigma**2
+    )
+    cdf_term = (
+        _standard_normal_cdf(
+            excess * observation_sigma
+            / (physical_sigma * combined_sigma)
+        )
+        + _standard_normal_cdf(
+            excess * physical_sigma
+            / (observation_sigma * combined_sigma)
+        )
+        - 1.0
+    )
+    return (
+        4.0
+        * math.exp(-0.5 * (excess / combined_sigma) ** 2)
+        * cdf_term
+        / (math.sqrt(2.0 * math.pi) * combined_sigma)
+    )
+
+
+def learning_signal_likelihood(
+    signal_latency_ms: float,
+    load: int,
+    parameters_by_state: Mapping[int, LatencyParameters] = (
+        CALIBRATED_STATE_PARAMETERS
+    ),
+    observation_jitter_by_state: Mapping[int, float] = (
+        OBSERVATION_JITTER_MS_BY_STATE
+    ),
+) -> tuple[float, float, float, float]:
+    """Return state likelihoods for the noisy selected learning signal."""
+    densities = np.asarray(
+        [
+            learning_signal_pdf(
+                signal_latency_ms,
+                load,
+                state,
+                parameters_by_state,
+                observation_jitter_by_state,
             )
             for state in range(1, 5)
         ],

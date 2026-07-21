@@ -72,6 +72,22 @@ def test_runs_flag_defaults_to_one_and_accepts_requested_count():
     assert parse_args(["--runs", "5"]).num_of_runs == 5
 
 
+def test_diagnostic_flags_keep_the_default_and_allow_controlled_ab_mode():
+    default = parse_args([])
+    diagnostic = parse_args(
+        [
+            "--learning-signal-mode",
+            "physical-only-diagnostic-v1",
+            "--forwarder-cgroup-diagnostics",
+        ]
+    )
+
+    assert default.learning_signal_mode == "separated-v1"
+    assert default.forwarder_cgroup_diagnostics is False
+    assert diagnostic.learning_signal_mode == "physical-only-diagnostic-v1"
+    assert diagnostic.forwarder_cgroup_diagnostics is True
+
+
 def test_multi_run_identifiers_are_unique_while_single_run_stays_compatible():
     timestamp = "20260715T190000Z"
 
@@ -318,6 +334,8 @@ def test_experiment_job_receives_requested_dimensions(monkeypatch):
     assert environment["EXPECTED_REPLICAS"] == "6"
     assert environment["NUM_FLOWS"] == "5"
     assert environment["DATAPATH_MODE"] == "kernel"
+    assert environment["LEARNING_SIGNAL_MODE"] == "separated-v1"
+    assert environment["FORWARDER_CGROUP_DIAGNOSTICS"] == "false"
     assert environment["RUNTIME_IMAGE"] == launcher.IMAGE
     assert json.loads(environment["EXPERIMENT_ENVIRONMENT"]) == {
         "kubernetes_server": "v1.35.0"

@@ -1,4 +1,6 @@
 import random
+from functools import lru_cache
+from itertools import product
 
 import numpy as np
 import pandas as pd
@@ -107,6 +109,86 @@ def test_br_eibg_memoizes_the_three_flow_five_replica_state_space():
     assert sum(predicted_final_loads) == 3
     assert cache.misses == 56
     assert cache.hits > 0
+
+
+def _tuple_state_reference(utility_grid, num_replica_slots, loads):
+    """Original tuple-state BR_EIBG recurrence for encoding equivalence."""
+    replica_ids = tuple(sorted(int(value) for value in utility_grid.index))
+    utilities = utility_grid.loc[list(replica_ids)].to_numpy(dtype=float)
+    num_players = len(utility_grid.columns)
+
+    @lru_cache(maxsize=None)
+    def solve(loads):
+        if sum(loads) == num_players:
+            return 0, loads
+
+        best_replica = None
+        best_final_loads = None
+        best_utility = -np.inf
+        for row, replica_id in enumerate(replica_ids):
+            next_loads = list(loads)
+            replica_position = replica_id - 1
+            next_loads[replica_position] += 1
+            _, final_loads = solve(tuple(next_loads))
+            current_utility = utilities[
+                row,
+                final_loads[replica_position] - 1,
+            ]
+            if (
+                current_utility > best_utility
+                or (
+                    current_utility == best_utility
+                    and (
+                        best_replica is None
+                        or replica_id < best_replica
+                    )
+                )
+            ):
+                best_replica = replica_id
+                best_final_loads = final_loads
+                best_utility = current_utility
+        return best_replica, best_final_loads
+
+    assert len(loads) == num_replica_slots
+    return solve(tuple(loads))
+
+
+def test_br_eibg_packed_cache_preserves_tuple_recurrence_and_sparse_slots():
+    utility_grid = pd.DataFrame(
+        [
+            [-1.0, -3.0, -5.0],
+            [-1.0, -3.0, -5.0],
+            [-2.0, -2.0, -2.0],
+        ],
+        index=[1, 3, 5],
+        columns=[1, 2, 3],
+    )
+    policy = BREIBGPolicy(utility_grid, num_replica_slots=5)
+
+    for loads in product(range(4), repeat=5):
+        if sum(loads) > 3:
+            continue
+        assert policy.solve_state(loads) == _tuple_state_reference(
+            utility_grid,
+            5,
+            loads,
+        )
+
+
+def test_br_eibg_policy_can_release_its_exact_stage_cache_promptly():
+    utility_grid = pd.DataFrame(
+        [[3.0, 2.0], [2.0, 1.0]],
+        index=[1, 2],
+        columns=[1, 2],
+    )
+    policy = BREIBGPolicy(utility_grid)
+    policy.solve_state((0, 0))
+
+    assert policy.cache_info().currsize > 0
+
+    policy.clear_cache()
+
+    assert policy.cache_info().currsize == 0
 
 
 def test_belief_update_and_aggregation_are_characterized():

@@ -34,9 +34,13 @@ class SimulationObservationCollector:
             if replica_id == 0:
                 continue
             congestion = congestion_by_replica[replica_id]
-            signal, estimated_state, likelihood = replica_list[
-                (stage, replica_id)
-            ].observe_latency(congestion)
+            (
+                processing_latency,
+                signal,
+                observation_jitter,
+                estimated_state,
+                likelihood,
+            ) = replica_list[(stage, replica_id)].observe_latency(congestion)
             observations.append(
                 Observation(
                     stage=stage,
@@ -45,8 +49,9 @@ class SimulationObservationCollector:
                     congestion=congestion,
                     signal=signal,
                     likelihood=tuple(likelihood),
-                    measured_latency_ms=signal,
+                    measured_latency_ms=processing_latency,
                     estimated_state=estimated_state,
+                    observation_jitter_ms=observation_jitter,
                 )
             )
 

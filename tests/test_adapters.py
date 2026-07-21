@@ -104,7 +104,15 @@ def test_collected_latency_observations_drive_belief_update():
 
     assert [observation.flow_id for observation in observations] == [1, 2, 3]
     assert all(
-        observation.measured_latency_ms == observation.signal
+        observation.signal
+        == pytest.approx(
+            observation.measured_latency_ms
+            + observation.observation_jitter_ms
+        )
+        for observation in observations
+    )
+    assert all(
+        observation.observation_jitter_ms >= 0
         for observation in observations
     )
     assert adapted_replicas[(1, 1)].belief != beliefs_before[(1, 1)]

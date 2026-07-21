@@ -4,6 +4,8 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from collections.abc import Mapping
+from pathlib import Path
+from typing import Callable
 
 from fastapi import FastAPI, HTTPException
 import httpx
@@ -101,6 +103,22 @@ class PairwiseLinkTelemetry(BaseModel):
     link_cost_ms: float = Field(ge=0)
 
 
+class ForwarderCgroupSnapshot(BaseModel):
+    """A public-forwarder cgroup-v2 CPU counter snapshot."""
+
+    stage: int = Field(ge=1)
+    replica_id: int = Field(ge=1)
+    pod_name: str = Field(min_length=1)
+    cgroup_version: str
+    usage_usec: int = Field(ge=0)
+    nr_periods: int = Field(ge=0)
+    nr_throttled: int = Field(ge=0)
+    throttled_usec: int = Field(ge=0)
+    quota_usec: int | None = Field(default=None, ge=1)
+    period_usec: int = Field(ge=1)
+    weight: int = Field(ge=1)
+
+
 class RouteProcessResponse(BaseModel):
     datapath_mode: str
     slot_id: int
@@ -114,6 +132,80 @@ class RouteForwardingError(RuntimeError):
     pass
 
 
+class ForwarderCgroupError(RuntimeError):
+    pass
+
+
+CGROUP_CPU_STAT_PATH = Path("/sys/fs/cgroup/cpu.stat")
+CGROUP_CPU_MAX_PATH = Path("/sys/fs/cgroup/cpu.max")
+CGROUP_CPU_WEIGHT_PATH = Path("/sys/fs/cgroup/cpu.weight")
+
+
+def _read_cgroup_key_value_file(path):
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ForwarderCgroupError(
+            f"cannot read cgroup counter {path.name}: {type(error).__name__}: {error!r}"
+        ) from error
+    values = {}
+    for line in content.splitlines():
+        key, separator, value = line.partition(" ")
+        if not separator or not key or not value:
+            raise ForwarderCgroupError(
+                f"invalid cgroup counter line in {path.name}: {line!r}"
+            )
+        try:
+            values[key] = int(value)
+        except ValueError as error:
+            raise ForwarderCgroupError(
+                f"invalid cgroup counter value in {path.name}: {line!r}"
+            ) from error
+    return values
+
+
+def read_forwarder_cgroup_snapshot(config):
+    """Read local CPU counters without making a route or processor request."""
+    stats = _read_cgroup_key_value_file(CGROUP_CPU_STAT_PATH)
+    required = (
+        "usage_usec",
+        "nr_periods",
+        "nr_throttled",
+        "throttled_usec",
+    )
+    missing = [key for key in required if key not in stats]
+    if missing:
+        raise ForwarderCgroupError(
+            "cgroup-v2 cpu.stat is missing required counters: "
+            + ", ".join(missing)
+        )
+    try:
+        quota_text, period_text = CGROUP_CPU_MAX_PATH.read_text(
+            encoding="utf-8"
+        ).split()
+        weight = int(CGROUP_CPU_WEIGHT_PATH.read_text(encoding="utf-8").strip())
+        quota_usec = None if quota_text == "max" else int(quota_text)
+        period_usec = int(period_text)
+    except (OSError, ValueError) as error:
+        raise ForwarderCgroupError(
+            "cannot read cgroup-v2 CPU limit metadata: "
+            f"{type(error).__name__}: {error!r}"
+        ) from error
+    return ForwarderCgroupSnapshot(
+        stage=config.stage,
+        replica_id=config.replica_id,
+        pod_name=config.pod_name,
+        cgroup_version="v2",
+        usage_usec=stats["usage_usec"],
+        nr_periods=stats["nr_periods"],
+        nr_throttled=stats["nr_throttled"],
+        throttled_usec=stats["throttled_usec"],
+        quota_usec=quota_usec,
+        period_usec=period_usec,
+        weight=weight,
+    )
+
+
 class ReplicaRouteForwarder:
     """Forward an already-selected route outside the processing process."""
 
@@ -122,12 +214,15 @@ class ReplicaRouteForwarder:
         config: ForwarderConfig,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        cgroup_reader: Callable[[ForwarderConfig], ForwarderCgroupSnapshot]
+        | None = None,
     ):
         self.config = config
         self.client = httpx.AsyncClient(
             timeout=self.config.request_timeout_seconds,
             transport=transport,
         )
+        self.cgroup_reader = cgroup_reader or read_forwarder_cgroup_snapshot
 
     async def _request(self, method, endpoint, **kwargs):
         return await self.client.request(method, endpoint, **kwargs)
@@ -158,6 +253,11 @@ class ReplicaRouteForwarder:
             ) from error
         self._validate_local_identity(health)
         return health
+
+    def cgroup_snapshot(self):
+        snapshot = self.cgroup_reader(self.config)
+        self._validate_local_identity(snapshot)
+        return snapshot
 
     async def _process_local(self, request: RouteProcessRequest):
         endpoint = f"{self.config.processor_url}/process"
@@ -286,10 +386,13 @@ class ReplicaRouteForwarder:
 def create_app(
     config: ForwarderConfig | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    cgroup_reader: Callable[[ForwarderConfig], ForwarderCgroupSnapshot]
+    | None = None,
 ):
     runtime = ReplicaRouteForwarder(
         config or ForwarderConfig.from_env(),
         transport=transport,
+        cgroup_reader=cgroup_reader,
     )
 
     @asynccontextmanager
@@ -309,6 +412,13 @@ def create_app(
         try:
             return await runtime.health()
         except RouteForwardingError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @application.get("/runtime-cgroup", response_model=ForwarderCgroupSnapshot)
+    async def runtime_cgroup():
+        try:
+            return runtime.cgroup_snapshot()
+        except ForwarderCgroupError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
     @application.post("/process-route", response_model=RouteProcessResponse)
