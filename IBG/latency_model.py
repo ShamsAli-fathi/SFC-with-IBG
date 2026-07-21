@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 import math
-from statistics import NormalDist
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -11,6 +10,8 @@ DEFAULT_LATENCY_WEIGHT = 1.0
 DEFAULT_COST = 1.0
 DEFAULT_LINK_LATENCY_WEIGHT = 1.0
 DEFAULT_SLA_LATENCY_MS = 110.0
+JITTER_DISTRIBUTION = "half-normal-additive-v1"
+HALF_NORMAL_MEAN_FACTOR = math.sqrt(2.0 / math.pi)
 
 
 @dataclass(frozen=True)
@@ -38,14 +39,14 @@ class LatencyParameters:
             raise ValueError("jitter_ms must be positive")
 
 
-# Phase 2 accepted design calibration, ordered from state 1 (bad) to state 4
-# (good). These values characterize the synthetic FastAPI replica behavior;
-# they are not measured Kernel or DPDK/VPP capacity claims.
+# Phase 4 nonnegative-jitter recalibration, ordered from state 1 (bad) to
+# state 4 (good). These values characterize the synthetic FastAPI replica
+# behavior; they are not measured Kernel or DPDK/VPP capacity claims.
 CALIBRATED_STATE_PARAMETERS: Mapping[int, LatencyParameters] = {
-    1: LatencyParameters(40.0, 8.0, 12.0, 1, 4.0),
-    2: LatencyParameters(28.0, 6.0, 8.0, 2, 3.0),
-    3: LatencyParameters(18.0, 4.0, 5.0, 3, 2.0),
-    4: LatencyParameters(10.0, 2.0, 2.0, 5, 1.0),
+    1: LatencyParameters(40.0, 8.0, 12.0, 1, 6.0),
+    2: LatencyParameters(28.0, 6.0, 8.0, 2, 5.25),
+    3: LatencyParameters(18.0, 4.0, 5.0, 3, 4.0),
+    4: LatencyParameters(10.0, 2.0, 2.0, 5, 3.25),
 }
 
 # Transitional import alias for Phase 1 callers. Active code and new tests
@@ -81,28 +82,17 @@ def sample_latency_ms(
     parameters: LatencyParameters,
     random_source=None,
 ) -> float:
-    """Sample positive processing latency from the shifted normal law."""
+    """Add a nonnegative half-normal disturbance to modeled latency."""
     random_source = random_source or np.random
     center = deterministic_latency_ms(load, parameters)
-    sample = -1.0
-    while sample <= 0:
-        sample = float(random_source.normal(center, parameters.jitter_ms))
-    return sample
+    disturbance = abs(float(random_source.normal(0.0, parameters.jitter_ms)))
+    return center + disturbance
 
 
 def expected_latency_ms(load: int, parameters: LatencyParameters) -> float:
-    """Return the mean of the positive-truncated shifted normal law."""
+    """Return baseline latency plus the half-normal disturbance mean."""
     center = deterministic_latency_ms(load, parameters)
-    standardized = center / parameters.jitter_ms
-    normal = NormalDist()
-    retained_probability = normal.cdf(standardized)
-    correction = (
-        parameters.jitter_ms
-        * math.exp(-(standardized**2) / 2)
-        / math.sqrt(2 * math.pi)
-        / retained_probability
-    )
-    return center + correction
+    return center + (parameters.jitter_ms * HALF_NORMAL_MEAN_FACTOR)
 
 
 def latency_pdf(
@@ -110,15 +100,15 @@ def latency_pdf(
     load: int,
     parameters: LatencyParameters,
 ) -> float:
-    if latency_ms <= 0:
-        return 0.0
     center = deterministic_latency_ms(load, parameters)
+    if latency_ms < center:
+        return 0.0
     sigma = parameters.jitter_ms
     standardized = (latency_ms - center) / sigma
-    retained_probability = NormalDist().cdf(center / sigma)
     return (
-        math.exp(-(standardized**2) / 2)
-        / (math.sqrt(2 * math.pi) * sigma * retained_probability)
+        math.sqrt(2.0 / math.pi)
+        * math.exp(-(standardized**2) / 2)
+        / sigma
     )
 
 

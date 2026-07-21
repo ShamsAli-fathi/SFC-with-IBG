@@ -10,6 +10,9 @@ Build the SFC-with-IBG testbed incrementally. The current implemented roadmap mi
 
 - The Python files directly under `IBG/` are the reference simulation. The budgeted/coupled path is out of scope unless explicitly requested.
 - Preserve the IBG mathematics and behavior. Isolate Kubernetes, traffic, and telemetry concerns behind adapters instead of embedding them in the solver.
+- Preserve the active `half-normal-additive-v1` selected-processing jitter model: jitter is nonnegative additive delay with state-1-through-state-4 scales 6/5.25/4/3.25 ms, and sampling, likelihood, and expected-latency calculations must remain distributionally consistent. These scales have passed local calibration and tests but still require a fresh normal-build live gate before the revised branch is complete.
+- A potential separation between physical processing jitter and observation-only learning-signal jitter is under discussion; it is not designed or authorized. Do not add a second signal, alter SLA/utility inputs, or change likelihood semantics without explicit user direction.
+- The earlier 8/7/5.5/4.5-ms values were physical-jitter scales, not validated observation-noise scales, and their prior results were still considered too accurate for the user's intended belief uncertainty. Do not reuse those values as an observation-noise prescription without new calibration evidence.
 - Prefer small, reviewable changes. Plan substantial work before implementation.
 - Do not rewrite generated CSV data, pickle files, old copies, or unrelated algorithm variants unless explicitly requested.
 - Do not read large result files wholesale; inspect only targeted rows, columns, or summaries.

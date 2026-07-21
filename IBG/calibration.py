@@ -10,6 +10,7 @@ from latency_model import (
     DEFAULT_LINK_LATENCY_WEIGHT,
     DEFAULT_REWARD,
     DEFAULT_SLA_LATENCY_MS,
+    JITTER_DISTRIBUTION,
     LatencyParameters,
     deterministic_latency_ms,
     estimate_state,
@@ -262,10 +263,11 @@ def assess_live_observation(payload: Mapping, *, state: int, load: int) -> dict:
         "assigned_load": int(payload["assigned_load"]) == load,
         "positive_latencies": modeled > 0 and measured > 0,
         "signal_is_measured_processing": abs(signal - measured) <= 1e-9,
-        "model_sample_within_four_sigma": abs(
-            modeled - deterministic_latency_ms(load, parameters)
-        )
-        <= 4.0 * parameters.jitter_ms,
+        "model_sample_within_four_sigma": (
+            0.0
+            <= modeled - deterministic_latency_ms(load, parameters)
+            <= 4.0 * parameters.jitter_ms
+        ),
         "server_overshoot_within_tolerance": (
             -0.1 <= overshoot <= overshoot_tolerance
         ),
@@ -330,6 +332,7 @@ def build_calibration_report(
             "link_latency_weight": "utility units per millisecond",
         },
         "load_horizon": CALIBRATION_LOAD_HORIZON,
+        "jitter_distribution": JITTER_DISTRIBUTION,
         "supported_exact_load": SUPPORTED_EXACT_LOAD,
         "target_zero_crossing_bands": ZERO_CROSSING_TARGET_BANDS,
         "parameters_by_state": {

@@ -106,16 +106,17 @@ Each replica has a hidden true performance state $\theta\in\{1,2,3,4\}$ ordered 
 For final assigned load $n$, a selected replica produces processing latency
 
 $$
-Q_\theta(n)=\mu_\theta+h_\theta(n,\kappa_\theta)+\epsilon_\theta.
+Q_\theta(n)=\mu_\theta+h_\theta(n,\kappa_\theta)+J_\theta,
+\qquad J_\theta=|Z_\theta|,\quad Z_\theta\sim\mathcal N(0,\sigma_\theta^2).
 $$
 
-$\mu_\theta$ is state-dependent baseline latency, $\kappa_\theta$ is effective capacity measured in concurrent-flow units, and $\epsilon_\theta$ is Gaussian state-dependent jitter truncated only as needed to keep total latency positive. The initial congestion function is
+$\mu_\theta$ is state-dependent baseline latency, $\kappa_\theta$ is effective capacity measured in concurrent-flow units, and $J_\theta$ is a nonnegative additive half-normal processing-delay disturbance. Jitter therefore never reduces the deterministic state/load latency. The congestion function is
 
 $$
 h_\theta(n,\kappa_\theta)=a_\theta\max(0,n-1)+b_\theta\max(0,n-\kappa_\theta)^2.
 $$
 
-$a_\theta$ models ordinary sharing cost and $b_\theta$ creates a sharper post-capacity knee. Profiles must satisfy the intended ordering: bad states have no lower baseline/jitter/congestion penalty and no higher effective capacity than good states. FastAPI applies this delay so the hidden state causally affects actual service behavior.
+$a_\theta$ models ordinary sharing cost and $b_\theta$ creates a sharper post-capacity knee. Profiles must satisfy the intended ordering: bad states have no lower baseline/jitter/congestion penalty and no higher effective capacity than good states. The active half-normal scales for states 1 through 4 are 6, 5.25, 4, and 3.25 ms. FastAPI applies this delay so the hidden state causally affects actual service behavior. Sampling, likelihood density, and expected-latency calculations all use this same `half-normal-additive-v1` law.
 
 The continuous private observation is the selected hop's processing latency itself: $s=q$. The learning boundary computes $\ell_\theta=f(q\mid\theta,n,m)$ for every state, where $m$ is the known datapath mode, and passes the four likelihoods through the existing posterior/aggregation structure. A categorical signal may report $\arg\max_\theta\ell_\theta$, but it does not drive the update. Unselected replicas produce no raw latency observation. Assigned final load, actual admitted concurrency, modeled delay, measured server processing latency, client request latency, and link/transport latency remain separate correlated fields.
 

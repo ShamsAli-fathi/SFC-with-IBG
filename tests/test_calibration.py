@@ -10,7 +10,12 @@ from IBG.calibration import (
     sensitivity_report,
     zero_crossings,
 )
-from IBG.latency_model import DEFAULT_SLA_LATENCY_MS, latency_likelihood
+from IBG.latency_model import (
+    CALIBRATED_STATE_PARAMETERS,
+    DEFAULT_SLA_LATENCY_MS,
+    JITTER_DISTRIBUTION,
+    latency_likelihood,
+)
 from testbed.profiles import load_profiles
 
 
@@ -51,6 +56,10 @@ def test_seeded_calibration_report_passes_model_gate():
 
     assert report["calibration_kind"] == "synthetic-design-calibration"
     assert report["model_gate_passed"] is True
+    assert report["jitter_distribution"] == JITTER_DISTRIBUTION
+    assert [
+        CALIBRATED_STATE_PARAMETERS[state].jitter_ms for state in range(1, 5)
+    ] == [6.0, 5.25, 4.0, 3.25]
     assert DEFAULT_SLA_LATENCY_MS == 110.0
     assert report["policy"]["sla_latency_ms"] == 110.0
     assert report["classification"]["minimum_accuracy"] >= 0.90
@@ -96,3 +105,20 @@ def test_live_observation_assessment_rejects_transport_as_signal():
 
     assert report["passed"] is False
     assert report["checks"]["signal_is_measured_processing"] is False
+
+
+def test_live_observation_assessment_rejects_modeled_latency_below_baseline():
+    measured = 40.5
+    payload = {
+        "assigned_load": 1,
+        "modeled_processing_latency_ms": 39.9,
+        "processing_latency_ms": measured,
+        "signal_latency_ms": measured,
+        "state_estimate": 1,
+        "state_likelihood": latency_likelihood(measured, 1),
+    }
+
+    report = assess_live_observation(payload, state=1, load=1)
+
+    assert report["passed"] is False
+    assert report["checks"]["model_sample_within_four_sigma"] is False
