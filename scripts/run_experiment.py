@@ -16,7 +16,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from testbed.kubernetes_resources import build_runtime_resources
+from testbed.dpdk_vpp_preflight import (
+    collect_dpdk_vpp_preflight,
+    format_dpdk_vpp_preflight,
+    require_dpdk_vpp_preflight,
+)
+from testbed.network_impairment import NetworkImpairment
 from testbed.profiles import expand_profiles, load_profiles
+from IBG.datapath import (
+    DPDK_VPP_DATAPATH_MODE,
+    KERNEL_DATAPATH_MODE,
+    require_datapath_mode,
+)
 from IBG.learning_mode import (
     LEARNING_SIGNAL_MODES,
     SEPARATED_LEARNING_SIGNAL_MODE,
@@ -28,7 +39,6 @@ from IBG.outcome_latency import (
 
 
 IMAGE = "ibg-testbed:kernel-phase3"
-DATAPATH_MODE = "kernel"
 NAMESPACE = "ibg-testbed"
 JOB_NAME = "ibg-experiment"
 CSV_OUTPUT_DIR = ROOT / "figures"
@@ -171,6 +181,7 @@ def deploy_workloads(
     num_of_stages,
     num_of_replicas,
     profiles,
+    network_impairment=None,
 ):
     for manifest in ("namespace.yaml", "rbac.yaml", "flow-generator.yaml"):
         run(
@@ -189,6 +200,7 @@ def deploy_workloads(
         num_of_replicas=num_of_replicas,
         namespace=NAMESPACE,
         image=IMAGE,
+        network_impairment=network_impairment,
     )
     run(
         ["kubectl", "--context", context, "apply", "--filename", "-"],
@@ -260,13 +272,22 @@ def start_experiment_job(
     num_of_stages,
     num_of_replicas,
     num_of_flows,
+    datapath_mode=KERNEL_DATAPATH_MODE,
     environment_metadata=None,
     learning_signal_mode=SEPARATED_LEARNING_SIGNAL_MODE,
     outcome_latency_mode=DEFAULT_OUTCOME_LATENCY_MODE,
     forwarder_cgroup_diagnostics=False,
     forwarding_path_diagnostics=False,
     memory_diagnostics=False,
+    network_impairment=None,
 ):
+    datapath_mode = require_datapath_mode(datapath_mode, runtime=True)
+    if network_impairment is None:
+        network_impairment = NetworkImpairment.disabled()
+    if not isinstance(network_impairment, NetworkImpairment):
+        raise ValueError(
+            "network_impairment must be a NetworkImpairment instance"
+        )
     rendered = run(
         [
             "kubectl",
@@ -289,7 +310,7 @@ def start_experiment_job(
     set_env(container, "NUM_STAGES", num_of_stages)
     set_env(container, "EXPECTED_REPLICAS", num_of_replicas)
     set_env(container, "NUM_FLOWS", num_of_flows)
-    set_env(container, "DATAPATH_MODE", DATAPATH_MODE)
+    set_env(container, "DATAPATH_MODE", datapath_mode)
     set_env(container, "LEARNING_SIGNAL_MODE", learning_signal_mode)
     set_env(container, "OUTCOME_LATENCY_MODE", outcome_latency_mode)
     set_env(
@@ -307,6 +328,7 @@ def start_experiment_job(
         "SOLVER_RESOURCE_DIAGNOSTICS",
         str(bool(memory_diagnostics)).lower(),
     )
+    set_env(container, "NETWORK_IMPAIRMENT", network_impairment.to_json())
     set_env(container, "RUNTIME_IMAGE", IMAGE)
     set_env(
         container,
@@ -707,6 +729,7 @@ def export_legacy_csv(trace_path, output_dir, run_id):
 def run_experiment_series(args, context, environment_metadata):
     args.trace_dir.mkdir(parents=True, exist_ok=True)
     trace_paths = []
+    network_impairment = network_impairment_from_args(args)
     for run_number in range(1, args.num_of_runs + 1):
         if args.num_of_runs > 1:
             print(f"\nExperiment run {run_number}/{args.num_of_runs}")
@@ -718,12 +741,14 @@ def run_experiment_series(args, context, environment_metadata):
             num_of_stages=args.num_of_stages,
             num_of_replicas=args.num_of_replicas,
             num_of_flows=args.num_of_flows,
+            datapath_mode=args.datapath_mode,
             environment_metadata=environment_metadata,
             learning_signal_mode=args.learning_signal_mode,
             outcome_latency_mode=args.outcome_latency_mode,
             forwarder_cgroup_diagnostics=args.forwarder_cgroup_diagnostics,
             forwarding_path_diagnostics=args.forwarding_path_diagnostics,
             memory_diagnostics=bool(args.memory),
+            network_impairment=network_impairment,
         )
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         identifier = run_identifier(timestamp, run_number, args.num_of_runs)
@@ -754,6 +779,24 @@ def parse_args(argv=None):
         description="Start the IBG kind testbed and stream an equilibrium run."
     )
     parser.add_argument("--seed", type=int, default=2050)
+    parser.add_argument(
+        "--datapath",
+        dest="datapath_mode",
+        choices=(KERNEL_DATAPATH_MODE, DPDK_VPP_DATAPATH_MODE),
+        default=KERNEL_DATAPATH_MODE,
+        help=(
+            "selected datapath; dpdk-vpp currently performs the Phase 5 host "
+            "gate and cannot deploy until its Phase 6 runtime exists"
+        ),
+    )
+    parser.add_argument(
+        "--dpdk-preflight-only",
+        action="store_true",
+        help=(
+            "run the read-only DPDK/VPP host preflight and exit before any "
+            "Docker, kind, or Kubernetes action"
+        ),
+    )
     parser.add_argument(
         "--flow",
         "--flows",
@@ -830,6 +873,31 @@ def parse_args(argv=None):
             "measurements (1=enabled, 0=disabled)"
         ),
     )
+    parser.add_argument(
+        "--netem",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help=(
+            "apply opt-in tc/netem delay and jitter to replica-Pod egress "
+            "(1=enabled, 0=disabled)"
+        ),
+    )
+    parser.add_argument(
+        "--netem-delay-ms",
+        type=float,
+        default=10.0,
+        help="base replica-Pod egress delay in milliseconds when --netem 1",
+    )
+    parser.add_argument(
+        "--netem-jitter-ms",
+        type=float,
+        default=3.0,
+        help=(
+            "normally distributed replica-Pod egress jitter in milliseconds "
+            "when --netem 1"
+        ),
+    )
     parser.add_argument("--cluster", default="ibg")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument(
@@ -857,6 +925,15 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def network_impairment_from_args(args):
+    if args.netem == 0:
+        return NetworkImpairment.disabled()
+    return NetworkImpairment.enabled_with(
+        delay_ms=args.netem_delay_ms,
+        jitter_ms=args.netem_jitter_ms,
+    )
+
+
 def main():
     args = parse_args()
     if min(
@@ -869,16 +946,34 @@ def main():
         raise ValueError(
             "--flow, --stage, --replica, --max-iterations, and --runs must be positive"
         )
+    args.datapath_mode = require_datapath_mode(args.datapath_mode)
+    network_impairment = network_impairment_from_args(args)
+    if args.dpdk_preflight_only and args.datapath_mode != DPDK_VPP_DATAPATH_MODE:
+        raise ValueError("--dpdk-preflight-only requires --datapath dpdk-vpp")
+    if args.datapath_mode == DPDK_VPP_DATAPATH_MODE:
+        preflight = collect_dpdk_vpp_preflight()
+        print(format_dpdk_vpp_preflight(preflight))
+        require_dpdk_vpp_preflight(preflight)
+        if args.dpdk_preflight_only:
+            return
+        raise RuntimeError(
+            "DPDK/VPP Phase 6 runtime is not implemented; Kernel remains the "
+            "only deployable datapath"
+        )
     require_commands("docker", "kind", "kubectl")
     print(
         "Requested configuration: "
-        f"flows={args.num_of_flows}, stages={args.num_of_stages}, "
+        f"datapath={args.datapath_mode}, flows={args.num_of_flows}, "
+        f"stages={args.num_of_stages}, "
         f"replicas/stage={args.num_of_replicas}, runs={args.num_of_runs}, "
         f"learning-signal={args.learning_signal_mode}, "
         f"outcome-latency={args.outcome_latency_mode}, "
         f"forwarder-cgroup-diagnostics={args.forwarder_cgroup_diagnostics}, "
         f"forwarding-path-diagnostics={args.forwarding_path_diagnostics}"
-        f", memory={args.memory}"
+        f", memory={args.memory}, "
+        f"netem={network_impairment.enabled}, "
+        f"netem-delay-ms={network_impairment.delay_ms:g}, "
+        f"netem-jitter-ms={network_impairment.jitter_ms:g}"
     )
     base_profiles = load_profiles(ROOT / "deploy/kubernetes/profiles.json")
     profiles = expand_profiles(
@@ -897,6 +992,7 @@ def main():
         num_of_stages=args.num_of_stages,
         num_of_replicas=args.num_of_replicas,
         profiles=profiles,
+        network_impairment=network_impairment,
     )
     run_experiment_series(
         args,

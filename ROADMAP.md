@@ -107,17 +107,17 @@ Suggested Codex reasoning: `high` — evidence must remain traceable to a reprod
 - Keep claims bounded: the HTTP/Kubernetes route is the validated `kernel` baseline; do not imply DPDK/VPP, SR-IOV, hugepages, hardware offload, line-rate, or real CNF validation.
 - Treat report content as user-directed work. Do not read or edit `Tutorial.md`, `Report.md`, or `EVIDENCE_SUMMARY.md` unless the user explicitly requests that file in the current task. Do not rewrite generated evidence files; derive new summaries or figures only when requested.
 - Refresh user-directed legacy `Chart/*.py` scripts one at a time for current reporting artifacts. Each authorized `Chart/<plot>/` folder must be self-contained: its script defaults to the primary current CSV and optional baseline CSVs beside it, never shared `figures/`. Preserve each original script's visual design/theme and embedded text unless the user explicitly requests a change. Once a script is authorized, iterative visual tuning (range, title, label, or styling) is local work; do not reread or update handoffs for it unless the user explicitly asks to record a final decision. The Jain-fairness refresh is finalized. SLA-small version 2 is also finalized: `Chart/sla-small/2/sla-small.py` discovers one same-folder `*_IBG.csv`, applies its original five-slot moving average over the first 50 timeslots, handles MILP as an optional legacy baseline, and is scoped to the small-scale experiment. Utility-small is finalized: `Chart/util-small/util-small.py` reads its local `realized_end_to_end_utility_IBG.csv`, applies a trailing five-timeslot moving average, uses discrete timeslots and a 2,500--3,500 y-axis, and omits the optional local MILP reference when absent. Each future refresh must identify the current metric source and preserve its semantics; do not inspect or change other Chart content without a separate request.
-- Answer user questions and add narrowly scoped reproducibility aids when needed, without changing the decoupled solver, the current separated physical/learning observation contract, or one-of-M no-rejection behavior. The former 110-ms physical-plus-pair SLA calibration remains historical. Because the unresolved public-forwarder pair residual made its outcome series unstable, the user authorized the reversible `physical-only-v1` outcome contract: 90-ms SLA and realized utility use observed selected physical processing only, while raw pair and end-to-end latency/utility remain recorded. `physical-plus-pair-v1` is available to restore the historical outcome basis without changing selection. This may be temporary or permanent and needs fresh normal-build/replay evidence; it does not authorize pair-dependent selection. The user set the unchanged equilibrium check to strictly below 0.033 per belief entry after brief 0.03, 0.037, and 0.04 settings; this changes only when an experiment stops. The user also authorized `--runs N` repeated launcher execution: it runs N independent Jobs after one deployment preparation and preserves a separate trace/CSV column for each.
+- Answer user questions and add narrowly scoped reproducibility aids when needed, without changing the decoupled solver, the current separated physical/learning observation contract, or one-of-M no-rejection behavior. The former 110-ms physical-plus-pair SLA calibration remains historical. Because the unresolved public-forwarder pair residual made its outcome series unstable, the user authorized the reversible `physical-only-v1` outcome contract: 110-ms SLA and realized utility use observed selected physical processing only, while raw pair and end-to-end latency/utility remain recorded. `physical-plus-pair-v1` is available to restore the historical outcome basis without changing selection. This may be temporary or permanent and needs fresh normal-build/replay evidence; it does not authorize pair-dependent selection. The user set the unchanged equilibrium check to strictly below 0.033 per belief entry after brief 0.03, 0.037, and 0.04 settings; this changes only when an experiment stops. The user also authorized `--runs N` repeated launcher execution: it runs N independent Jobs after one deployment preparation and preserves a separate trace/CSV column for each.
 
 ### Phase 4 side branch: nonnegative observation jitter
 
 Status: complete. Overall Phase 4 reporting curation remains active.
 
-The active physical `half-normal-additive-v1` model uses $J_\theta=|Z_\theta|$, $Z_\theta\sim\mathcal N(0,\sigma_\theta^2)$, with state-1-through-state-4 scales 6, 5.25, 4, and 3.25 ms. The user-authorized selected learning signal adds an independent $E_\theta=|W_\theta|$ under `half-normal-observation-v1`, with scales 7.2, 6.3, 4.8, and 3.9 ms. Both terms are nonnegative, but only physical processing latency enters the active `physical-only-v1` outcome utility and 90-ms SLA. This branch does not change the exact decoupled solver, placement, selected-only boundary, posterior aggregation/retention 0.8, utility form, no-rejection policy, raw pair-cost measurement, strict `<0.033` equilibrium rule, or datapath implementation.
+The active physical `half-normal-additive-v1` model uses $J_\theta=|Z_\theta|$, $Z_\theta\sim\mathcal N(0,\sigma_\theta^2)$, with state-1-through-state-4 scales 6, 5.25, 4, and 3.25 ms. The user-authorized selected learning signal adds an independent $E_\theta=|W_\theta|$ under `half-normal-observation-v1`, with scales 7.2, 6.3, 4.8, and 3.9 ms. Both terms are nonnegative, but only physical processing latency enters the active `physical-only-v1` outcome utility and 110-ms SLA. This branch does not change the exact decoupled solver, placement, selected-only boundary, posterior aggregation/retention 0.8, utility form, no-rejection policy, raw pair-cost measurement, strict `<0.033` equilibrium rule, or datapath implementation.
 
 - Physical sampling/expectation retains its half-normal law. Learning likelihood uses the exact convolution of independent physical and observation half-normal densities, with zero support below each state's deterministic state/load baseline.
 - Runtime and trace boundaries separately record modeled/measured physical processing, observation jitter, and noisy signal; validation requires `signal = measured processing + observation jitter`. Seeded observation jitter uses an independent request-stable stream so it does not alter seeded physical samples.
-- The official 5,000-sample seed-2050 calibration passes: minimum classification is 81.38%, mean load-1 accuracy is 87.74%, and crossings remain 3/5/7/11. Its former physical-only 110-ms SLA gate is historical; the active outcome threshold is 90 ms and needs fresh live/replay evidence. The classification gate now requires at least 80% minimum accuracy and at most 90% mean load-1 accuracy.
+- The official 5,000-sample seed-2050 calibration passes: minimum classification is 81.38%, mean load-1 accuracy is 87.74%, and crossings remain 3/5/7/11. Its former physical-only 110-ms SLA gate is historical; the active outcome threshold is now also 110 ms but applies to the current `physical-only-v1` reporting contract and needs fresh live/replay evidence. The classification gate now requires at least 80% minimum accuracy and at most 90% mean load-1 accuracy.
 - Deterministic sampler/PDF/likelihood, separation, correlation, utility/SLA-boundary, calibration, replay, and selected-only tests pass locally. After a successful normal image build/deploy, current-image supported trace `runs/ibg-experiment-20260721T145856Z.jsonl` reached equilibrium in 16 slots, passed the Kernel gate with 86.11% classification and 97.22% server-overshoot compliance, and exact-replayed with zero drift. It was launched with `--skip-build` only after the normal build/deploy had completed. Trace `runs/ibg-experiment-20260719T125810Z.jsonl` remains tied to the superseded 8/7/5.5/4.5-ms physical profile and must not be claimed as current-head evidence.
 - Earlier traces and calibration results remain tied to their symmetric-jitter code version and are not reinterpreted as validation of the replacement model.
 
@@ -133,6 +133,18 @@ Status: complete. Phase 4 reporting curation remains active for user-directed re
 - Trace/replay validation, `scripts/solver_resource_summary.py`, deterministic RSS/cache fixtures, and handoff documentation are implemented. Old traces remain ineligible because the samples were never recorded. The mode is off by default and leaves solver behavior, placement, learning, utility, SLA, raw pair cost, and runtime resources unchanged. The complete non-Chart suite passes with 171 tests. User-run normal-build trace `runs/ibg-experiment-20260722T112356Z.jsonl` records 13 completed 15-flow/3-stage/8-replica slots with valid resource data: 490,314 peak exact memo entries per stage, zero residual entries after every clear, 255.5 MiB maximum controller RSS, and 97.44 MiB maximum within-slot incremental memory. It is exploratory 15x8 memory evidence, not a formal supported-size Kernel gate.
 
 Gate: complete for the current Exact reporting baseline. Local validation and the user-run normal-build 15x8 trace demonstrate complete, nonnegative, internally consistent samples with zero cache residual. A future heuristic must use this same schema under matched dimensions; the existing 15x8 evidence remains exploratory and does not extend the supported Kernel gate.
+
+### Phase 4 side branch: opt-in Kernel network impairment
+
+Status: implemented and validated as `netem_v1` on the user-selected exploratory topology of 10 flows, three stages, and six replicas per stage.
+
+- Keep ordinary runs unchanged. `--netem 1` applies configured normal-distribution delay and jitter to replica-Pod `eth0` egress; the default remains `--netem 0`.
+- Apply the qdisc through a bounded init container with only `NET_ADMIN`, record the complete configuration in every JSONL event, and remove the impairment naturally when the StatefulSet Pods are replaced.
+- Keep network impairment outside the physical-processing and observation-only jitter laws. It must not alter the exact solver, placement, selected-only learning, utility/SLA inputs, equilibrium, or raw pair-cost formula.
+- Use `scripts/network_impairment_summary.py` for matched trace validation and reports of convergence, true-state posterior, selected-state mix, prediction accuracy, utility, and SLA.
+- Defer packet loss until a separate complete-slot failure/retry/missing-observation policy is authorized.
+
+Acceptance evidence: normal-build impaired trace `runs/ibg-experiment-20260727T122310Z.jsonl` used 10-ms delay and 3-ms jitter and reached equilibrium in 18 slots. Its mean true-state posterior rose from 0.362 to 0.833, and its Good/Excellent selection share rose from 80.67% over the first five slots to 100% over the final five. Matched no-netem trace `runs/ibg-experiment-20260727T122446Z.jsonl` reached equilibrium in 12 slots and likewise ended with 100% Good/Excellent selection over its final five slots. Both traces replay the unchanged mathematics with zero drift; they are exploratory robustness evidence, not a replacement supported-size Kernel gate.
 
 ### Phase 4 follow-up: exploratory 15x8 runtime regression
 
@@ -198,7 +210,7 @@ Phase 4 evidence/report curation remains in progress. The initial post-correctio
 
 ## Phase 5: Design and prove the DPDK/VPP integration boundary
 
-Status: planned.
+Status: deferred by user until further notice. Do not work on this phase, run its preflight, or advance its gate without a new explicit authorization.
 
 Suggested Codex reasoning: `xhigh` — DPDK resource ownership plus VPP topology, interfaces, lifecycle, routing, and failure handling must be specified before changing runtime workloads.
 
@@ -207,11 +219,13 @@ Suggested Codex reasoning: `xhigh` — DPDK resource ownership plus VPP topology
 - Define lifecycle, readiness, configuration, cleanup, and failure behavior for DPDK/VPP components and their Kubernetes resources. `kernel` mode must remain independently runnable.
 - Specify how DPDK/VPP counters and per-hop transport timing are correlated to the existing slot/flow/stage/replica route identity without expanding the observation set. Add focused control-boundary tests before requiring a cluster deployment.
 
-Gate: the host preflight and documented DPDK/VPP design demonstrate safe resource ownership and can forward only a selected, correlated route to its FastAPI endpoint, report a clear readiness/failure state, and preserve the Phase 1 latency-observation contract.
+Current historical result: `dpdk_vpp_preflight_v1` is implemented through `scripts/dpdk_vpp_preflight.py` and `./scripts/run_experiment.py --datapath dpdk-vpp --dpdk-preflight-only`. It runs before cluster mutation, performs no host changes, and conservatively fails when resource ownership is ambiguous. On the current four-vCPU VMware host it reports missing VPP/DPDK tools, zero hugepages, no IOMMU groups, no VFIO device, and no separate safe PCI dataplane interface. `dpdk-vpp` is known to the launcher but deliberately excluded from the deployable runtime allow-list; Kernel remains the unchanged default. This dormant reference must be ignored until the user reopens DPDK/VPP work.
+
+Gate: pending. A suitable target host must pass the preflight, and the DPDK/VPP topology, dedicated resource ownership, rollback, Kubernetes device exposure, readiness/failure behavior, and selected-route correlation must be approved before Phase 6. Do not use unsafe no-IOMMU VFIO, detach the sole management NIC, or present a Linux/VPP software fallback as the DPDK comparison.
 
 ## Phase 6: Implement the DPDK/VPP-backed FastAPI route
 
-Status: planned.
+Status: deferred by user until further notice.
 
 Suggested Codex reasoning: `xhigh` — this joins privileged DPDK resources, Kubernetes networking, VPP lifecycle, selected-route enforcement, and controller telemetry without authorization to alter IBG behavior.
 
@@ -224,6 +238,8 @@ Gate: a local and a small-cluster DPDK/VPP-mode run complete selected multi-hop 
 
 ## Phase 7: Validate Kernel and DPDK/VPP modes against the IBG baseline
 
+Status: deferred by user until further notice.
+
 Status: planned.
 
 Suggested Codex reasoning: `xhigh` — comparison must separate mathematical equivalence from genuine datapath timing and counter differences.
@@ -234,6 +250,12 @@ Suggested Codex reasoning: `xhigh` — comparison must separate mathematical equ
 - Publish a reproducible comparison command and a bounded evidence report; make no line-rate, hardware-offload, or DPDK claim from these results.
 
 Gate: Kernel and DPDK/VPP modes are mathematically equivalent to the controlled simulation for the supported seeds, with explained and complete mode-specific telemetry and only the measured comparison claims supported by the hardware configuration.
+
+## Next user-defined chapter: IBG-Hybrid
+
+Status: not started; IBG-Exact is temporarily frozen as the reference baseline.
+
+Do not infer an algorithm or begin implementation from the name alone. The user must first define the intended Hybrid policy, its relation to the exact solver, the required telemetry/information boundary, experiment dimensions, comparison metrics, and acceptance criteria. Until then, preserve the current exact solver, replay/evidence contracts, Kernel runtime, and all outcome/learning semantics unchanged.
 
 ## Future coupled-IBG track
 

@@ -7,6 +7,7 @@ from scripts.run_experiment import (
     csv_run_hash,
     export_legacy_csv,
     follow_logs,
+    network_impairment_from_args,
     parse_args,
     remove_stale_stage_resources,
     render_event,
@@ -61,6 +62,12 @@ def test_dimension_flags_accept_singular_and_plural_names():
     ) == (5, 4, 2)
 
 
+def test_datapath_flag_defaults_to_kernel_and_accepts_planned_dpdk_vpp():
+    assert parse_args([]).datapath_mode == "kernel"
+    assert parse_args(["--datapath", "dpdk-vpp"]).datapath_mode == "dpdk-vpp"
+    assert parse_args(["--dpdk-preflight-only"]).dpdk_preflight_only is True
+
+
 def test_csv_flag_is_disabled_by_default_and_accepts_zero_or_one():
     assert parse_args([]).csv == 0
     assert parse_args(["--csv", "0"]).csv == 0
@@ -71,6 +78,29 @@ def test_memory_flag_is_opt_in_and_accepts_zero_or_one():
     assert parse_args([]).memory == 0
     assert parse_args(["--memory", "0"]).memory == 0
     assert parse_args(["--memory", "1"]).memory == 1
+
+
+def test_netem_is_opt_in_and_uses_explicit_delay_jitter_values():
+    default = network_impairment_from_args(parse_args([]))
+    enabled = network_impairment_from_args(
+        parse_args(
+            [
+                "--netem",
+                "1",
+                "--netem-delay-ms",
+                "12",
+                "--netem-jitter-ms",
+                "4",
+            ]
+        )
+    )
+
+    assert default.enabled is False
+    assert default.delay_ms == 0
+    assert default.jitter_ms == 0
+    assert enabled.enabled is True
+    assert enabled.delay_ms == 12
+    assert enabled.jitter_ms == 4
 
 
 def test_runs_flag_defaults_to_one_and_accepts_requested_count():
@@ -394,6 +424,7 @@ def test_experiment_job_receives_requested_dimensions(monkeypatch):
         num_of_stages=4,
         num_of_replicas=6,
         num_of_flows=5,
+        datapath_mode="kernel",
         environment_metadata={"kubernetes_server": "v1.35.0"},
     )
 
@@ -408,6 +439,15 @@ def test_experiment_job_receives_requested_dimensions(monkeypatch):
     assert environment["FORWARDER_CGROUP_DIAGNOSTICS"] == "false"
     assert environment["FORWARDING_PATH_DIAGNOSTICS"] == "false"
     assert environment["SOLVER_RESOURCE_DIAGNOSTICS"] == "false"
+    assert json.loads(environment["NETWORK_IMPAIRMENT"]) == {
+        "schema": "netem_v1",
+        "enabled": False,
+        "delay_ms": 0.0,
+        "jitter_ms": 0.0,
+        "distribution": "normal",
+        "interface": "eth0",
+        "scope": "replica-pod-egress",
+    }
     assert environment["RUNTIME_IMAGE"] == launcher.IMAGE
     assert json.loads(environment["EXPERIMENT_ENVIRONMENT"]) == {
         "kubernetes_server": "v1.35.0"

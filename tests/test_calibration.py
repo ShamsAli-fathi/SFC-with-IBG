@@ -74,8 +74,8 @@ def test_seeded_calibration_report_passes_model_gate():
         4.8,
         3.9,
     ]
-    assert DEFAULT_SLA_LATENCY_MS == 90.0
-    assert report["policy"]["sla_latency_ms"] == 90.0
+    assert DEFAULT_SLA_LATENCY_MS == 110.0
+    assert report["policy"]["sla_latency_ms"] == 110.0
     assert (
         report["classification"]["minimum_accuracy"]
         >= MINIMUM_STATE_CLASSIFICATION_ACCURACY
