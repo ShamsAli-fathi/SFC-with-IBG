@@ -1,6 +1,4 @@
-# SFC-with-IBG
-
-> This repository is a work in progress.
+# SFC-with-IBG — Work in Progress
 
 SFC-with-IBG is a research testbed for studying service-function-chain (SFC)
 placement with Indian Buffet Game (IBG) methods. It contains the IBG-Exact
