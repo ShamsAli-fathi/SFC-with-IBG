@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from testbed.kubernetes_resources import build_runtime_resources
+from testbed.network_impairment import NetworkImpairment
 from testbed.profiles import expand_profiles, load_profiles
 
 
@@ -87,5 +88,64 @@ def test_runtime_resources_match_requested_dimensions():
         "requests": {"cpu": "25m", "memory": "128Mi"},
         "limits": {"cpu": "1", "memory": "256Mi"},
     }
+    assert "initContainers" not in stateful_sets["stage-4"]["spec"]["template"][
+        "spec"
+    ]
     assert len(document["stages"]) == 4
     assert len(document["stages"]["4"]) == 7
+
+
+def test_runtime_resources_add_netem_only_when_explicitly_enabled():
+    profiles = expand_profiles(load_profiles(PROFILE_PATH), 3, 6)
+    impairment = NetworkImpairment.enabled_with(delay_ms=10, jitter_ms=3)
+
+    resources = build_runtime_resources(
+        profiles,
+        num_of_stages=3,
+        num_of_replicas=6,
+        network_impairment=impairment,
+    )
+
+    stateful_sets = [
+        item for item in resources["items"] if item["kind"] == "StatefulSet"
+    ]
+    assert len(stateful_sets) == 3
+    for stateful_set in stateful_sets:
+        template = stateful_set["spec"]["template"]
+        assert template["metadata"]["annotations"][
+            "ibg.network-impairment"
+        ] == impairment.to_json()
+        assert template["spec"]["initContainers"] == [
+            {
+                "name": "netem",
+                "image": "ibg-testbed:kernel-phase3",
+                "imagePullPolicy": "Never",
+                "command": ["/usr/sbin/tc"],
+                "args": [
+                    "qdisc",
+                    "replace",
+                    "dev",
+                    "eth0",
+                    "root",
+                    "netem",
+                    "delay",
+                    "10ms",
+                    "3ms",
+                    "distribution",
+                    "normal",
+                ],
+                "securityContext": {
+                    "allowPrivilegeEscalation": False,
+                    "capabilities": {
+                        "add": ["NET_ADMIN"],
+                        "drop": ["ALL"],
+                    },
+                    "runAsNonRoot": False,
+                    "runAsUser": 0,
+                },
+                "resources": {
+                    "requests": {"cpu": "5m", "memory": "16Mi"},
+                    "limits": {"cpu": "100m", "memory": "32Mi"},
+                },
+            }
+        ]

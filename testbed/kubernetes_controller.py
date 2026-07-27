@@ -24,6 +24,7 @@ from testbed.kubernetes_adapters import (
     make_kubernetes_adapters,
     wait_for_ready_replicas,
 )
+from testbed.network_impairment import NetworkImpairment
 from testbed.profiles import load_profiles
 from testbed.validation import summarize_slot
 
@@ -95,6 +96,12 @@ def main():
     )
     solver_resource_diagnostics = read_boolean_environment(
         "SOLVER_RESOURCE_DIAGNOSTICS",
+    )
+    network_impairment = NetworkImpairment.from_json(
+        os.environ.get(
+            "NETWORK_IMPAIRMENT",
+            NetworkImpairment.disabled().to_json(),
+        )
     )
     if min(
         num_of_stages,
@@ -209,6 +216,7 @@ def main():
                 "forwarder_cgroup_diagnostics": forwarder_cgroup_diagnostics,
                 "forwarding_path_diagnostics": forwarding_path_diagnostics,
                 "memory_diagnostics": solver_resource_diagnostics,
+                "network_impairment": network_impairment.to_dict(),
                 "runtime_image": os.environ.get(
                     "RUNTIME_IMAGE",
                     "unknown",
