@@ -19,12 +19,20 @@ from latency_model import (
     DEFAULT_SLA_LATENCY_MS,
 )
 from learning_signal import build_learning_signal_snapshot
+from outcome_latency import (
+    DEFAULT_OUTCOME_LATENCY_MODE,
+    PHYSICAL_PLUS_PAIR_OUTCOME_LATENCY_MODE,
+    outcome_latency_ms_per_flow,
+    require_outcome_latency_mode,
+)
+from solver_resource import SolverResourceMeter
 
 
 @dataclass
 class SlotResult:
     datapath_mode: str
     learning_signal_mode: str
+    outcome_latency_mode: str
     embed_dict: dict
     flow_order_by_stage: dict
     assignments_by_stage: dict
@@ -40,13 +48,19 @@ class SlotResult:
     processing_latency_ms_per_flow: dict | None = None
     link_latency_ms_per_flow: dict | None = None
     end_to_end_latency_ms_per_flow: dict | None = None
+    outcome_latency_ms_per_flow: dict | None = None
     realized_utility_total: float | None = None
     realized_utility_per_flow: dict | None = None
+    physical_utility_total: float | None = None
+    physical_utility_per_flow: dict | None = None
+    end_to_end_utility_total: float | None = None
+    end_to_end_utility_per_flow: dict | None = None
     control_plane: dict | None = None
     learning_signal: dict | None = None
+    solver_resource: dict | None = None
 
 
-def run_decoupled_slot(
+def _run_decoupled_slot_impl(
     flow_list,
     replica_list,
     num_of_stages,
@@ -57,6 +71,8 @@ def run_decoupled_slot(
     slot_id=1,
     link_latency_weight=DEFAULT_LINK_LATENCY_WEIGHT,
     sla_latency_threshold_ms=DEFAULT_SLA_LATENCY_MS,
+    outcome_latency_mode=DEFAULT_OUTCOME_LATENCY_MODE,
+    solver_resource_meter=None,
 ):
     """Run one reference decoupled IBG iteration without writing reports.
 
@@ -70,6 +86,7 @@ def run_decoupled_slot(
         raise ValueError("link_latency_weight must not be negative")
     if sla_latency_threshold_ms <= 0:
         raise ValueError("sla_latency_threshold_ms must be positive")
+    outcome_latency_mode = require_outcome_latency_mode(outcome_latency_mode)
     if adapters is None:
         adapters = make_simulation_adapters()
 
@@ -125,7 +142,16 @@ def run_decoupled_slot(
             # current stage is embedded.  Clear it promptly so a multi-slot
             # controller run cannot retain complete exact state spaces until
             # cyclic garbage collection happens to run.
+            if solver_resource_meter is not None:
+                solver_resource_meter.observe_rss()
+                peak_memo_entries = policy.cache_info().currsize
             policy.clear_cache()
+            if solver_resource_meter is not None:
+                solver_resource_meter.record_stage_cache(
+                    stage,
+                    peak_memo_entries,
+                    policy.cache_info().currsize,
+                )
         embed_dict = execution.embed_dict
         last_embed = execution.assignments
         ended_at = time.perf_counter()
@@ -167,7 +193,7 @@ def run_decoupled_slot(
         ended_at = time.perf_counter()
 
     processing_latency_by_flow = {flow: 0.0 for flow in flow_list}
-    realized_per_flow = {flow: 0.0 for flow in flow_list}
+    physical_utility_per_flow = {flow: 0.0 for flow in flow_list}
     for observations in observations_by_stage.values():
         for observation in observations:
             processing_latency = (
@@ -177,7 +203,7 @@ def run_decoupled_slot(
             )
             processing_latency_by_flow[observation.flow_id] += processing_latency
             replica = replica_list[(observation.stage, observation.replica_id)]
-            realized_per_flow[observation.flow_id] += replica.utility_kernel(
+            physical_utility_per_flow[observation.flow_id] += replica.utility_kernel(
                 observation.congestion,
                 processing_latency,
             )
@@ -192,20 +218,33 @@ def run_decoupled_slot(
                 collected_link_latency.get(flow, 0.0)
             )
 
-    for flow in flow_list:
-        penalty = link_latency_weight * link_latency_by_flow[flow]
-        aggregate_per_flow[flow].append(-penalty)
-        aggregate_total -= penalty
-        realized_per_flow[flow] -= penalty
+    end_to_end_utility_per_flow = {
+        flow: physical_utility_per_flow[flow]
+        - (link_latency_weight * link_latency_by_flow[flow])
+        for flow in flow_list
+    }
+    if outcome_latency_mode == PHYSICAL_PLUS_PAIR_OUTCOME_LATENCY_MODE:
+        for flow in flow_list:
+            penalty = link_latency_weight * link_latency_by_flow[flow]
+            aggregate_per_flow[flow].append(-penalty)
+            aggregate_total -= penalty
+        realized_per_flow = end_to_end_utility_per_flow
+    else:
+        realized_per_flow = physical_utility_per_flow
 
     end_to_end_latency_by_flow = {
         flow: processing_latency_by_flow[flow] + link_latency_by_flow[flow]
         for flow in flow_list
     }
+    outcome_latency_by_flow = outcome_latency_ms_per_flow(
+        processing_latency_by_flow,
+        link_latency_by_flow,
+        outcome_latency_mode,
+    )
     realized_total = sum(realized_per_flow.values())
     elapsed_seconds = ended_at - started_at
     violations = SLA_v(
-        end_to_end_latency_by_flow,
+        outcome_latency_by_flow,
         sla_latency_threshold_ms,
     )
     fairness = jain_index(aggregate_per_flow, aggregate_total)
@@ -224,6 +263,7 @@ def run_decoupled_slot(
     result = SlotResult(
         datapath_mode=adapters.datapath_mode,
         learning_signal_mode=adapters.learning_signal_mode,
+        outcome_latency_mode=outcome_latency_mode,
         embed_dict=embed_dict,
         flow_order_by_stage=flow_order_by_stage,
         assignments_by_stage=assignments_by_stage,
@@ -239,10 +279,72 @@ def run_decoupled_slot(
         processing_latency_ms_per_flow=processing_latency_by_flow,
         link_latency_ms_per_flow=link_latency_by_flow,
         end_to_end_latency_ms_per_flow=end_to_end_latency_by_flow,
+        outcome_latency_ms_per_flow=outcome_latency_by_flow,
         realized_utility_total=realized_total,
         realized_utility_per_flow=realized_per_flow,
+        physical_utility_total=sum(physical_utility_per_flow.values()),
+        physical_utility_per_flow=physical_utility_per_flow,
+        end_to_end_utility_total=sum(end_to_end_utility_per_flow.values()),
+        end_to_end_utility_per_flow=end_to_end_utility_per_flow,
         control_plane=control_plane,
         learning_signal=learning_signal,
+        solver_resource=None,
     )
+    return result
+
+
+def run_decoupled_slot(
+    flow_list,
+    replica_list,
+    num_of_stages,
+    num_of_replicas,
+    likelihood=0.8,
+    random_source=random,
+    adapters: AdapterBundle | None = None,
+    slot_id=1,
+    link_latency_weight=DEFAULT_LINK_LATENCY_WEIGHT,
+    sla_latency_threshold_ms=DEFAULT_SLA_LATENCY_MS,
+    outcome_latency_mode=DEFAULT_OUTCOME_LATENCY_MODE,
+    solver_resource_diagnostics=False,
+    solver_resource_meter=None,
+):
+    """Run one slot, optionally measuring controller/solver memory resources."""
+    if not isinstance(solver_resource_diagnostics, bool):
+        raise ValueError("solver_resource_diagnostics must be a boolean")
+    if solver_resource_meter is not None and not solver_resource_diagnostics:
+        raise ValueError(
+            "solver_resource_meter requires solver_resource_diagnostics"
+        )
+    if adapters is None:
+        adapters = make_simulation_adapters()
+    meter = solver_resource_meter
+    if solver_resource_diagnostics and meter is None:
+        meter = SolverResourceMeter()
+    if meter is not None:
+        meter.begin_slot()
+    try:
+        result = _run_decoupled_slot_impl(
+            flow_list,
+            replica_list,
+            num_of_stages,
+            num_of_replicas,
+            likelihood=likelihood,
+            random_source=random_source,
+            adapters=adapters,
+            slot_id=slot_id,
+            link_latency_weight=link_latency_weight,
+            sla_latency_threshold_ms=sla_latency_threshold_ms,
+            outcome_latency_mode=outcome_latency_mode,
+            solver_resource_meter=meter,
+        )
+    except BaseException:
+        if meter is not None:
+            meter.abort_slot()
+        raise
+    if meter is not None:
+        meter.finish_slot()
+        result.solver_resource = meter.snapshot(
+            expected_stages=num_of_stages,
+        )
     adapters.result_sink.record_slot(result)
     return result

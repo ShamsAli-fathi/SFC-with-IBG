@@ -362,10 +362,18 @@ def test_kubernetes_slot_executes_configured_routes_then_applies_telemetry(
     )
     assert all(
         utility == pytest.approx(
-            num_of_stages * 59.0 - (num_of_stages - 1)
+            num_of_stages * 59.0
         )
         for utility in result.realized_utility_per_flow.values()
     )
+    assert all(
+        utility == pytest.approx(
+            num_of_stages * 59.0 - (num_of_stages - 1)
+        )
+        for utility in result.end_to_end_utility_per_flow.values()
+    )
+    assert result.outcome_latency_mode == "physical-only-v1"
+    assert result.outcome_latency_ms_per_flow == result.processing_latency_ms_per_flow
     assert result.sla_violations == (0 if num_of_stages == 2 else 3)
     assert result.control_plane["schema"] == "control_plane_v1"
     assert result.control_plane["messages"]["route_command_tx"] == 1

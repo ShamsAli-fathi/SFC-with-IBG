@@ -7,6 +7,11 @@ import numpy as np
 
 from header import Replica
 from main import DEFAULT_EXPERIMENT_RUNS
+from outcome_latency import (
+    PHYSICAL_ONLY_OUTCOME_LATENCY_MODE,
+    PHYSICAL_PLUS_PAIR_OUTCOME_LATENCY_MODE,
+    outcome_latency_ms_per_flow,
+)
 import runner as runner_module
 from runner import run_decoupled_slot
 
@@ -70,6 +75,22 @@ def test_seeded_latency_slot_is_repeatable():
             first_replicas[key].belief,
             second_replicas[key].belief,
         )
+
+
+def test_outcome_latency_mode_keeps_physical_and_pair_views_switchable():
+    physical = {1: 80.0, 2: 95.0}
+    pair = {1: 12.0, 2: 7.0}
+
+    assert outcome_latency_ms_per_flow(
+        physical,
+        pair,
+        PHYSICAL_ONLY_OUTCOME_LATENCY_MODE,
+    ) == physical
+    assert outcome_latency_ms_per_flow(
+        physical,
+        pair,
+        PHYSICAL_PLUS_PAIR_OUTCOME_LATENCY_MODE,
+    ) == {1: 92.0, 2: 102.0}
 
 
 def test_main_is_import_safe_and_defaults_to_one_experiment(tmp_path):

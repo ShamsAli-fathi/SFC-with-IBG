@@ -42,6 +42,7 @@ class RunSlotRequest(BaseModel):
     slot_id: int = Field(ge=1)
     routes: list[FlowRoute] = Field(min_length=1)
     forwarder_cgroup_diagnostics: bool = False
+    forwarding_path_diagnostics: bool = False
 
     @model_validator(mode="after")
     def validate_unique_flows(self):
@@ -369,6 +370,7 @@ class FlowGenerator:
                         request.slot_id,
                         route,
                         planned_congestion,
+                        request.forwarding_path_diagnostics,
                     )
                     for route in request.routes
                 ],
@@ -404,7 +406,14 @@ class FlowGenerator:
             forwarder_cgroup=forwarder_cgroup,
         )
 
-    async def _run_flow(self, client, slot_id, route, planned_congestion):
+    async def _run_flow(
+        self,
+        client,
+        slot_id,
+        route,
+        planned_congestion,
+        forwarding_path_diagnostics,
+    ):
         first_hop = route.hops[0]
         endpoint = f"{str(first_hop.url).rstrip('/')}/process-route"
         remaining_hops = [
@@ -428,6 +437,7 @@ class FlowGenerator:
                         (first_hop.stage, first_hop.replica_id)
                     ],
                     "remaining_hops": remaining_hops,
+                    "forwarding_path_diagnostics": forwarding_path_diagnostics,
                 },
             )
             response.raise_for_status()
@@ -462,6 +472,18 @@ class FlowGenerator:
             raise FlowExecutionError(
                 f"flow {route.flow_id} returned {len(route_response.links)} links; "
                 f"expected {expected_link_count}"
+            )
+        if forwarding_path_diagnostics and any(
+            link.forwarding_path is None
+            or link.forwarding_path.schema_version != "forwarding_path_v3"
+            or link.forwarding_path.target_handler_timing is None
+            or link.forwarding_path.source_http_client_timing is None
+            or link.forwarding_path.source_http_client_timing.schema_version
+            != "http_client_path_v2"
+            for link in route_response.links
+        ):
+            raise FlowExecutionError(
+                f"flow {route.flow_id} omitted requested forwarding path v3 diagnostics"
             )
         for expected_source, expected_target, observed_link in zip(
             route.hops,

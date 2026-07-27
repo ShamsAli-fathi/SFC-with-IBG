@@ -156,6 +156,10 @@ def _stage_stateful_set(
                                 "0.0.0.0",
                                 "--port",
                                 "8080",
+                                "--workers",
+                                "2",
+                                "--timeout-keep-alive",
+                                "30",
                             ],
                             "ports": [{"name": "http", "containerPort": 8080}],
                             "env": [
@@ -170,6 +174,10 @@ def _stage_stateful_set(
                                     "name": "PROCESSOR_URL",
                                     "value": "http://127.0.0.1:8081",
                                 },
+                                {
+                                    "name": "FORWARDER_KEEPALIVE_SECONDS",
+                                    "value": "30",
+                                },
                             ],
                             "readinessProbe": {
                                 "httpGet": {"path": "/health", "port": "http"},
@@ -182,8 +190,8 @@ def _stage_stateful_set(
                                 "periodSeconds": 10,
                             },
                             "resources": {
-                                "requests": {"cpu": "25m", "memory": "64Mi"},
-                                "limits": {"cpu": "500m", "memory": "256Mi"},
+                                "requests": {"cpu": "25m", "memory": "128Mi"},
+                                "limits": {"cpu": "1", "memory": "256Mi"},
                             },
                         },
                     ],

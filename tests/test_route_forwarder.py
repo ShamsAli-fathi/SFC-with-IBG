@@ -3,17 +3,48 @@ import asyncio
 import httpx
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+import pytest
 
 from testbed.cnf_service import ReplicaConfig, create_app as create_processor_app
 from testbed.route_forwarder import (
     ForwarderConfig,
     ForwarderCgroupSnapshot,
+    HttpClientTraceRecorder,
+    ReplicaRouteForwarder,
     create_app as create_forwarder_app,
 )
 
 
 def fixed_latency(assigned_load):
     return 2.0
+
+
+def test_forwarder_keepalive_is_configurable_and_defaults_to_30_seconds():
+    assert ForwarderConfig().keepalive_expiry_seconds == 30.0
+    assert ForwarderConfig.from_env(
+        {"FORWARDER_KEEPALIVE_SECONDS": "45"}
+    ).keepalive_expiry_seconds == 45.0
+    with pytest.raises(ValueError, match="keepalive_expiry_seconds"):
+        ForwarderConfig(keepalive_expiry_seconds=0)
+
+
+def test_keepalive_applies_only_to_downstream_forwarder_requests(monkeypatch):
+    created = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr("testbed.route_forwarder.httpx.AsyncClient", Client)
+
+    ReplicaRouteForwarder(ForwarderConfig())
+
+    assert len(created) == 2
+    assert "limits" not in created[0]
+    assert created[1]["limits"].keepalive_expiry == 30.0
 
 
 async def request(app, method, path, **kwargs):
@@ -31,8 +62,25 @@ class HostRoutingTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request):
         self.calls.append((request.url.host, request.url.path))
+        trace = request.extensions.get("trace")
+
+        async def emit(name):
+            if trace is not None:
+                await trace(name, {})
+
+        await emit("http11.send_request_headers.started")
+        await emit("http11.send_request_headers.complete")
+        await emit("http11.send_request_body.started")
+        await emit("http11.send_request_body.complete")
         transport = ASGITransport(app=self.apps[request.url.host])
-        return await transport.handle_async_request(request)
+        response = await transport.handle_async_request(request)
+        await emit("http11.receive_response_headers.started")
+        await emit("http11.receive_response_headers.complete")
+        await emit("http11.receive_response_body.started")
+        await emit("http11.receive_response_body.complete")
+        await emit("http11.response_closed.started")
+        await emit("http11.response_closed.complete")
+        return response
 
 
 def isolated_route_apps():
@@ -121,6 +169,110 @@ def test_selected_route_uses_isolated_processors_and_pairwise_links():
     assert all(
         app.state.runtime.active_requests == 0 for app in processors.values()
     )
+
+
+def test_opt_in_forwarding_path_diagnostics_split_each_pair_residual():
+    _, _, forwarders = isolated_route_apps()
+
+    response = asyncio.run(
+        request(
+            forwarders["stage-1-1"],
+            "POST",
+            "/process-route",
+            json={**route_payload(), "forwarding_path_diagnostics": True},
+        )
+    )
+
+    assert response.status_code == 200
+    for link in response.json()["links"]:
+        timing = link["forwarding_path"]
+        assert timing["schema_version"] == "forwarding_path_v3"
+        assert timing["clock"] == "unix-epoch-ns"
+        assert (
+            timing["source_handler_started_unix_ns"]
+            <= timing["source_local_processor_response_received_unix_ns"]
+            <= timing["source_request_started_unix_ns"]
+            <= timing["target_ingress_started_unix_ns"]
+            <= timing["target_handler_started_unix_ns"]
+            <= timing["target_handler_finished_unix_ns"]
+            <= timing["source_response_received_unix_ns"]
+        )
+        assert timing["source_to_target_handler_ms"] >= 0
+        assert timing["target_handler_ms"] >= 0
+        assert timing["target_to_source_response_ms"] >= 0
+        assert timing["source_to_target_handler_ms"] == pytest.approx(
+            timing["source_to_target_ingress_ms"]
+            + timing["target_ingress_to_handler_ms"],
+            abs=1e-6,
+        )
+        handler = timing["target_handler_timing"]
+        client = timing["source_http_client_timing"]
+        processor = handler["processor_timing"]
+        assert handler["schema_version"] == "forwarding_path_v2"
+        assert client["schema_version"] == "http_client_path_v2"
+        assert client["connection_reused"] is True
+        assert (
+            client["request_started_unix_ns"]
+            <= client["transport_started_unix_ns"]
+            <= client["request_headers_started_unix_ns"]
+            <= client["request_headers_finished_unix_ns"]
+            <= client["request_body_started_unix_ns"]
+            <= client["request_body_finished_unix_ns"]
+            <= client["response_headers_started_unix_ns"]
+            <= client["response_headers_finished_unix_ns"]
+            <= client["response_body_started_unix_ns"]
+            <= client["response_body_finished_unix_ns"]
+            <= client["response_close_started_unix_ns"]
+            <= client["response_close_finished_unix_ns"]
+            <= client["response_received_unix_ns"]
+        )
+        assert processor["schema_version"] == "processor_path_v1"
+        decomposed_handler_ms = (
+            handler["handler_to_processor_request_ms"]
+            + handler["local_processor_round_trip_ms"]
+            + (handler.get("processor_response_to_downstream_request_ms") or 0)
+            + (handler.get("downstream_round_trip_ms") or 0)
+            + handler["completion_ms"]
+        )
+        assert timing["target_handler_ms"] == pytest.approx(
+            decomposed_handler_ms,
+            abs=1e-6,
+        )
+
+
+def test_http_client_trace_records_new_connection_milestones(monkeypatch):
+    stamps = iter(range(110, 230, 10))
+    monkeypatch.setattr(
+        "testbed.route_forwarder.time.time_ns",
+        lambda: next(stamps),
+    )
+    recorder = HttpClientTraceRecorder(100)
+    events = (
+        "connection.connect_tcp.started",
+        "connection.connect_tcp.complete",
+        "http11.send_request_headers.started",
+        "http11.send_request_headers.complete",
+        "http11.send_request_body.started",
+        "http11.send_request_body.complete",
+        "http11.receive_response_headers.started",
+        "http11.receive_response_headers.complete",
+        "http11.receive_response_body.started",
+        "http11.receive_response_body.complete",
+        "http11.response_closed.started",
+        "http11.response_closed.complete",
+    )
+
+    async def record():
+        for event in events:
+            await recorder(event, {})
+
+    asyncio.run(record())
+    timing = recorder.build(230)
+
+    assert timing.connection_reused is False
+    assert timing.pool_wait_ms == pytest.approx(0.00001)
+    assert timing.connect_ms == pytest.approx(0.00001)
+    assert timing.application_resume_ms == pytest.approx(0.00001)
 
 
 def test_concurrent_forwarding_does_not_enter_processing_service_or_change_signal():

@@ -61,16 +61,31 @@ def test_runtime_resources_match_requested_dimensions():
     ]
     assert containers[0]["env"][0] == {"name": "STAGE", "value": "4"}
     assert containers[0]["command"][-1] == "8081"
+    assert "--workers" not in containers[0]["command"]
     assert containers[0]["ports"] == [
         {"name": "processor", "containerPort": 8081}
     ]
     assert containers[0]["readinessProbe"]["httpGet"]["path"] == "/warmup"
-    assert containers[1]["command"][-1] == "8080"
+    assert containers[1]["command"][-6:] == [
+        "--port",
+        "8080",
+        "--workers",
+        "2",
+        "--timeout-keep-alive",
+        "30",
+    ]
     assert containers[1]["ports"] == [
         {"name": "http", "containerPort": 8080}
     ]
     assert {
         item["name"]: item.get("value") for item in containers[1]["env"]
     }["PROCESSOR_URL"] == "http://127.0.0.1:8081"
+    assert {
+        item["name"]: item.get("value") for item in containers[1]["env"]
+    }["FORWARDER_KEEPALIVE_SECONDS"] == "30"
+    assert containers[1]["resources"] == {
+        "requests": {"cpu": "25m", "memory": "128Mi"},
+        "limits": {"cpu": "1", "memory": "256Mi"},
+    }
     assert len(document["stages"]) == 4
     assert len(document["stages"]["4"]) == 7

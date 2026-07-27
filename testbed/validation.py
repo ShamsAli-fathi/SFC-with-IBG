@@ -16,6 +16,11 @@ from learning_mode import (
     SEPARATED_LEARNING_SIGNAL_MODE,
     require_learning_signal_mode,
 )
+from outcome_latency import (
+    PHYSICAL_PLUS_PAIR_OUTCOME_LATENCY_MODE,
+    require_outcome_latency_mode,
+)
+from solver_resource import validate_solver_resource_snapshot
 from testbed.cnf_service import (
     ReplicaConfig,
     SeededLatencyObservationSource,
@@ -230,6 +235,7 @@ def summarize_slot(
     summary = {
         "backend": backend,
         "datapath_mode": result.datapath_mode,
+        "outcome_latency_mode": result.outcome_latency_mode,
         "solver": "br_eibg_exact",
         "observation_mode": "noisy-learning-signal-v1",
         "learning_signal_mode": result.learning_signal_mode,
@@ -270,10 +276,24 @@ def summarize_slot(
                 str(flow_id): float(value)
                 for flow_id, value in result.end_to_end_latency_ms_per_flow.items()
             },
+            "outcome_latency_ms_per_flow": {
+                str(flow_id): float(value)
+                for flow_id, value in result.outcome_latency_ms_per_flow.items()
+            },
             "realized_utility_total": float(result.realized_utility_total),
             "realized_utility_per_flow": {
                 str(flow_id): float(value)
                 for flow_id, value in result.realized_utility_per_flow.items()
+            },
+            "physical_utility_total": float(result.physical_utility_total),
+            "physical_utility_per_flow": {
+                str(flow_id): float(value)
+                for flow_id, value in result.physical_utility_per_flow.items()
+            },
+            "end_to_end_utility_total": float(result.end_to_end_utility_total),
+            "end_to_end_utility_per_flow": {
+                str(flow_id): float(value)
+                for flow_id, value in result.end_to_end_utility_per_flow.items()
             },
         },
         "beliefs": {
@@ -285,6 +305,11 @@ def summarize_slot(
         summary["control_plane"] = result.control_plane
     if result.learning_signal is not None:
         summary["learning_signal"] = result.learning_signal
+    if result.solver_resource is not None:
+        summary["solver_resource"] = validate_solver_resource_snapshot(
+            result.solver_resource,
+            expected_stages=num_of_stages,
+        )
     return summary
 
 
@@ -296,6 +321,7 @@ def run_controlled_simulation(
     num_of_stages=3,
     num_of_replicas=5,
     num_of_flows=3,
+    outcome_latency_mode=None,
 ):
     random.seed(seed)
     np.random.seed(seed)
@@ -311,6 +337,11 @@ def run_controlled_simulation(
         num_of_replicas=num_of_replicas,
         adapters=make_seeded_simulation_adapters(profiles, slot_id),
         slot_id=slot_id,
+        **(
+            {}
+            if outcome_latency_mode is None
+            else {"outcome_latency_mode": outcome_latency_mode}
+        ),
     )
     return summarize_slot(
         result,
@@ -357,11 +388,38 @@ def replay_kernel_trace(events, profiles):
         }
     metadata = started[0]
     configuration = metadata["configuration"]
+    memory_diagnostics = metadata.get("memory_diagnostics", False)
+    if not isinstance(memory_diagnostics, bool):
+        raise ValueError("memory_diagnostics trace metadata must be boolean")
+    for event in iterations:
+        snapshot = event["summary"].get("solver_resource")
+        if memory_diagnostics:
+            if snapshot is None:
+                raise ValueError(
+                    "memory-enabled trace is missing solver_resource_v1"
+                )
+            validate_solver_resource_snapshot(
+                snapshot,
+                expected_stages=configuration["stages"],
+            )
+        elif snapshot is not None:
+            raise ValueError(
+                "memory-disabled trace contains solver_resource_v1"
+            )
     seed = metadata["seed"]
     learning_signal_mode = require_learning_signal_mode(
         metadata.get(
             "learning_signal_mode",
             SEPARATED_LEARNING_SIGNAL_MODE,
+        )
+    )
+    outcome_latency_mode = require_outcome_latency_mode(
+        metadata.get(
+            "outcome_latency_mode",
+            iterations[0]["summary"].get(
+                "outcome_latency_mode",
+                PHYSICAL_PLUS_PAIR_OUTCOME_LATENCY_MODE,
+            ),
         )
     )
     random.seed(seed)
@@ -396,6 +454,7 @@ def replay_kernel_trace(events, profiles):
             num_of_replicas=configuration["replicas_per_stage"],
             adapters=adapters,
             slot_id=event["slot_id"],
+            outcome_latency_mode=outcome_latency_mode,
         )
         replayed = summarize_slot(
             result,
@@ -548,6 +607,16 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
         ),
         default=0.0,
     )
+    latency_metrics = [
+        "processing_latency_ms_per_flow",
+        "link_latency_ms_per_flow",
+        "end_to_end_latency_ms_per_flow",
+    ]
+    if (
+        "outcome_latency_ms_per_flow" in simulation_metrics
+        and "outcome_latency_ms_per_flow" in kubernetes_metrics
+    ):
+        latency_metrics.append("outcome_latency_ms_per_flow")
     latency_metric_max_abs = {
         metric: max(
             (
@@ -559,11 +628,7 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
             ),
             default=0.0,
         )
-        for metric in (
-            "processing_latency_ms_per_flow",
-            "link_latency_ms_per_flow",
-            "end_to_end_latency_ms_per_flow",
-        )
+        for metric in latency_metrics
     }
 
     traffic = kubernetes.get("traffic") or {}
@@ -594,6 +659,13 @@ def compare_backend_summaries(simulation, kubernetes, tolerance=1e-10):
             == kubernetes.get(
                 "learning_signal_mode",
                 SEPARATED_LEARNING_SIGNAL_MODE,
+            )
+        ),
+        "outcome_latency": (
+            simulation.get("outcome_latency_mode")
+            == kubernetes.get(
+                "outcome_latency_mode",
+                PHYSICAL_PLUS_PAIR_OUTCOME_LATENCY_MODE,
             )
         ),
     }

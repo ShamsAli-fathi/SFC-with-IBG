@@ -67,6 +67,12 @@ def test_csv_flag_is_disabled_by_default_and_accepts_zero_or_one():
     assert parse_args(["--csv", "1"]).csv == 1
 
 
+def test_memory_flag_is_opt_in_and_accepts_zero_or_one():
+    assert parse_args([]).memory == 0
+    assert parse_args(["--memory", "0"]).memory == 0
+    assert parse_args(["--memory", "1"]).memory == 1
+
+
 def test_runs_flag_defaults_to_one_and_accepts_requested_count():
     assert parse_args([]).num_of_runs == 1
     assert parse_args(["--runs", "5"]).num_of_runs == 5
@@ -79,13 +85,26 @@ def test_diagnostic_flags_keep_the_default_and_allow_controlled_ab_mode():
             "--learning-signal-mode",
             "physical-only-diagnostic-v1",
             "--forwarder-cgroup-diagnostics",
+            "--forwarding-path-diagnostics",
         ]
     )
 
     assert default.learning_signal_mode == "separated-v1"
     assert default.forwarder_cgroup_diagnostics is False
+    assert default.forwarding_path_diagnostics is False
     assert diagnostic.learning_signal_mode == "physical-only-diagnostic-v1"
     assert diagnostic.forwarder_cgroup_diagnostics is True
+    assert diagnostic.forwarding_path_diagnostics is True
+
+
+def test_outcome_latency_mode_defaults_to_physical_and_can_restore_pair_cost():
+    assert parse_args([]).outcome_latency_mode == "physical-only-v1"
+    assert (
+        parse_args(
+            ["--outcome-latency-mode", "physical-plus-pair-v1"]
+        ).outcome_latency_mode
+        == "physical-plus-pair-v1"
+    )
 
 
 def test_multi_run_identifiers_are_unique_while_single_run_stays_compatible():
@@ -200,6 +219,56 @@ def test_export_legacy_csv_writes_all_reports(tmp_path):
     assert len(beliefs) == 2
     assert json.loads(beliefs[0]["(1, 1)"]) == [0.25] * 4
     assert json.loads(beliefs[1]["(1, 2)"]) == [0.4, 0.3, 0.2, 0.1]
+
+
+def test_export_csv_writes_active_and_reference_utility_views_for_current_trace(
+    tmp_path,
+):
+    trace_path = tmp_path / "trace.jsonl"
+    output_dir = tmp_path / "csv"
+    metrics = {
+        "elapsed_seconds": 0.3,
+        "sla_violations": 1,
+        "aggregate_utility_total": -2.5,
+        "realized_utility_total": 30.0,
+        "physical_utility_total": 30.0,
+        "end_to_end_utility_total": 12.0,
+        "jain_fairness": 0.9,
+    }
+    events = [
+        {
+            "event": "run_started",
+            "initial_replicas": [
+                {"stage": 1, "replica_id": 1, "belief": [0.25] * 4},
+            ],
+        },
+        {
+            "event": "iteration_completed",
+            "summary": {
+                "metrics": metrics,
+                "beliefs": {"1:1": [0.1, 0.2, 0.3, 0.4]},
+            },
+        },
+        {"event": "run_completed", "iterations": 1},
+    ]
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    paths = export_legacy_csv(trace_path, output_dir, "test-run")
+
+    assert {path.name for path in paths} >= {
+        "realized_utility.csv",
+        "physical_processing_utility.csv",
+        "realized_end_to_end_utility.csv",
+    }
+    with (output_dir / "realized_utility.csv").open(newline="") as source:
+        assert list(csv.DictReader(source)) == [{"test-run": "30.0"}]
+    with (output_dir / "realized_end_to_end_utility.csv").open(
+        newline=""
+    ) as source:
+        assert list(csv.DictReader(source)) == [{"test-run": "12.0"}]
 
 
 def test_export_legacy_csv_appends_a_new_metric_column(tmp_path):
@@ -335,7 +404,10 @@ def test_experiment_job_receives_requested_dimensions(monkeypatch):
     assert environment["NUM_FLOWS"] == "5"
     assert environment["DATAPATH_MODE"] == "kernel"
     assert environment["LEARNING_SIGNAL_MODE"] == "separated-v1"
+    assert environment["OUTCOME_LATENCY_MODE"] == "physical-only-v1"
     assert environment["FORWARDER_CGROUP_DIAGNOSTICS"] == "false"
+    assert environment["FORWARDING_PATH_DIAGNOSTICS"] == "false"
+    assert environment["SOLVER_RESOURCE_DIAGNOSTICS"] == "false"
     assert environment["RUNTIME_IMAGE"] == launcher.IMAGE
     assert json.loads(environment["EXPERIMENT_ENVIRONMENT"]) == {
         "kubernetes_server": "v1.35.0"

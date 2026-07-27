@@ -76,7 +76,48 @@ def test_process_returns_identity_and_latency_observation():
     assert body["legacy_signal"] == body["state_estimate"]
     assert body["legacy_likelihood"] == body["state_likelihood"]
     assert sum(body["state_likelihood"]) == pytest.approx(1.0)
+    assert "processor_timing" not in body
     assert app.state.runtime.active_requests == 0
+
+
+def test_opt_in_processor_path_diagnostics_split_private_work():
+    app = create_app(
+        ReplicaConfig(stage=2, replica_id=3, pod_name="stage-2-2"),
+        observation_source=fixed_latency,
+    )
+
+    response = asyncio.run(
+        request(
+            app,
+            "POST",
+            "/process",
+            headers={"x-ibg-forwarding-path-diagnostics": "1"},
+            json={
+                "slot_id": 5,
+                "flow_id": 11,
+                "forwarding_path_diagnostics": True,
+            },
+        )
+    )
+
+    assert response.status_code == 200
+    timing = response.json()["processor_timing"]
+    assert timing["schema_version"] == "processor_path_v1"
+    assert timing["clock"] == "unix-epoch-ns"
+    assert (
+        timing["ingress_started_unix_ns"]
+        <= timing["handler_started_unix_ns"]
+        <= timing["work_started_unix_ns"]
+        <= timing["work_finished_unix_ns"]
+        <= timing["handler_finished_unix_ns"]
+    )
+    assert timing["work_ms"] >= 2.0
+    assert timing["handler_ms"] == pytest.approx(
+        timing["pre_work_ms"]
+        + timing["work_ms"]
+        + timing["post_work_ms"],
+        abs=1e-6,
+    )
 
 
 def test_warmup_absorbs_first_use_without_consuming_observation_source():

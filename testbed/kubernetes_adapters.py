@@ -163,6 +163,7 @@ class KubernetesSlotTrafficExecutor:
         datapath_mode=KERNEL_DATAPATH_MODE,
         control_plane_meter=None,
         forwarder_cgroup_diagnostics=False,
+        forwarding_path_diagnostics=False,
     ):
         self.flow_generator_url = flow_generator_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
@@ -176,6 +177,9 @@ class KubernetesSlotTrafficExecutor:
         if not isinstance(forwarder_cgroup_diagnostics, bool):
             raise ValueError("forwarder cgroup diagnostics must be boolean")
         self.forwarder_cgroup_diagnostics = forwarder_cgroup_diagnostics
+        if not isinstance(forwarding_path_diagnostics, bool):
+            raise ValueError("forwarding path diagnostics must be boolean")
+        self.forwarding_path_diagnostics = forwarding_path_diagnostics
 
     def execute_slot(self, slot_id, assignments_by_stage, discovered_by_stage):
         stages = sorted(assignments_by_stage)
@@ -215,6 +219,8 @@ class KubernetesSlotTrafficExecutor:
             }
             if self.forwarder_cgroup_diagnostics:
                 payload["forwarder_cgroup_diagnostics"] = True
+            if self.forwarding_path_diagnostics:
+                payload["forwarding_path_diagnostics"] = True
             response = client.post(
                 f"{self.flow_generator_url}/run-slot",
                 json=payload,
@@ -248,6 +254,19 @@ class KubernetesSlotTrafficExecutor:
             ):
                 raise RuntimeError(
                     "flow generator omitted requested forwarder cgroup diagnostics"
+                )
+            if self.forwarding_path_diagnostics and any(
+                link.forwarding_path is None
+                or link.forwarding_path.schema_version != "forwarding_path_v3"
+                or link.forwarding_path.target_handler_timing is None
+                or link.forwarding_path.source_http_client_timing is None
+                or link.forwarding_path.source_http_client_timing.schema_version
+                != "http_client_path_v2"
+                for flow in self.telemetry.flows
+                for link in flow.links
+            ):
+                raise RuntimeError(
+                    "flow generator omitted requested forwarding path v3 diagnostics"
                 )
         return self.telemetry
 
@@ -376,6 +395,7 @@ def make_kubernetes_adapters(
     control_plane_meter=None,
     learning_signal_mode=SEPARATED_LEARNING_SIGNAL_MODE,
     forwarder_cgroup_diagnostics=False,
+    forwarding_path_diagnostics=False,
 ):
     learning_signal_mode = require_learning_signal_mode(learning_signal_mode)
     meter = control_plane_meter or ControlPlaneMeter()
@@ -387,6 +407,7 @@ def make_kubernetes_adapters(
         datapath_mode=datapath_mode,
         control_plane_meter=meter,
         forwarder_cgroup_diagnostics=forwarder_cgroup_diagnostics,
+        forwarding_path_diagnostics=forwarding_path_diagnostics,
     )
     return AdapterBundle(
         replica_discovery=discovery,

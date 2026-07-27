@@ -2,6 +2,8 @@ import copy
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts.phase6_compare import build_report, parse_kubernetes_results
 from testbed.profiles import load_profiles
 from testbed.validation import (
@@ -337,6 +339,94 @@ def test_kernel_signal_replay_preserves_the_unchanged_runner_math():
     assert replay["gate_passed"] is True
     assert replay["iterations"] == 1
     assert replay["max_mathematical_abs"] == 0
+
+
+def test_kernel_replay_validates_memory_trace_without_comparing_live_rss():
+    profiles = load_profiles(PROFILES)
+    simulation = run_controlled_simulation(
+        profiles,
+        seed=2050,
+        slot_id=1,
+    )
+    kubernetes = kubernetes_shape(simulation)
+    stage_records = [
+        {
+            "stage": stage,
+            "peak_memo_entries": 56,
+            "post_embedding_residual_entries": 0,
+        }
+        for stage in range(1, 4)
+    ]
+    kubernetes["solver_resource"] = {
+        "schema": "solver_resource_v1",
+        "rss_bytes": {
+            "before_admission": 100,
+            "peak_during_slot": 180,
+            "after_feedback": 120,
+            "peak_incremental_working_memory": 80,
+        },
+        "exact_policy": {
+            "peak_memo_entries": 56,
+            "post_embedding_residual_entries": 0,
+            "stages": stage_records,
+        },
+    }
+    metadata = {
+        "backend": "kubernetes",
+        "datapath_mode": "kernel",
+        "memory_diagnostics": True,
+        "runtime_image": "ibg-testbed:kernel-phase3",
+        "environment": {"kubernetes_server": "v1.35.0"},
+        "seed": 2050,
+        "configuration": simulation["configuration"],
+    }
+
+    replay = replay_kernel_trace(
+        [
+            {"event": "run_started", **metadata},
+            {
+                "event": "iteration_completed",
+                **metadata,
+                "slot_id": 1,
+                "summary": kubernetes,
+            },
+        ],
+        profiles,
+    )
+
+    assert replay["gate_passed"] is True
+
+
+def test_kernel_replay_rejects_missing_memory_snapshot_when_enabled():
+    profiles = load_profiles(PROFILES)
+    simulation = run_controlled_simulation(
+        profiles,
+        seed=2050,
+        slot_id=1,
+    )
+    metadata = {
+        "backend": "kubernetes",
+        "datapath_mode": "kernel",
+        "memory_diagnostics": True,
+        "runtime_image": "ibg-testbed:kernel-phase3",
+        "environment": {},
+        "seed": 2050,
+        "configuration": simulation["configuration"],
+    }
+
+    with pytest.raises(ValueError, match="missing solver_resource_v1"):
+        replay_kernel_trace(
+            [
+                {"event": "run_started", **metadata},
+                {
+                    "event": "iteration_completed",
+                    **metadata,
+                    "slot_id": 1,
+                    "summary": kubernetes_shape(simulation),
+                },
+            ],
+            profiles,
+        )
 
 
 def test_kernel_signal_replay_rejects_mixed_transport_schemas():

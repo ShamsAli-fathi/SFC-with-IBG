@@ -11,6 +11,10 @@ from learning_mode import (
     SEPARATED_LEARNING_SIGNAL_MODE,
     require_learning_signal_mode,
 )
+from outcome_latency import (
+    DEFAULT_OUTCOME_LATENCY_MODE,
+    require_outcome_latency_mode,
+)
 from runner import run_decoupled_slot
 from testbed.experiment import run_until_equilibrium
 from testbed.kubernetes_adapters import (
@@ -77,8 +81,20 @@ def main():
             SEPARATED_LEARNING_SIGNAL_MODE,
         )
     )
+    outcome_latency_mode = require_outcome_latency_mode(
+        os.environ.get(
+            "OUTCOME_LATENCY_MODE",
+            DEFAULT_OUTCOME_LATENCY_MODE,
+        )
+    )
     forwarder_cgroup_diagnostics = read_boolean_environment(
         "FORWARDER_CGROUP_DIAGNOSTICS",
+    )
+    forwarding_path_diagnostics = read_boolean_environment(
+        "FORWARDING_PATH_DIAGNOSTICS",
+    )
+    solver_resource_diagnostics = read_boolean_environment(
+        "SOLVER_RESOURCE_DIAGNOSTICS",
     )
     if min(
         num_of_stages,
@@ -137,6 +153,7 @@ def main():
             datapath_mode=datapath_mode,
             learning_signal_mode=learning_signal_mode,
             forwarder_cgroup_diagnostics=forwarder_cgroup_diagnostics,
+            forwarding_path_diagnostics=forwarding_path_diagnostics,
         )
         flow_list = list(range(1, num_of_flows + 1))
 
@@ -148,6 +165,8 @@ def main():
                 num_of_replicas=num_of_replicas,
                 adapters=adapters,
                 slot_id=slot_id,
+                outcome_latency_mode=outcome_latency_mode,
+                solver_resource_diagnostics=solver_resource_diagnostics,
             )
 
         def summarize(result, slot_id):
@@ -186,7 +205,10 @@ def main():
                 "backend": "kubernetes",
                 "datapath_mode": datapath_mode,
                 "learning_signal_mode": learning_signal_mode,
+                "outcome_latency_mode": outcome_latency_mode,
                 "forwarder_cgroup_diagnostics": forwarder_cgroup_diagnostics,
+                "forwarding_path_diagnostics": forwarding_path_diagnostics,
+                "memory_diagnostics": solver_resource_diagnostics,
                 "runtime_image": os.environ.get(
                     "RUNTIME_IMAGE",
                     "unknown",

@@ -7,12 +7,18 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 import httpx
 from pydantic import AnyHttpUrl, BaseModel, Field, ValidationError, model_validator
 
 from IBG.datapath import KERNEL_DATAPATH_MODE, require_datapath_mode
-from testbed.cnf_service import HealthResponse, ProcessRequest, ProcessResponse
+from testbed.cnf_service import (
+    FORWARDING_PATH_DIAGNOSTIC_HEADER,
+    HealthResponse,
+    ProcessRequest,
+    ProcessResponse,
+    ProcessorPathTiming,
+)
 
 
 @dataclass(frozen=True)
@@ -22,6 +28,7 @@ class ForwarderConfig:
     pod_name: str = "stage-1-0"
     processor_url: str = "http://127.0.0.1:8081"
     request_timeout_seconds: float = 10.0
+    keepalive_expiry_seconds: float = 30.0
 
     def __post_init__(self):
         if self.stage < 1:
@@ -34,6 +41,8 @@ class ForwarderConfig:
             raise ValueError("processor_url must not be empty")
         if self.request_timeout_seconds <= 0:
             raise ValueError("request_timeout_seconds must be positive")
+        if self.keepalive_expiry_seconds <= 0:
+            raise ValueError("keepalive_expiry_seconds must be positive")
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None):
@@ -59,6 +68,9 @@ class ForwarderConfig:
             request_timeout_seconds=float(
                 values.get("REQUEST_TIMEOUT_SECONDS", "10")
             ),
+            keepalive_expiry_seconds=float(
+                values.get("FORWARDER_KEEPALIVE_SECONDS", "30")
+            ),
         )
 
 
@@ -75,6 +87,8 @@ class RouteProcessRequest(BaseModel):
     flow_id: int = Field(ge=1)
     assigned_load: int = Field(ge=1)
     remaining_hops: list[ForwardHop] = Field(default_factory=list)
+    forwarding_path_diagnostics: bool = False
+    source_request_started_unix_ns: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def validate_remaining_stage_order(self):
@@ -85,7 +99,108 @@ class RouteProcessRequest(BaseModel):
         stages = [hop.stage for hop in self.remaining_hops]
         if any(right != left + 1 for left, right in zip(stages, stages[1:])):
             raise ValueError("remaining route stages must be contiguous and ordered")
+        if (
+            not self.forwarding_path_diagnostics
+            and self.source_request_started_unix_ns is not None
+        ):
+            raise ValueError(
+                "source request timing requires forwarding path diagnostics"
+            )
         return self
+
+
+class ForwarderHandlerTiming(BaseModel):
+    """Shared-clock timing at a public forwarder's application boundary."""
+
+    schema_version: str
+    clock: str
+    started_unix_ns: int = Field(ge=1)
+    finished_unix_ns: int = Field(ge=1)
+    elapsed_ms: float = Field(ge=0)
+    ingress_started_unix_ns: int | None = Field(default=None, ge=1)
+    local_processor_request_started_unix_ns: int | None = Field(
+        default=None,
+        ge=1,
+    )
+    local_processor_response_received_unix_ns: int | None = Field(
+        default=None,
+        ge=1,
+    )
+    downstream_request_started_unix_ns: int | None = Field(default=None, ge=1)
+    downstream_response_received_unix_ns: int | None = Field(
+        default=None,
+        ge=1,
+    )
+    ingress_to_handler_ms: float | None = Field(default=None, ge=0)
+    handler_to_processor_request_ms: float | None = Field(default=None, ge=0)
+    local_processor_round_trip_ms: float | None = Field(default=None, ge=0)
+    processor_response_to_downstream_request_ms: float | None = Field(
+        default=None,
+        ge=0,
+    )
+    downstream_round_trip_ms: float | None = Field(default=None, ge=0)
+    completion_ms: float | None = Field(default=None, ge=0)
+    processor_timing: ProcessorPathTiming | None = None
+
+
+class HttpClientPathTiming(BaseModel):
+    """Opt-in HTTP Core milestones for one downstream forwarder request."""
+
+    schema_version: str
+    clock: str
+    connection_reused: bool
+    request_started_unix_ns: int = Field(ge=1)
+    transport_started_unix_ns: int = Field(ge=1)
+    connect_started_unix_ns: int | None = Field(default=None, ge=1)
+    connect_finished_unix_ns: int | None = Field(default=None, ge=1)
+    request_headers_started_unix_ns: int = Field(ge=1)
+    request_headers_finished_unix_ns: int = Field(ge=1)
+    request_body_started_unix_ns: int = Field(ge=1)
+    request_body_finished_unix_ns: int = Field(ge=1)
+    response_headers_started_unix_ns: int = Field(ge=1)
+    response_headers_finished_unix_ns: int = Field(ge=1)
+    response_body_started_unix_ns: int = Field(ge=1)
+    response_body_finished_unix_ns: int = Field(ge=1)
+    response_close_started_unix_ns: int = Field(ge=1)
+    response_close_finished_unix_ns: int = Field(ge=1)
+    response_received_unix_ns: int = Field(ge=1)
+    pool_wait_ms: float = Field(ge=0)
+    connect_ms: float | None = Field(default=None, ge=0)
+    request_headers_ms: float = Field(ge=0)
+    request_body_ms: float = Field(ge=0)
+    response_read_start_ms: float = Field(ge=0)
+    response_headers_wait_ms: float = Field(ge=0)
+    response_body_ms: float = Field(ge=0)
+    response_close_ms: float = Field(ge=0)
+    application_resume_ms: float = Field(ge=0)
+
+
+class ForwardingPathTiming(BaseModel):
+    """Opt-in split of one selected forwarder-to-forwarder RPC residual."""
+
+    schema_version: str
+    clock: str
+    source_request_started_unix_ns: int = Field(ge=1)
+    target_handler_started_unix_ns: int = Field(ge=1)
+    target_handler_finished_unix_ns: int = Field(ge=1)
+    source_response_received_unix_ns: int = Field(ge=1)
+    source_to_target_handler_ms: float = Field(ge=0)
+    target_handler_ms: float = Field(ge=0)
+    target_to_source_response_ms: float = Field(ge=0)
+    source_handler_started_unix_ns: int | None = Field(default=None, ge=1)
+    source_local_processor_response_received_unix_ns: int | None = Field(
+        default=None,
+        ge=1,
+    )
+    target_ingress_started_unix_ns: int | None = Field(default=None, ge=1)
+    source_local_response_to_request_ms: float | None = Field(
+        default=None,
+        ge=0,
+    )
+    source_to_target_ingress_ms: float | None = Field(default=None, ge=0)
+    target_ingress_to_handler_ms: float | None = Field(default=None, ge=0)
+    target_handler_timing: ForwarderHandlerTiming | None = None
+    source_http_client_timing: HttpClientPathTiming | None = None
 
 
 class PairwiseLinkTelemetry(BaseModel):
@@ -101,6 +216,7 @@ class PairwiseLinkTelemetry(BaseModel):
     request_latency_ms: float = Field(ge=0)
     callee_elapsed_ms: float = Field(ge=0)
     link_cost_ms: float = Field(ge=0)
+    forwarding_path: ForwardingPathTiming | None = None
 
 
 class ForwarderCgroupSnapshot(BaseModel):
@@ -126,6 +242,7 @@ class RouteProcessResponse(BaseModel):
     elapsed_ms: float = Field(ge=0)
     hops: list[ProcessResponse] = Field(min_length=1)
     links: list[PairwiseLinkTelemetry]
+    handler_timing: ForwarderHandlerTiming | None = None
 
 
 class RouteForwardingError(RuntimeError):
@@ -134,6 +251,134 @@ class RouteForwardingError(RuntimeError):
 
 class ForwarderCgroupError(RuntimeError):
     pass
+
+
+class HttpClientTraceRecorder:
+    """Capture successful HTTP Core milestones without changing the request."""
+
+    REQUIRED_EVENTS = (
+        "http11.send_request_headers.started",
+        "http11.send_request_headers.complete",
+        "http11.send_request_body.started",
+        "http11.send_request_body.complete",
+        "http11.receive_response_headers.started",
+        "http11.receive_response_headers.complete",
+        "http11.receive_response_body.started",
+        "http11.receive_response_body.complete",
+        "http11.response_closed.started",
+        "http11.response_closed.complete",
+    )
+    CONNECT_EVENTS = (
+        "connection.connect_tcp.started",
+        "connection.connect_tcp.complete",
+    )
+
+    def __init__(self, request_started_unix_ns):
+        self.request_started_unix_ns = request_started_unix_ns
+        self.events = {}
+
+    async def __call__(self, name, info):
+        del info
+        if name in self.REQUIRED_EVENTS + self.CONNECT_EVENTS:
+            self.events.setdefault(name, time.time_ns())
+
+    def build(self, response_received_unix_ns):
+        missing = [name for name in self.REQUIRED_EVENTS if name not in self.events]
+        if missing:
+            raise RouteForwardingError(
+                "downstream HTTP client timing omitted milestones: "
+                + ", ".join(missing)
+            )
+        connect_started = self.events.get("connection.connect_tcp.started")
+        connect_finished = self.events.get("connection.connect_tcp.complete")
+        if (connect_started is None) != (connect_finished is None):
+            raise RouteForwardingError(
+                "downstream HTTP client timing has incomplete connect milestones"
+            )
+        headers_started = self.events["http11.send_request_headers.started"]
+        headers_finished = self.events["http11.send_request_headers.complete"]
+        body_started = self.events["http11.send_request_body.started"]
+        body_finished = self.events["http11.send_request_body.complete"]
+        response_headers_started = self.events[
+            "http11.receive_response_headers.started"
+        ]
+        response_headers_finished = self.events[
+            "http11.receive_response_headers.complete"
+        ]
+        response_body_started = self.events["http11.receive_response_body.started"]
+        response_body_finished = self.events[
+            "http11.receive_response_body.complete"
+        ]
+        response_close_started = self.events["http11.response_closed.started"]
+        response_close_finished = self.events["http11.response_closed.complete"]
+        transport_started = connect_started or headers_started
+        stamps = [
+            self.request_started_unix_ns,
+            transport_started,
+            *(
+                []
+                if connect_started is None
+                else [connect_started, connect_finished]
+            ),
+            headers_started,
+            headers_finished,
+            body_started,
+            body_finished,
+            response_headers_started,
+            response_headers_finished,
+            response_body_started,
+            response_body_finished,
+            response_close_started,
+            response_close_finished,
+            response_received_unix_ns,
+        ]
+        if stamps != sorted(stamps):
+            raise RouteForwardingError(
+                "downstream HTTP client timing milestones are not ordered"
+            )
+        return HttpClientPathTiming(
+            schema_version="http_client_path_v2",
+            clock="unix-epoch-ns",
+            connection_reused=connect_started is None,
+            request_started_unix_ns=self.request_started_unix_ns,
+            transport_started_unix_ns=transport_started,
+            connect_started_unix_ns=connect_started,
+            connect_finished_unix_ns=connect_finished,
+            request_headers_started_unix_ns=headers_started,
+            request_headers_finished_unix_ns=headers_finished,
+            request_body_started_unix_ns=body_started,
+            request_body_finished_unix_ns=body_finished,
+            response_headers_started_unix_ns=response_headers_started,
+            response_headers_finished_unix_ns=response_headers_finished,
+            response_body_started_unix_ns=response_body_started,
+            response_body_finished_unix_ns=response_body_finished,
+            response_close_started_unix_ns=response_close_started,
+            response_close_finished_unix_ns=response_close_finished,
+            response_received_unix_ns=response_received_unix_ns,
+            pool_wait_ms=(transport_started - self.request_started_unix_ns)
+            / 1_000_000,
+            connect_ms=(
+                None
+                if connect_started is None
+                else (connect_finished - connect_started) / 1_000_000
+            ),
+            request_headers_ms=(headers_finished - headers_started) / 1_000_000,
+            request_body_ms=(body_finished - body_started) / 1_000_000,
+            response_read_start_ms=(response_headers_started - body_finished)
+            / 1_000_000,
+            response_headers_wait_ms=(
+                response_headers_finished - response_headers_started
+            )
+            / 1_000_000,
+            response_body_ms=(response_body_finished - response_body_started)
+            / 1_000_000,
+            response_close_ms=(response_close_finished - response_close_started)
+            / 1_000_000,
+            application_resume_ms=(
+                response_received_unix_ns - response_close_finished
+            )
+            / 1_000_000,
+        )
 
 
 CGROUP_CPU_STAT_PATH = Path("/sys/fs/cgroup/cpu.stat")
@@ -218,16 +463,27 @@ class ReplicaRouteForwarder:
         | None = None,
     ):
         self.config = config
-        self.client = httpx.AsyncClient(
+        self.processor_client = httpx.AsyncClient(
             timeout=self.config.request_timeout_seconds,
             transport=transport,
         )
+        self.client = httpx.AsyncClient(
+            timeout=self.config.request_timeout_seconds,
+            transport=transport,
+            limits=httpx.Limits(
+                keepalive_expiry=self.config.keepalive_expiry_seconds,
+            ),
+        )
         self.cgroup_reader = cgroup_reader or read_forwarder_cgroup_snapshot
 
-    async def _request(self, method, endpoint, **kwargs):
+    async def _request_processor(self, method, endpoint, **kwargs):
+        return await self.processor_client.request(method, endpoint, **kwargs)
+
+    async def _request_downstream(self, method, endpoint, **kwargs):
         return await self.client.request(method, endpoint, **kwargs)
 
     async def close(self):
+        await self.processor_client.aclose()
         await self.client.aclose()
 
     def _validate_local_identity(self, response):
@@ -243,7 +499,7 @@ class ReplicaRouteForwarder:
     async def health(self):
         endpoint = f"{self.config.processor_url}/health"
         try:
-            response = await self._request("GET", endpoint)
+            response = await self._request_processor("GET", endpoint)
             response.raise_for_status()
             health = HealthResponse.model_validate(response.json())
         except (httpx.HTTPError, ValidationError, ValueError) as error:
@@ -265,12 +521,21 @@ class ReplicaRouteForwarder:
             slot_id=request.slot_id,
             flow_id=request.flow_id,
             assigned_load=request.assigned_load,
+            forwarding_path_diagnostics=request.forwarding_path_diagnostics,
+        )
+        request_started_unix_ns = (
+            time.time_ns() if request.forwarding_path_diagnostics else None
         )
         try:
-            response = await self._request(
+            response = await self._request_processor(
                 "POST",
                 endpoint,
                 json=local_request.model_dump(mode="json"),
+                headers=(
+                    {FORWARDING_PATH_DIAGNOSTIC_HEADER: "1"}
+                    if request.forwarding_path_diagnostics
+                    else None
+                ),
             )
             response.raise_for_status()
             local = ProcessResponse.model_validate(response.json())
@@ -279,6 +544,9 @@ class ReplicaRouteForwarder:
                 f"flow {request.flow_id} local processing failed: "
                 f"{type(error).__name__}: {error!r}"
             ) from error
+        response_received_unix_ns = (
+            time.time_ns() if request.forwarding_path_diagnostics else None
+        )
         self._validate_local_identity(local)
         if (
             local.slot_id != request.slot_id
@@ -289,9 +557,36 @@ class ReplicaRouteForwarder:
                 f"flow {request.flow_id} local processor returned "
                 "mismatched request telemetry"
             )
-        return local
+        if request.forwarding_path_diagnostics:
+            processor_timing = local.processor_timing
+            if (
+                request_started_unix_ns is None
+                or response_received_unix_ns is None
+                or processor_timing is None
+                or processor_timing.schema_version != "processor_path_v1"
+                or processor_timing.clock != "unix-epoch-ns"
+                or not (
+                    request_started_unix_ns
+                    <= processor_timing.ingress_started_unix_ns
+                    <= processor_timing.handler_started_unix_ns
+                    <= processor_timing.work_started_unix_ns
+                    <= processor_timing.work_finished_unix_ns
+                    <= processor_timing.handler_finished_unix_ns
+                    <= response_received_unix_ns
+                )
+            ):
+                raise RouteForwardingError(
+                    f"flow {request.flow_id} local processor returned "
+                    "invalid path timing"
+                )
+        return local, request_started_unix_ns, response_received_unix_ns
 
-    async def process_route(self, request: RouteProcessRequest):
+    async def process_route(
+        self,
+        request: RouteProcessRequest,
+        *,
+        ingress_started_unix_ns: int | None = None,
+    ):
         if request.datapath_mode != KERNEL_DATAPATH_MODE:
             raise RouteForwardingError(
                 f"unsupported forwarding mode {request.datapath_mode!r}"
@@ -305,9 +600,28 @@ class ReplicaRouteForwarder:
                 )
 
         started_at = time.perf_counter()
-        local = await self._process_local(request)
+        handler_started_unix_ns = (
+            time.time_ns() if request.forwarding_path_diagnostics else None
+        )
+        if request.forwarding_path_diagnostics:
+            ingress_started_unix_ns = (
+                ingress_started_unix_ns or handler_started_unix_ns
+            )
+            if (
+                handler_started_unix_ns is None
+                or ingress_started_unix_ns is None
+                or ingress_started_unix_ns > handler_started_unix_ns
+            ):
+                raise RouteForwardingError("invalid forwarder ingress timing")
+        (
+            local,
+            local_processor_request_started_unix_ns,
+            local_processor_response_received_unix_ns,
+        ) = await self._process_local(request)
         hops = [local]
         links = []
+        downstream_request_started_unix_ns = None
+        downstream_response_received_unix_ns = None
 
         if request.remaining_hops:
             next_hop = request.remaining_hops[0]
@@ -320,11 +634,39 @@ class ReplicaRouteForwarder:
                 remaining_hops=request.remaining_hops[1:],
             )
             edge_started_at = time.perf_counter()
+            source_request_started_unix_ns = (
+                time.time_ns() if request.forwarding_path_diagnostics else None
+            )
+            http_client_trace = (
+                HttpClientTraceRecorder(source_request_started_unix_ns)
+                if source_request_started_unix_ns is not None
+                else None
+            )
+            downstream_request_started_unix_ns = source_request_started_unix_ns
             try:
-                response = await self._request(
+                response = await self._request_downstream(
                     "POST",
                     endpoint,
-                    json=downstream_request.model_dump(mode="json"),
+                    json=downstream_request.model_copy(
+                        update={
+                            "forwarding_path_diagnostics": (
+                                request.forwarding_path_diagnostics
+                            ),
+                            "source_request_started_unix_ns": (
+                                source_request_started_unix_ns
+                            ),
+                        }
+                    ).model_dump(mode="json"),
+                    headers=(
+                        {FORWARDING_PATH_DIAGNOSTIC_HEADER: "1"}
+                        if request.forwarding_path_diagnostics
+                        else None
+                    ),
+                    extensions=(
+                        {"trace": http_client_trace}
+                        if http_client_trace is not None
+                        else None
+                    ),
                 )
                 response.raise_for_status()
                 downstream = RouteProcessResponse.model_validate(response.json())
@@ -336,6 +678,18 @@ class ReplicaRouteForwarder:
             edge_request_latency_ms = (
                 time.perf_counter() - edge_started_at
             ) * 1000
+            source_response_received_unix_ns = (
+                time.time_ns() if request.forwarding_path_diagnostics else None
+            )
+            downstream_response_received_unix_ns = (
+                source_response_received_unix_ns
+            )
+            source_http_client_timing = (
+                http_client_trace.build(source_response_received_unix_ns)
+                if http_client_trace is not None
+                and source_response_received_unix_ns is not None
+                else None
+            )
 
             first_downstream = downstream.hops[0]
             if (
@@ -349,6 +703,82 @@ class ReplicaRouteForwarder:
                 raise RouteForwardingError(
                     f"flow {request.flow_id} stage {next_hop.stage} "
                     "returned mismatched route telemetry"
+                )
+
+            forwarding_path = None
+            if request.forwarding_path_diagnostics:
+                handler_timing = downstream.handler_timing
+                if (
+                    source_request_started_unix_ns is None
+                    or source_response_received_unix_ns is None
+                    or handler_timing is None
+                    or handler_timing.schema_version != "forwarding_path_v2"
+                    or handler_timing.clock != "unix-epoch-ns"
+                    or handler_timing.ingress_started_unix_ns is None
+                    or local_processor_response_received_unix_ns is None
+                    or source_http_client_timing is None
+                    or source_http_client_timing.request_started_unix_ns
+                    != source_request_started_unix_ns
+                    or source_http_client_timing.response_received_unix_ns
+                    != source_response_received_unix_ns
+                    or not (
+                        source_request_started_unix_ns
+                        <= handler_timing.ingress_started_unix_ns
+                        <= handler_timing.started_unix_ns
+                        <= handler_timing.finished_unix_ns
+                        <= source_response_received_unix_ns
+                    )
+                ):
+                    raise RouteForwardingError(
+                        f"flow {request.flow_id} stage {next_hop.stage} "
+                        "returned invalid forwarding path timing"
+                    )
+                forwarding_path = ForwardingPathTiming(
+                    schema_version="forwarding_path_v3",
+                    clock="unix-epoch-ns",
+                    source_request_started_unix_ns=source_request_started_unix_ns,
+                    target_handler_started_unix_ns=handler_timing.started_unix_ns,
+                    target_handler_finished_unix_ns=handler_timing.finished_unix_ns,
+                    source_response_received_unix_ns=source_response_received_unix_ns,
+                    source_to_target_handler_ms=(
+                        handler_timing.started_unix_ns
+                        - source_request_started_unix_ns
+                    )
+                    / 1_000_000,
+                    target_handler_ms=(
+                        handler_timing.finished_unix_ns
+                        - handler_timing.started_unix_ns
+                    )
+                    / 1_000_000,
+                    target_to_source_response_ms=(
+                        source_response_received_unix_ns
+                        - handler_timing.finished_unix_ns
+                    )
+                    / 1_000_000,
+                    source_handler_started_unix_ns=handler_started_unix_ns,
+                    source_local_processor_response_received_unix_ns=(
+                        local_processor_response_received_unix_ns
+                    ),
+                    target_ingress_started_unix_ns=(
+                        handler_timing.ingress_started_unix_ns
+                    ),
+                    source_local_response_to_request_ms=(
+                        source_request_started_unix_ns
+                        - local_processor_response_received_unix_ns
+                    )
+                    / 1_000_000,
+                    source_to_target_ingress_ms=(
+                        handler_timing.ingress_started_unix_ns
+                        - source_request_started_unix_ns
+                    )
+                    / 1_000_000,
+                    target_ingress_to_handler_ms=(
+                        handler_timing.started_unix_ns
+                        - handler_timing.ingress_started_unix_ns
+                    )
+                    / 1_000_000,
+                    target_handler_timing=handler_timing,
+                    source_http_client_timing=source_http_client_timing,
                 )
 
             links.append(
@@ -368,18 +798,116 @@ class ReplicaRouteForwarder:
                         0.0,
                         edge_request_latency_ms - downstream.elapsed_ms,
                     ),
+                    forwarding_path=forwarding_path,
                 )
             )
             hops.extend(downstream.hops)
             links.extend(downstream.links)
 
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        handler_timing = None
+        if request.forwarding_path_diagnostics:
+            handler_finished_unix_ns = time.time_ns()
+            processor_timing = local.processor_timing
+            if (
+                handler_started_unix_ns is None
+                or ingress_started_unix_ns is None
+                or local_processor_request_started_unix_ns is None
+                or local_processor_response_received_unix_ns is None
+                or processor_timing is None
+                or not (
+                    ingress_started_unix_ns
+                    <= handler_started_unix_ns
+                    <= local_processor_request_started_unix_ns
+                    <= processor_timing.ingress_started_unix_ns
+                    <= processor_timing.handler_started_unix_ns
+                    <= processor_timing.work_started_unix_ns
+                    <= processor_timing.work_finished_unix_ns
+                    <= processor_timing.handler_finished_unix_ns
+                    <= local_processor_response_received_unix_ns
+                    <= (
+                        downstream_request_started_unix_ns
+                        or handler_finished_unix_ns
+                    )
+                    <= (
+                        downstream_response_received_unix_ns
+                        or handler_finished_unix_ns
+                    )
+                    <= handler_finished_unix_ns
+                )
+                or handler_finished_unix_ns < handler_started_unix_ns
+            ):
+                raise RouteForwardingError("invalid local forwarding path timing")
+            completion_started_unix_ns = (
+                downstream_response_received_unix_ns
+                or local_processor_response_received_unix_ns
+            )
+            handler_timing = ForwarderHandlerTiming(
+                schema_version="forwarding_path_v2",
+                clock="unix-epoch-ns",
+                started_unix_ns=handler_started_unix_ns,
+                finished_unix_ns=handler_finished_unix_ns,
+                elapsed_ms=elapsed_ms,
+                ingress_started_unix_ns=ingress_started_unix_ns,
+                local_processor_request_started_unix_ns=(
+                    local_processor_request_started_unix_ns
+                ),
+                local_processor_response_received_unix_ns=(
+                    local_processor_response_received_unix_ns
+                ),
+                downstream_request_started_unix_ns=(
+                    downstream_request_started_unix_ns
+                ),
+                downstream_response_received_unix_ns=(
+                    downstream_response_received_unix_ns
+                ),
+                ingress_to_handler_ms=(
+                    handler_started_unix_ns - ingress_started_unix_ns
+                )
+                / 1_000_000,
+                handler_to_processor_request_ms=(
+                    local_processor_request_started_unix_ns
+                    - handler_started_unix_ns
+                )
+                / 1_000_000,
+                local_processor_round_trip_ms=(
+                    local_processor_response_received_unix_ns
+                    - local_processor_request_started_unix_ns
+                )
+                / 1_000_000,
+                processor_response_to_downstream_request_ms=(
+                    None
+                    if downstream_request_started_unix_ns is None
+                    else (
+                        downstream_request_started_unix_ns
+                        - local_processor_response_received_unix_ns
+                    )
+                    / 1_000_000
+                ),
+                downstream_round_trip_ms=(
+                    None
+                    if downstream_request_started_unix_ns is None
+                    or downstream_response_received_unix_ns is None
+                    else (
+                        downstream_response_received_unix_ns
+                        - downstream_request_started_unix_ns
+                    )
+                    / 1_000_000
+                ),
+                completion_ms=(
+                    handler_finished_unix_ns - completion_started_unix_ns
+                )
+                / 1_000_000,
+                processor_timing=processor_timing,
+            )
         return RouteProcessResponse(
             datapath_mode=request.datapath_mode,
             slot_id=request.slot_id,
             flow_id=request.flow_id,
-            elapsed_ms=(time.perf_counter() - started_at) * 1000,
+            elapsed_ms=elapsed_ms,
             hops=hops,
             links=links,
+            handler_timing=handler_timing,
         )
 
 
@@ -407,6 +935,15 @@ def create_app(
     )
     application.state.forwarder = runtime
 
+    @application.middleware("http")
+    async def capture_diagnostic_ingress(http_request, call_next):
+        if (
+            http_request.headers.get(FORWARDING_PATH_DIAGNOSTIC_HEADER)
+            == "1"
+        ):
+            http_request.state.forwarding_path_ingress_unix_ns = time.time_ns()
+        return await call_next(http_request)
+
     @application.get("/health", response_model=HealthResponse)
     async def health():
         try:
@@ -421,10 +958,21 @@ def create_app(
         except ForwarderCgroupError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
-    @application.post("/process-route", response_model=RouteProcessResponse)
-    async def process_route(request: RouteProcessRequest):
+    @application.post(
+        "/process-route",
+        response_model=RouteProcessResponse,
+        response_model_exclude_none=True,
+    )
+    async def process_route(request: RouteProcessRequest, http_request: Request):
         try:
-            return await runtime.process_route(request)
+            return await runtime.process_route(
+                request,
+                ingress_started_unix_ns=getattr(
+                    http_request.state,
+                    "forwarding_path_ingress_unix_ns",
+                    None,
+                ),
+            )
         except RouteForwardingError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
@@ -441,6 +989,9 @@ def main():
         app,
         host=os.environ.get("HOST", "0.0.0.0"),
         port=int(os.environ.get("PORT", "8080")),
+        timeout_keep_alive=int(
+            os.environ.get("FORWARDER_KEEPALIVE_SECONDS", "30")
+        ),
     )
 
 

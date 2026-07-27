@@ -5,7 +5,7 @@ import os
 import re
 import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import numpy as np
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,7 @@ from testbed.profiles import load_profiles, require_profile
 
 LatencySource = Callable[[int], float]
 ObservationJitterCallable = Callable[[int], float]
+FORWARDING_PATH_DIAGNOSTIC_HEADER = "x-ibg-forwarding-path-diagnostics"
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,24 @@ class ProcessRequest(BaseModel):
     flow_id: int = Field(ge=1)
     assigned_load: int | None = Field(default=None, ge=1)
     legacy_congestion: int | None = Field(default=None, ge=1)
+    forwarding_path_diagnostics: bool = False
+
+
+class ProcessorPathTiming(BaseModel):
+    """Opt-in timing inside the private processor application boundary."""
+
+    schema_version: str
+    clock: str
+    ingress_started_unix_ns: int = Field(ge=1)
+    handler_started_unix_ns: int = Field(ge=1)
+    work_started_unix_ns: int = Field(ge=1)
+    work_finished_unix_ns: int = Field(ge=1)
+    handler_finished_unix_ns: int = Field(ge=1)
+    ingress_to_handler_ms: float = Field(ge=0)
+    pre_work_ms: float = Field(ge=0)
+    work_ms: float = Field(ge=0)
+    post_work_ms: float = Field(ge=0)
+    handler_ms: float = Field(ge=0)
 
 
 class HealthResponse(BaseModel):
@@ -139,6 +158,7 @@ class ProcessResponse(BaseModel):
     state_likelihood: tuple[float, float, float, float]
     legacy_signal: int
     legacy_likelihood: tuple[float, float, float, float]
+    processor_timing: ProcessorPathTiming | None = None
 
 
 class LatencyObservationSource:
@@ -311,8 +331,22 @@ class ReplicaRuntime:
             current_concurrency=current_concurrency,
         )
 
-    async def process(self, request: ProcessRequest):
+    async def process(
+        self,
+        request: ProcessRequest,
+        *,
+        ingress_started_unix_ns: int | None = None,
+        handler_started_unix_ns: int | None = None,
+    ):
         started_at = time.perf_counter()
+        diagnostic = request.forwarding_path_diagnostics
+        if diagnostic:
+            handler_started_unix_ns = handler_started_unix_ns or time.time_ns()
+            ingress_started_unix_ns = (
+                ingress_started_unix_ns or handler_started_unix_ns
+            )
+            if ingress_started_unix_ns > handler_started_unix_ns:
+                raise ValueError("processor diagnostic ingress follows handler start")
         async with self._lock:
             self._active_requests += 1
             concurrency = self._active_requests
@@ -332,7 +366,9 @@ class ReplicaRuntime:
                 )
             else:
                 modeled_delay_ms = self.observation_source(assigned_load)
+            work_started_unix_ns = time.time_ns() if diagnostic else None
             await asyncio.sleep(modeled_delay_ms / 1000)
+            work_finished_unix_ns = time.time_ns() if diagnostic else None
             elapsed_ms = (time.perf_counter() - started_at) * 1000
             if self._request_seeded_jitter:
                 observation_jitter_ms = self.observation_jitter_source(
@@ -350,6 +386,50 @@ class ReplicaRuntime:
                 assigned_load,
             )
             state_estimate = estimate_state(likelihood)
+            processor_timing = None
+            if diagnostic:
+                handler_finished_unix_ns = time.time_ns()
+                if (
+                    ingress_started_unix_ns is None
+                    or handler_started_unix_ns is None
+                    or work_started_unix_ns is None
+                    or work_finished_unix_ns is None
+                    or not (
+                        ingress_started_unix_ns
+                        <= handler_started_unix_ns
+                        <= work_started_unix_ns
+                        <= work_finished_unix_ns
+                        <= handler_finished_unix_ns
+                    )
+                ):
+                    raise ValueError("invalid private processor path timing")
+                processor_timing = ProcessorPathTiming(
+                    schema_version="processor_path_v1",
+                    clock="unix-epoch-ns",
+                    ingress_started_unix_ns=ingress_started_unix_ns,
+                    handler_started_unix_ns=handler_started_unix_ns,
+                    work_started_unix_ns=work_started_unix_ns,
+                    work_finished_unix_ns=work_finished_unix_ns,
+                    handler_finished_unix_ns=handler_finished_unix_ns,
+                    ingress_to_handler_ms=(
+                        handler_started_unix_ns - ingress_started_unix_ns
+                    )
+                    / 1_000_000,
+                    pre_work_ms=(
+                        work_started_unix_ns - handler_started_unix_ns
+                    )
+                    / 1_000_000,
+                    work_ms=(work_finished_unix_ns - work_started_unix_ns)
+                    / 1_000_000,
+                    post_work_ms=(
+                        handler_finished_unix_ns - work_finished_unix_ns
+                    )
+                    / 1_000_000,
+                    handler_ms=(
+                        handler_finished_unix_ns - handler_started_unix_ns
+                    )
+                    / 1_000_000,
+                )
             return ProcessResponse(
                 slot_id=request.slot_id,
                 flow_id=request.flow_id,
@@ -367,6 +447,7 @@ class ReplicaRuntime:
                 state_likelihood=likelihood,
                 legacy_signal=state_estimate,
                 legacy_likelihood=likelihood,
+                processor_timing=processor_timing,
             )
         finally:
             async with self._lock:
@@ -386,6 +467,15 @@ def create_app(
     application = FastAPI(title="IBG HTTP Replica", version="0.1.0")
     application.state.runtime = runtime
 
+    @application.middleware("http")
+    async def capture_diagnostic_ingress(http_request, call_next):
+        if (
+            http_request.headers.get(FORWARDING_PATH_DIAGNOSTIC_HEADER)
+            == "1"
+        ):
+            http_request.state.forwarding_path_ingress_unix_ns = time.time_ns()
+        return await call_next(http_request)
+
     @application.get("/health", response_model=HealthResponse)
     async def health():
         return await runtime.health()
@@ -394,9 +484,24 @@ def create_app(
     async def warmup():
         return await runtime.warm_up()
 
-    @application.post("/process", response_model=ProcessResponse)
-    async def process(request: ProcessRequest):
-        return await runtime.process(request)
+    @application.post(
+        "/process",
+        response_model=ProcessResponse,
+        response_model_exclude_none=True,
+    )
+    async def process(request: ProcessRequest, http_request: Request):
+        handler_started_unix_ns = (
+            time.time_ns() if request.forwarding_path_diagnostics else None
+        )
+        return await runtime.process(
+            request,
+            ingress_started_unix_ns=getattr(
+                http_request.state,
+                "forwarding_path_ingress_unix_ns",
+                None,
+            ),
+            handler_started_unix_ns=handler_started_unix_ns,
+        )
 
     return application
 

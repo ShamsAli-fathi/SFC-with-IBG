@@ -1,0 +1,300 @@
+\documentclass[12pt,a4paper]{article}
+
+% Packages for enhanced design
+\usepackage[margin=1in]{geometry}
+\usepackage{fontspec}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage[colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue]{hyperref}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage[table]{xcolor}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{comment}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{pdflscape}
+\usepackage{array}
+\usepackage{ragged2e}
+\usepackage{caption}
+
+\newcounter{textpt}
+\providecommand*{\textptautorefname}{here}
+\definecolor{titleblue}{RGB}{0, 51, 102}
+
+% Customize section headings
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{titleblue}}
+  {\thesection}{1em}{\MakeUppercase}
+\titleformat{\subsection}
+  {\normalfont\large\itshape\color{titleblue}}
+  {\thesubsection}{1em}{}
+\titlespacing*{\section}{0pt}{1em plus 0.5em minus 0.2em}{1.2em}
+\titlespacing*{\subsection}{0pt}{1em plus 0.3em minus 0.1em}{0.8em}
+
+% Fancy headers and footers
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\itshape Report}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% Title page customization
+\makeatletter
+\renewcommand{\maketitle}{
+  \begin{titlepage}
+    \centering
+    \vspace*{2cm}
+    {\color{titleblue}\Huge\bfseries\MakeUppercase{\ Testbed Follow-Up Report}\par}
+    \vspace{1cm}
+    {\Large\ Ali Fathi Vafegh\par}
+    \vspace{0.5cm}
+    \rule{0.5\textwidth}{0.4pt}\par
+    \vspace{1cm}
+    {\large\@date\par}
+    \vfill
+  \end{titlepage}
+}
+\makeatother
+
+\setlist[itemize]{itemsep=0.5em, topsep=0.5em}
+\setlist[enumerate]{itemsep=0.5em, topsep=0.5em}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Purpose and Scope}
+This document is a follow-up to the earlier testbed report. It records the current lightweight Kubernetes implementation, explains the architectural changes since the first report, and distinguishes the intended paper-level design from the implemented path.
+
+Only the ordinary Linux socket/TCP/IP \textbf{Kernel path} is implemented and discussed here. A DPDK/VPP path is next in the planned order, but it is not implemented, evaluated, or claimed in this report. The only decision method evaluated at present is the decoupled \textbf{IBG-Exact} solver.
+
+All current experiments are deliberately small scale: 15 logical flows, three ordered SFC stages, and eight replicas per stage. Larger configurations are not recommended for IBG-Exact because its full continuation game grows combinatorially with the number of flows and replicas.
+
+For the architectural comparison in this report, a route's latency penalty is the sum of selected processing latency and the measured costs of its consecutive selected replica pairs:
+\[
+L_{\mathrm{e2e}}=\sum_{k=1}^{K} Q_k+\sum_{k=1}^{K-1} C_{k,k+1},
+\qquad
+U=\sum_{k=1}^{K}(99-Q_k)-\sum_{k=1}^{K-1}C_{k,k+1}.
+\]
+Here, $Q_k$ is the selected replica's processing latency and $C_{k,k+1}$ is the measured cost of a selected consecutive pair. Pair costs are measured only after placement. They are retained for the reported latency and utility penalty, but they never influence the decoupled solver's selection.
+
+The purpose of this report is to establish a traceable and reproducible Kernel baseline. It is intended to be a shared base architecture on which heuristic and other baseline methods can later be implemented under the same experiment, route, and measurement contracts.
+
+\section{Short Conclusion}
+The current system preserves the scientific control loop through equilibrium: the exact decoupled BR\_EIBG policy, linear utility $u(q)=99-q$, selected-only learning, belief retention of 0.8, one-replica-per-stage placement, no-rejection rule, Jain fairness, and strict equilibrium condition are retained. The controller places flows sequentially, then the already selected routes are exercised concurrently through real Kubernetes Pods.
+
+The most important change since the earlier report is the separation of each replica Pod into a public route forwarder and a private processor. The public forwarder receives and relays only the controller-selected route. The private processor performs the state/load-conditioned service work and supplies the learning record. This keeps forwarding activity outside the processor service path and makes the selected consecutive-pair route costs measurable without allowing them to alter placement.
+
+The result is a real containerized and cluster-based Kernel testbed. A controller Job, flow generator, and replica Pods run in a three-node kind cluster; Kubernetes provides StatefulSets, readiness, DNS, Services, scheduling, ConfigMaps, and restricted service-account discovery. The implementation is intentionally lighter than the paper's eventual telecom-oriented design, but it is a sound base architecture for later baselines and a future heuristic solver.
+
+Further progress should be faster because the common experiment, trace, metric, and validation infrastructure already exists. The principal remaining implementation complication is the separate DPDK/VPP datapath, which requires specialized host and networking preparation beyond the present Kernel baseline.
+
+\begin{tcolorbox}[
+  colback=white,
+  colframe=red!75!black,
+  boxrule=1.2pt,
+  arc=3mm,
+  left=4mm,
+  right=4mm,
+  top=3mm,
+  bottom=3mm
+]
+The 15-flow, three-stage, eight-replica setting is useful for small-scale behavior and reporting, but it is not a large-scale scalability claim. IBG-Exact remains deliberately bounded by its exact continuation-state space. A separately authorized heuristic is the appropriate future route for larger solver studies.
+\end{tcolorbox}
+
+\subsection{Uncertainty in Replica Assessment}
+Replica state is hidden from the controller. For a selected replica with final assigned load $n$, the processing delay is modelled as
+\[
+Q_\theta(n)=\mu_\theta+h_\theta(n,\kappa_\theta)+J_\theta,
+\qquad
+J_\theta=|Z_\theta|,
+\qquad
+Z_\theta\sim\mathcal{N}(0,\sigma_\theta^2).
+\]
+The jitter term is therefore half-normal and nonnegative: it can add delay to the state/load baseline, but it cannot make a replica appear faster by subtracting delay. Its state-dependent scales are 6, 5.25, 4, and 3.25 ms for states 1 through 4, respectively. The controller assesses a replica only from selected-route feedback and its calibrated likelihoods, not from the hidden state itself. Consequently, a single delayed result can temporarily make a normally good replica appear less favourable, especially under load; repeated selected results and the retained belief update progressively correct that assessment. This is intentional: the model represents meaningful but bounded uncertainty, rather than assuming perfect state classification from every individual result.
+
+\section{Side by Side Comparison}
+\begin{tcolorbox}[colback=blue!5!white,colframe=blue!50!black,title=Important Note]
+The table compares the earlier report and design direction with the current Kernel implementation. Current refers only to the implemented small-scale IBG-Exact path; it does not imply that DPDK/VPP or a heuristic baseline has been completed.
+\end{tcolorbox}
+
+\definecolor{HeaderBluetable}{HTML}{1F4E79}
+\definecolor{VeryLightGraytable}{HTML}{F7F9FB}
+\definecolor{AssessmentTinttable}{HTML}{FFF4D6}
+\newcolumntype{Y}{>{\RaggedRight\arraybackslash}X}
+\newcolumntype{A}{>{\RaggedRight\arraybackslash\columncolor{AssessmentTinttable}}X}
+
+\clearpage
+\begin{landscape}
+\begingroup
+  \renewcommand{\arraystretch}{1.22}
+  \setlength{\tabcolsep}{4pt}
+  \rowcolors{2}{VeryLightGraytable}{white}
+  \begin{longtable}{
+      >{\bfseries\RaggedRight\arraybackslash}p{0.18\linewidth}
+      >{\RaggedRight\arraybackslash}p{0.246\linewidth}
+      >{\RaggedRight\arraybackslash}p{0.246\linewidth}
+      >{\RaggedRight\arraybackslash\columncolor{AssessmentTinttable}}p{0.246\linewidth}
+    }
+    \caption{Comparison between the earlier report/design and the current Kernel implementation}
+    \label{tab:earlier-report-vs-current-kernel-implementation} \\
+    \toprule
+    \rowcolor{HeaderBluetable}
+    \color{white}\textbf{Area} &
+    \color{white}\textbf{Earlier report / design} &
+    \color{white}\textbf{Current Kernel implementation} &
+    \color{white}\textbf{Assessment} \\
+    \midrule
+
+    Scope and datapath &
+    Kernel and DPDK/VPP CNFs were both part of the target direction &
+    The Kernel HTTP path is the only implemented path. DPDK/VPP remains a later, separate task &
+    This report is Kernel-only and makes no accelerated-datapath claim \\
+
+    Host and cluster &
+    A lightweight three-node k3s or kind cluster: one control plane and two workers &
+    Ubuntu under WSL2, native Docker Engine, and a three-node kind cluster with one control-plane node and two workers &
+    The intended cluster shape is retained in a reproducible local form \\
+
+    Container implementation &
+    Separate Kernel CNFs, accelerated CNFs, and possible sidecars &
+    One non-root Python image supplies the controller, flow generator, public forwarder, and private processor services &
+    The service implementation is lighter, while the container and Kubernetes boundaries are real \\
+
+    Replica identity &
+    A CNF replica $(\text{stage},\text{replica})$ hosted on a Kubernetes node &
+    A StatefulSet ordinal maps deterministically to the one-based solver replica ID; Pod and node identities are retained in traces &
+    The same logical identity model is implemented concretely \\
+
+    IBG decision policy &
+    An IBG controller was proposed to choose one CNF per stage &
+    The decoupled BR\_EIBG policy solves the sampled one-of-$M$ continuation game exactly, with deterministic lowest-ID tie breaking &
+    The decision concept is now an executable, tested exact policy for small instances \\
+
+    Flow placement &
+    Sequential flows select one replica at each ordered stage &
+    Sequential placement selects one Ready endpoint per stage; the complete route is fixed before traffic begins &
+    Same core SFC choice, with an explicit route-plan boundary \\
+
+    Replica-Pod structure &
+    A CNF was treated as one service/container boundary &
+    Each replica Pod has a public forwarder on port 8080 and a private processor on Pod-local port 8081 &
+    A new separation that isolates route forwarding from private service work \\
+
+    Route execution &
+    Traffic traverses selected CNFs in chain order &
+    The flow generator contacts only the selected first public forwarder; public forwarders relay the preselected route in stage order &
+    Same ordered route semantics with a selected-pair execution boundary \\
+
+    Pair-cost accounting &
+    The design charged communication between consecutive selected CNFs &
+    Exactly $K-1$ selected consecutive forwarder-to-forwarder RPC costs are measured after placement and summed into the route penalty &
+    The intended inter-stage communication penalty is explicit, correlated, and separate from ingress \\
+
+    Learning boundary &
+    Only traversed replicas contribute private performance information &
+    Only selected private processors return the learning record; the controller applies the established belief-update and aggregation rule &
+    The asymmetric selected-only learning boundary is preserved \\
+
+    Control-plane measurement &
+    A monitoring stack and metrics adapter were envisaged &
+    Versioned traces separate discovery, admission, feedback, active controller work, route wait, application payload bytes, and message counts &
+    A lightweight, traceable control-plane baseline is available without an external monitoring stack \\
+
+    Solver-resource measurement &
+    No exact-solver working-memory contract was defined &
+    Opt-in per-slot records capture controller RSS before/during/after a slot and exact-policy memo-cache peak/residual entries &
+    This provides a future like-for-like memory contract for Exact and heuristic policies \\
+
+    Experiment scale and evidence &
+    The design anticipated broader benchmark and baseline studies &
+    Current experiments use 15 flows, three stages, and eight replicas per stage; this is exploratory small-scale evidence &
+    Useful for reporting, not a large-scale or universal validation claim \\
+
+    Future baselines &
+    Heuristic, MILP, learning, and accelerated comparisons were anticipated &
+    The common route, trace, control-plane, and solver-resource contracts are in place; no heuristic or additional baseline is implemented yet &
+    The architecture is prepared for faster follow-on comparisons; DPDK/VPP remains the main integration challenge \\
+
+    \bottomrule
+  \end{longtable}
+\endgroup
+\end{landscape}
+\clearpage
+
+\section{Summary of the Comparison Table}
+\begin{itemize}[leftmargin=*]
+  \item a reproducible three-node kind cluster, non-root runtime image, StatefulSets, stable replica identities, readiness, headless Services, and restricted in-cluster discovery;
+  \item an exact decoupled IBG controller that creates complete routes before traffic, retains selected-only learning and the original belief/equilibrium rules, and keeps pair costs outside route selection;
+  \item a public-forwarder/private-processor replica design that executes and measures selected routes while keeping route forwarding separate from private service work;
+  \item per-run JSONL provenance and versioned control-plane, logical-learning-footprint, forwarding-path, and solver-resource reporting contracts; and
+  \item a clear future boundary: other baseline methods can reuse the current infrastructure, whereas DPDK/VPP requires its own host, interface, lifecycle, and validation work.
+\end{itemize}
+
+Therefore, the repository is a real orchestration and service-to-service Kernel testbed, rather than only a simulation or a collection of scripts.
+
+\section{How Docker, kind, and Kubernetes fit together}
+The lightweight testbed has three related layers. The downward control-plane path discovers Ready replicas, selects one endpoint per stage, and dispatches complete route plans. The data-plane path executes those decisions as ordered HTTP traffic. Selected learning records and correlated route measurements return to the controller, where they are used for belief updates, metrics, and experiment records.
+
+Docker is the local container foundation. It builds the shared runtime image containing the Python code and dependencies for the replica services, flow generator, and controller, and it also runs the kind cluster nodes as Docker containers.
+
+kind sits between Docker and Kubernetes. As Kubernetes in Docker, it creates the local cluster whose nodes are Docker containers. The current setup uses \textbf{one control-plane node} and \textbf{two worker nodes}. From Kubernetes' perspective, these node containers act as cluster machines; from the host's perspective, they remain lightweight local containers. Loading the project image into kind makes it available inside the cluster nodes, so Kubernetes can start Pods without pulling from an external registry.
+
+Kubernetes is the orchestration layer for the experiment workloads. It creates the stage StatefulSets, assigns each replica Pod a stable ordinal identity, exposes replicas through headless Services, runs the flow-generator Deployment, and starts the controller as a Job. It also provides readiness checks, Service DNS, namespace isolation, ConfigMaps for deterministic profiles, and RBAC for read-only Pod discovery.
+
+\begin{tcolorbox}[
+  colback=white,
+  colframe=red!75!black,
+  boxrule=1.2pt,
+  arc=3mm,
+  left=4mm,
+  right=4mm,
+  top=3mm,
+  bottom=3mm
+]
+Together, the layers form a practical stack: Docker provides the image and local node containers; kind turns those containers into a small Kubernetes cluster; Kubernetes schedules and connects the experiment Pods inside that cluster.
+\vspace{0.6cm}
+
+Therefore, the controller discovers Ready replica Pods, the solver chooses one endpoint per stage for each flow, the flow generator invokes the first selected public forwarder, and the forwarders execute the selected route through the private processors. The returned records are correlated with the route and used by the existing IBG learning and reporting path.
+\end{tcolorbox}
+
+\section{Current Measurement and Validation Position}
+The controller records a complete JSONL trace for every experiment. A completed slot includes route placement, beliefs before and after feedback, utility and SLA information, Jain fairness, selected route costs, and controller-boundary timing, payload, and message data. The control-plane records distinguish discovery, admission, feedback, active controller work, and time waiting for the selected route. These are controller-boundary measurements; they are not presented as TCP/IP wire-byte or one-way network measurements.
+
+The current IBG-Exact path has a smaller formal Kernel validation boundary at three flows, three stages, and five replicas per stage. A supported trace at that boundary reached equilibrium, passed its Kernel gate, and replayed with zero mathematical drift. The 15-flow, three-stage, eight-replica configuration used for the present reporting work is intentionally labelled exploratory. It demonstrates the current architecture at a useful small scale, but it does not enlarge the formal exact-solver support claim.
+
+The solver-resource contract makes the exact solver's working footprint visible when enabled. In a 15-flow/8-replica-per-stage exploratory run, each exact stage reached 490,314 memoized continuation states, the controller's maximum recorded RSS was 255.5 MiB, and the maximum incremental working memory was 97.44 MiB; every recorded stage cache had zero entries after disposal. These values are internal controller/solver footprint measurements, not payload size, telemetry volume, container limits, or network traffic. They provide an appropriate future comparison point for an authorized heuristic solver.
+
+\section{Resource Requirements and Future Work}
+The present scale is deliberately bounded because an exact continuation game expands rapidly with flows and replicas. More Pods and concurrent route traffic also increase ordinary Kubernetes resource demand, but the exact solver's state space is the decisive reason not to recommend larger IBG-Exact experiments in the current small-scale environment.
+
+The next steps can reuse the present controller, route, trace, control-plane, and solver-resource infrastructure. This should make implementation of heuristic and other baseline methods substantially faster than building a new testbed for each method. The main exception is DPDK/VPP: it requires a distinct datapath design and host preflight for interfaces, privileges, hugepages, CPU/NUMA placement, lifecycle, readiness, and comparable measurements. It must therefore be implemented and validated separately from this Kernel baseline.
+
+\section{Plots}
+
+\subsection{Belief Evolution}
+The belief plot follows the state posteriors of an Excellent replica, $(1,1)$, and a Good replica, $(1,3)$ across the completed timeslots. Both replicas begin from the same uniform prior and progressively accumulate probability on their respective favourable states. The Excellent-replica posterior rises quickly and remains dominant, while the Good-replica posterior also becomes dominant after a small mid-run fluctuation. At the final recorded timeslot, both selected state posteriors are close to 0.95, whereas the Bad and Degraded alternatives are close to zero. This demonstrates convergence toward a differentiated assessment rather than a fixed or perfectly known initial state; occasional local changes in the curves are consistent with the uncertainty and load sensitivity represented in the selected feedback.
+
+\subsection{Control-Plane Payload Overhead}
+The control-plane payload plot reports mean controller-boundary application payload per slot for IBG-Exact. Kubernetes discovery is the dominant component, selected-route execution telemetry is the next largest component, and the route command itself is comparatively small. The total is therefore primarily a cost of discovering the replica set and receiving the selected-route result, rather than of sending the controller's route plan. The Baseline 1--3 labels are explicitly marked N/A: they indicate comparison positions reserved for future methods and must not be interpreted as zero-payload results. The metric is application payload, not TCP/IP wire bytes.
+
+\subsection{Control-Plane Decision Runtime}
+The runtime plot shows a mean admission/decision time of approximately 7.32 seconds per slot for the current small-scale IBG-Exact configuration. Its error bar shows noticeable run-to-run variation, which is expected because each slot constructs belief-dependent utility grids and solves the exact continuation game before the selected route is dispatched. This is a control-plane decision metric, not a selected-route execution latency. The plot therefore provides a useful future reference for comparing a heuristic policy on the same topology: any later reduction should be interpreted against the same dimensions, profiles, image, and measurement boundary. Baseline 1--3 are unavailable rather than measured zeroes.
+
+\subsection{Jain Fairness}
+Across 21 IBG-Exact runs, Jain's fairness index remains very close to one throughout the completed iterations. The mean curve is almost flat near 0.99, and the light min--max band remains narrow even at its widest point. Thus, within this small-scale experiment, the learned placement behaviour does not produce a substantial imbalance between flows. This result should be read together with the other outcomes: it shows even distribution of the measured utility, not a claim that every flow has identical route, replica state, or latency.
+
+\subsection{SLA Violations}
+The SLA plot presents a five-timeslot moving average of the number of violations. It falls from roughly 8.3 violations in the initial timeslot to zero at the final recorded timeslot, with only a small late-timeslot fluctuation near the floor. The downward trend is consistent with iterative placement and belief refinement selecting more suitable replicas as the experiment progresses. Because the curve is smoothed, it is intended to show the overall trend rather than every individual-timeslot count. It is a violation-count plot, not a latency-in-milliseconds plot.
+
+\subsection{Controller and Solver Memory Footprint}
+The memory plot separates baseline controller RSS from the additional working memory observed while the exact policy is active. Their stacked height represents the controller/solver memory footprint for IBG-Exact, while the separate annotation reports a peak memo-cache size of 490,314 entries. The cache-entry count is intentionally not added to the memory axis because entries and MiB are different units. The plot also shows that cache entries are temporary working state rather than retained stage state: the corresponding trace recorded zero residual entries after every stage cache disposal. As with the control-plane plots, Baseline 1--3 are reserved positions for future methods; a later heuristic can be plotted using the same RSS and incremental-working-memory contract.
+
+\end{document}
