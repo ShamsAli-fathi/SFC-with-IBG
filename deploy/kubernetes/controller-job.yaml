@@ -25,6 +25,10 @@ spec:
           env:
             - name: DATAPATH_MODE
               value: kernel
+            - name: OUTCOME_LATENCY_MODE
+              value: physical-only-v1
+            - name: SOLVER_RESOURCE_DIAGNOSTICS
+              value: "false"
             - name: RUNTIME_IMAGE
               value: ibg-testbed:kernel-phase3
             - name: POD_NAMESPACE

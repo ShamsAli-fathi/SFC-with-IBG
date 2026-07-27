@@ -25,6 +25,20 @@ x-processor-healthcheck: &processor-healthcheck
   timeout: 2s
   retries: 30
 
+x-forwarder-command: &forwarder-command
+  - python3
+  - -m
+  - uvicorn
+  - testbed.route_forwarder:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8080"
+  - --workers
+  - "2"
+  - --timeout-keep-alive
+  - "30"
+
 services:
   stage-1-processor:
     <<: *testbed-service
@@ -91,11 +105,13 @@ services:
 
   stage-1-0:
     <<: *testbed-service
+    command: *forwarder-command
     environment:
       STAGE: "1"
       REPLICA_ID: "1"
       POD_NAME: stage-1-0
       PROCESSOR_URL: http://stage-1-processor:8081
+      FORWARDER_KEEPALIVE_SECONDS: "30"
     depends_on:
       stage-1-processor:
         condition: service_healthy
@@ -103,11 +119,13 @@ services:
 
   stage-2-0:
     <<: *testbed-service
+    command: *forwarder-command
     environment:
       STAGE: "2"
       REPLICA_ID: "1"
       POD_NAME: stage-2-0
       PROCESSOR_URL: http://stage-2-processor:8081
+      FORWARDER_KEEPALIVE_SECONDS: "30"
     depends_on:
       stage-2-processor:
         condition: service_healthy
@@ -115,11 +133,13 @@ services:
 
   stage-3-0:
     <<: *testbed-service
+    command: *forwarder-command
     environment:
       STAGE: "3"
       REPLICA_ID: "1"
       POD_NAME: stage-3-0
       PROCESSOR_URL: http://stage-3-processor:8081
+      FORWARDER_KEEPALIVE_SECONDS: "30"
     depends_on:
       stage-3-processor:
         condition: service_healthy

@@ -11,7 +11,7 @@ SCHEMA_VERSIONS = (
     "forwarding_path_v2",
     "forwarding_path_v3",
 )
-SUMMARY_SCHEMA_VERSION = "forwarding_path_summary_v3"
+SUMMARY_SCHEMA_VERSION = "forwarding_path_summary_v4"
 CLOCK = "unix-epoch-ns"
 COMPONENTS = (
     "source_to_target_handler_ms",
@@ -49,6 +49,18 @@ V3_CLIENT_COMPONENTS = (
     "source_http_response_close_ms",
     "source_http_application_resume_ms",
 )
+FORWARDER_RUNTIME_LAG_COMPONENTS = (
+    "source_event_loop_lag_max_ms",
+    "source_event_loop_lag_p95_ms",
+    "target_event_loop_lag_max_ms",
+    "target_event_loop_lag_p95_ms",
+)
+FORWARDER_RUNTIME_COUNT_COMPONENTS = (
+    "source_active_route_handlers_at_start",
+    "source_downstream_inflight_at_start",
+    "target_active_route_handlers_at_start",
+)
+WORKER_COMPONENTS = COMPONENTS + V2_PATH_COMPONENTS + V3_CLIENT_COMPONENTS
 
 
 def _distribution(values):
@@ -246,6 +258,70 @@ def _validate_http_client_timing(timing):
         raise ValueError("source HTTP client timing has invalid connect duration")
 
 
+def _validate_event_loop_lag(timing, label):
+    if not isinstance(timing, dict):
+        raise ValueError(f"{label} must be an object")
+    if timing.get("schema_version") != "event_loop_lag_v1":
+        raise ValueError(f"{label} has unsupported schema")
+    if timing.get("clock") != "monotonic-duration":
+        raise ValueError(f"{label} has unsupported clock")
+    sample_count = timing.get("sample_count")
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count < 0:
+        raise ValueError(f"{label} has invalid sample count")
+    _require_nonnegative(timing, ("sample_period_ms",), label)
+    maximum = timing.get("max_lag_ms")
+    p95 = timing.get("p95_lag_ms")
+    if sample_count == 0:
+        if maximum is not None or p95 is not None:
+            raise ValueError(f"{label} has lag values without samples")
+        return
+    if any(
+        not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+        for value in (maximum, p95)
+    ):
+        raise ValueError(f"{label} has invalid lag values")
+    if p95 > maximum:
+        raise ValueError(f"{label} has p95 above maximum")
+
+
+def _validate_runtime_handler(timing, label):
+    if not isinstance(timing, dict):
+        raise ValueError(f"{label} must be an object")
+    active = timing.get("active_route_handlers_at_start")
+    if isinstance(active, bool) or not isinstance(active, int) or active < 1:
+        raise ValueError(f"{label} has invalid active handler count")
+    _validate_event_loop_lag(timing.get("event_loop_lag"), f"{label} event-loop lag")
+
+
+def _validate_forwarder_runtime(timing, handler):
+    if not isinstance(timing, dict):
+        raise ValueError("forwarder runtime timing must be an object")
+    if timing.get("schema_version") != "forwarder_runtime_v1":
+        raise ValueError("unsupported forwarder runtime timing schema")
+    source = timing.get("source_client")
+    if not isinstance(source, dict):
+        raise ValueError("forwarder runtime source client must be an object")
+    _validate_runtime_handler(source, "forwarder runtime source client")
+    downstream = source.get("downstream_inflight_at_start")
+    if isinstance(downstream, bool) or not isinstance(downstream, int) or downstream < 1:
+        raise ValueError("forwarder runtime has invalid downstream inflight count")
+    socket_available = source.get("socket_metadata_available")
+    socket_port = source.get("socket_local_port")
+    if not isinstance(socket_available, bool):
+        raise ValueError("forwarder runtime has invalid socket availability")
+    if socket_available:
+        if isinstance(socket_port, bool) or not isinstance(socket_port, int) or not 1 <= socket_port <= 65535:
+            raise ValueError("forwarder runtime has invalid socket local port")
+    elif socket_port is not None:
+        raise ValueError("forwarder runtime has unexpected socket local port")
+    target = timing.get("target_handler")
+    _validate_runtime_handler(target, "forwarder runtime target handler")
+    if handler.get("forwarder_runtime") != target:
+        raise ValueError("forwarder runtime target handler is inconsistent")
+
+
 def _validate_timing(timing):
     if not isinstance(timing, dict):
         raise ValueError("forwarding path timing must be an object")
@@ -310,6 +386,18 @@ def _validate_timing(timing):
         < timing.get("target_handler_finished_unix_ns")
     ):
         raise ValueError("forwarding path v3 client timing is inconsistent")
+    source_worker = timing.get("source_worker_process_id")
+    target_worker = timing.get("target_worker_process_id")
+    handler_worker = handler.get("worker_process_id")
+    identity_values = (source_worker, target_worker, handler_worker)
+    if any(value is not None for value in identity_values):
+        if any(not isinstance(value, int) or value < 1 for value in identity_values):
+            raise ValueError("forwarding path v3 has incomplete worker identity")
+        if target_worker != handler_worker:
+            raise ValueError("forwarding path v3 target worker identity is inconsistent")
+    runtime = timing.get("forwarder_runtime")
+    if runtime is not None:
+        _validate_forwarder_runtime(runtime, handler)
 
 
 def _v2_handler_components(timing):
@@ -381,6 +469,44 @@ def _v3_client_components(timing):
     }
 
 
+def _forwarder_runtime_components(timing):
+    runtime = timing["forwarder_runtime"]
+    source = runtime["source_client"]
+    target = runtime["target_handler"]
+    source_lag = source["event_loop_lag"]
+    target_lag = target["event_loop_lag"]
+    return {
+        "source_active_route_handlers_at_start": source[
+            "active_route_handlers_at_start"
+        ],
+        "source_downstream_inflight_at_start": source[
+            "downstream_inflight_at_start"
+        ],
+        "target_active_route_handlers_at_start": target[
+            "active_route_handlers_at_start"
+        ],
+        "source_event_loop_lag_max_ms": source_lag.get("max_lag_ms"),
+        "source_event_loop_lag_p95_ms": source_lag.get("p95_lag_ms"),
+        "target_event_loop_lag_max_ms": target_lag.get("max_lag_ms"),
+        "target_event_loop_lag_p95_ms": target_lag.get("p95_lag_ms"),
+    }
+
+
+def _worker_group():
+    return {
+        "link_cost_ms": [],
+        "components_ms": {component: [] for component in WORKER_COMPONENTS},
+    }
+
+
+def _worker_label(pod_name, process_id, direction):
+    if not isinstance(pod_name, str) or not pod_name:
+        raise ValueError(f"worker-identified {direction} link has invalid pod name")
+    if not isinstance(process_id, int) or process_id < 1:
+        raise ValueError(f"worker-identified {direction} link has invalid process ID")
+    return f"{pod_name}:pid-{process_id}"
+
+
 def summarize_trace(path):
     events = _read_events(path)
     started = [event for event in events if event.get("event") == "run_started"]
@@ -402,6 +528,20 @@ def summarize_trace(path):
     }
     observed_schema_versions = set()
     pairs = {}
+    worker_processes = {"source": {}, "target": {}}
+    worker_identity_links = 0
+    runtime_values = {
+        component: []
+        for component in (
+            FORWARDER_RUNTIME_COUNT_COMPONENTS
+            + FORWARDER_RUNTIME_LAG_COMPONENTS
+        )
+    }
+    runtime_links = 0
+    runtime_source_sampled_links = 0
+    runtime_target_sampled_links = 0
+    runtime_socket_metadata_links = 0
+    runtime_socket_groups = {}
     for event in iterations:
         flows = ((event.get("summary") or {}).get("traffic") or {}).get("flows", [])
         for flow in flows:
@@ -445,6 +585,96 @@ def summarize_trace(path):
                             value = float(value)
                             boundary_values[component].append(value)
                             pair_values[component].append(value)
+                    source_worker = timing.get("source_worker_process_id")
+                    target_worker = timing.get("target_worker_process_id")
+                    if source_worker is not None:
+                        link_cost = link.get("link_cost_ms")
+                        if (
+                            not isinstance(link_cost, (int, float))
+                            or not math.isfinite(link_cost)
+                            or link_cost < 0
+                        ):
+                            raise ValueError(
+                                "worker-identified link has invalid link_cost_ms"
+                            )
+                        worker_identity_links += 1
+                        component_values = {
+                            **{
+                                component: float(timing[component])
+                                for component in COMPONENTS + V2_PATH_COMPONENTS
+                            },
+                            **{
+                                component: float(value)
+                                for component, value in _v3_client_components(
+                                    timing
+                                ).items()
+                                if value is not None
+                            },
+                        }
+                        for direction, pod_name, process_id in (
+                            (
+                                "source",
+                                link.get("source_pod_name"),
+                                source_worker,
+                            ),
+                            (
+                                "target",
+                                link.get("target_pod_name"),
+                                target_worker,
+                            ),
+                        ):
+                            label = _worker_label(pod_name, process_id, direction)
+                            group = worker_processes[direction].setdefault(
+                                label, _worker_group()
+                            )
+                            group["link_cost_ms"].append(float(link_cost))
+                            for component, value in component_values.items():
+                                group["components_ms"][component].append(value)
+                    runtime = timing.get("forwarder_runtime")
+                    if runtime is not None:
+                        runtime_links += 1
+                        runtime_components = _forwarder_runtime_components(timing)
+                        for component in FORWARDER_RUNTIME_COUNT_COMPONENTS:
+                            runtime_values[component].append(
+                                float(runtime_components[component])
+                            )
+                        for component in FORWARDER_RUNTIME_LAG_COMPONENTS:
+                            value = runtime_components[component]
+                            if value is not None:
+                                runtime_values[component].append(float(value))
+                        source_runtime = runtime["source_client"]
+                        target_runtime = runtime["target_handler"]
+                        if source_runtime["event_loop_lag"]["sample_count"] > 0:
+                            runtime_source_sampled_links += 1
+                        if target_runtime["event_loop_lag"]["sample_count"] > 0:
+                            runtime_target_sampled_links += 1
+                        if source_runtime["socket_metadata_available"]:
+                            runtime_socket_metadata_links += 1
+                            port = source_runtime["socket_local_port"]
+                            label = (
+                                f"{_worker_label(link.get('source_pod_name'), source_worker, 'source')}"
+                                f":port-{port}"
+                            )
+                            group = runtime_socket_groups.setdefault(
+                                label,
+                                {
+                                    "link_cost_ms": [],
+                                    "source_http_pool_wait_ms": [],
+                                },
+                            )
+                            link_cost = link.get("link_cost_ms")
+                            if (
+                                not isinstance(link_cost, (int, float))
+                                or not math.isfinite(link_cost)
+                                or link_cost < 0
+                            ):
+                                raise ValueError(
+                                    "socket-identified link has invalid link_cost_ms"
+                                )
+                            group["link_cost_ms"].append(float(link_cost))
+                            group["source_http_pool_wait_ms"].append(
+                                float(timing["source_http_client_timing"]["pool_wait_ms"])
+                            )
     if not values[COMPONENTS[0]]:
         raise ValueError(f"trace has no selected pair timings: {path}")
     return {
@@ -477,12 +707,57 @@ def summarize_trace(path):
             }
             for pair, component_values in sorted(pairs.items())
         },
+        "worker_processes": {
+            "identity_links": worker_identity_links,
+            **{
+                direction: {
+                    label: {
+                        "links": len(values["link_cost_ms"]),
+                        "link_cost_ms": _distribution(values["link_cost_ms"]),
+                        "components_ms": {
+                            component: _distribution(component_values)
+                            for component, component_values in values[
+                                "components_ms"
+                            ].items()
+                        },
+                    }
+                    for label, values in sorted(groups.items())
+                }
+                for direction, groups in worker_processes.items()
+            },
+        },
+        "forwarder_runtime": {
+            "links": runtime_links,
+            "source_event_loop_sampled_links": runtime_source_sampled_links,
+            "target_event_loop_sampled_links": runtime_target_sampled_links,
+            "socket_metadata_links": runtime_socket_metadata_links,
+            "values": {
+                component: _distribution(runtime_values[component])
+                for component in (
+                    FORWARDER_RUNTIME_COUNT_COMPONENTS
+                    + FORWARDER_RUNTIME_LAG_COMPONENTS
+                )
+            },
+            "source_sockets": {
+                label: {
+                    "links": len(values["link_cost_ms"]),
+                    "link_cost_ms": _distribution(values["link_cost_ms"]),
+                    "source_http_pool_wait_ms": _distribution(
+                        values["source_http_pool_wait_ms"]
+                    ),
+                }
+                for label, values in sorted(runtime_socket_groups.items())
+            },
+        },
     }
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Validate and summarize forwarding_path_v1/v2/v3 trace timing."
+        description=(
+            "Validate and summarize forwarding_path_v1/v2/v3 timing and "
+            "additive forwarder-runtime diagnostics."
+        )
     )
     parser.add_argument("traces", nargs="+", type=Path)
     args = parser.parse_args(argv)

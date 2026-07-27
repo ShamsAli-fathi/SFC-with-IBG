@@ -13,6 +13,7 @@ from testbed.validation import (
     compare_backend_summaries,
     run_controlled_simulation,
 )
+from IBG.outcome_latency import PHYSICAL_PLUS_PAIR_OUTCOME_LATENCY_MODE
 
 
 RESULT_PREFIX = "PHASE6_RESULT="
@@ -40,6 +41,12 @@ def build_report(kubernetes_results, profiles):
             num_of_stages=configuration["stages"],
             num_of_replicas=configuration["replicas_per_stage"],
             num_of_flows=configuration["flows"],
+            # Historical controller records predate the explicit mode and used
+            # physical-plus-pair outcomes; current records carry their mode.
+            outcome_latency_mode=kubernetes.get(
+                "outcome_latency_mode",
+                PHYSICAL_PLUS_PAIR_OUTCOME_LATENCY_MODE,
+            ),
         )
         comparisons.append(compare_backend_summaries(simulation, kubernetes))
 

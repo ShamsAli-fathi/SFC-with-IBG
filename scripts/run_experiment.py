@@ -21,6 +21,10 @@ from IBG.learning_mode import (
     LEARNING_SIGNAL_MODES,
     SEPARATED_LEARNING_SIGNAL_MODE,
 )
+from IBG.outcome_latency import (
+    DEFAULT_OUTCOME_LATENCY_MODE,
+    OUTCOME_LATENCY_MODES,
+)
 
 
 IMAGE = "ibg-testbed:kernel-phase3"
@@ -34,6 +38,11 @@ CSV_METRICS = {
     "aggregate_utility.csv": "aggregate_utility_total",
     "realized_end_to_end_utility.csv": "realized_utility_total",
     "jain_index.csv": "jain_fairness",
+}
+OUTCOME_CSV_METRICS = {
+    "realized_utility.csv": "realized_utility_total",
+    "physical_processing_utility.csv": "physical_utility_total",
+    "realized_end_to_end_utility.csv": "end_to_end_utility_total",
 }
 LEARNING_SIGNAL_CSV = "logical_learning_footprint.csv"
 
@@ -253,7 +262,10 @@ def start_experiment_job(
     num_of_flows,
     environment_metadata=None,
     learning_signal_mode=SEPARATED_LEARNING_SIGNAL_MODE,
+    outcome_latency_mode=DEFAULT_OUTCOME_LATENCY_MODE,
     forwarder_cgroup_diagnostics=False,
+    forwarding_path_diagnostics=False,
+    memory_diagnostics=False,
 ):
     rendered = run(
         [
@@ -279,10 +291,21 @@ def start_experiment_job(
     set_env(container, "NUM_FLOWS", num_of_flows)
     set_env(container, "DATAPATH_MODE", DATAPATH_MODE)
     set_env(container, "LEARNING_SIGNAL_MODE", learning_signal_mode)
+    set_env(container, "OUTCOME_LATENCY_MODE", outcome_latency_mode)
     set_env(
         container,
         "FORWARDER_CGROUP_DIAGNOSTICS",
         str(bool(forwarder_cgroup_diagnostics)).lower(),
+    )
+    set_env(
+        container,
+        "FORWARDING_PATH_DIAGNOSTICS",
+        str(bool(forwarding_path_diagnostics)).lower(),
+    )
+    set_env(
+        container,
+        "SOLVER_RESOURCE_DIAGNOSTICS",
+        str(bool(memory_diagnostics)).lower(),
     )
     set_env(container, "RUNTIME_IMAGE", IMAGE)
     set_env(
@@ -646,8 +669,15 @@ def export_legacy_csv(trace_path, output_dir, run_id):
     if run_started is None or not iterations or run_completed is None:
         raise ValueError("trace does not contain a complete experiment run")
 
+    metrics = dict(CSV_METRICS)
+    if all(
+        all(metric_name in event["summary"]["metrics"] for event in iterations)
+        for metric_name in OUTCOME_CSV_METRICS.values()
+    ):
+        metrics.update(OUTCOME_CSV_METRICS)
+
     output_dir.mkdir(parents=True, exist_ok=True)
-    for filename, metric_name in CSV_METRICS.items():
+    for filename, metric_name in metrics.items():
         _append_metric_column(
             output_dir / filename,
             run_id,
@@ -667,7 +697,7 @@ def export_legacy_csv(trace_path, output_dir, run_id):
     )
     filenames = [
         output_dir / filename
-        for filename in (*CSV_METRICS, "replica_results.csv")
+        for filename in (*metrics, "replica_results.csv")
     ]
     if learning_signal_values is not None:
         filenames.append(output_dir / LEARNING_SIGNAL_CSV)
@@ -690,7 +720,10 @@ def run_experiment_series(args, context, environment_metadata):
             num_of_flows=args.num_of_flows,
             environment_metadata=environment_metadata,
             learning_signal_mode=args.learning_signal_mode,
+            outcome_latency_mode=args.outcome_latency_mode,
             forwarder_cgroup_diagnostics=args.forwarder_cgroup_diagnostics,
+            forwarding_path_diagnostics=args.forwarding_path_diagnostics,
+            memory_diagnostics=bool(args.memory),
         )
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         identifier = run_identifier(timestamp, run_number, args.num_of_runs)
@@ -764,11 +797,38 @@ def parse_args(argv=None):
         ),
     )
     parser.add_argument(
+        "--outcome-latency-mode",
+        choices=sorted(OUTCOME_LATENCY_MODES),
+        default=DEFAULT_OUTCOME_LATENCY_MODE,
+        help=(
+            "latency basis for reported realized utility and SLA; raw physical "
+            "and end-to-end values remain in the trace"
+        ),
+    )
+    parser.add_argument(
+        "--forwarding-path-diagnostics",
+        action="store_true",
+        help=(
+            "record shared-clock timings around each selected "
+            "forwarder-to-forwarder RPC"
+        ),
+    )
+    parser.add_argument(
         "--runs",
         dest="num_of_runs",
         type=int,
         default=1,
         help="number of independent experiment runs to execute",
+    )
+    parser.add_argument(
+        "--memory",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help=(
+            "record solver_resource_v1 controller RSS and exact memo-cache "
+            "measurements (1=enabled, 0=disabled)"
+        ),
     )
     parser.add_argument("--cluster", default="ibg")
     parser.add_argument("--timeout", type=int, default=600)
@@ -788,8 +848,9 @@ def parse_args(argv=None):
         choices=(0, 1),
         default=0,
         help=(
-            "write the five legacy CSV reports, realized end-to-end utility, "
-            "and (when recorded) logical learning footprint report to "
+            "write the five legacy CSV reports, active realized utility, "
+            "physical and raw end-to-end utility references, and (when "
+            "recorded) logical learning footprint report to "
             f"{CSV_OUTPUT_DIR} (1=enabled, 0=disabled)"
         ),
     )
@@ -814,7 +875,10 @@ def main():
         f"flows={args.num_of_flows}, stages={args.num_of_stages}, "
         f"replicas/stage={args.num_of_replicas}, runs={args.num_of_runs}, "
         f"learning-signal={args.learning_signal_mode}, "
-        f"forwarder-cgroup-diagnostics={args.forwarder_cgroup_diagnostics}"
+        f"outcome-latency={args.outcome_latency_mode}, "
+        f"forwarder-cgroup-diagnostics={args.forwarder_cgroup_diagnostics}, "
+        f"forwarding-path-diagnostics={args.forwarding_path_diagnostics}"
+        f", memory={args.memory}"
     )
     base_profiles = load_profiles(ROOT / "deploy/kubernetes/profiles.json")
     profiles = expand_profiles(

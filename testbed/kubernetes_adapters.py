@@ -16,7 +16,7 @@ from learning_mode import (
 )
 from ports import AdapterBundle, Observation, StageExecution
 from simulation_adapters import NullResultSink
-from testbed.flow_generator import RunSlotResponse
+from testbed.flow_generator import RunSlotResponse, _has_complete_forwarding_path_v3
 from testbed.profiles import require_profile
 
 
@@ -256,14 +256,8 @@ class KubernetesSlotTrafficExecutor:
                     "flow generator omitted requested forwarder cgroup diagnostics"
                 )
             if self.forwarding_path_diagnostics and any(
-                link.forwarding_path is None
-                or link.forwarding_path.schema_version != "forwarding_path_v3"
-                or link.forwarding_path.target_handler_timing is None
-                or link.forwarding_path.source_http_client_timing is None
-                or link.forwarding_path.source_http_client_timing.schema_version
-                != "http_client_path_v2"
+                not _has_complete_forwarding_path_v3(flow.links)
                 for flow in self.telemetry.flows
-                for link in flow.links
             ):
                 raise RuntimeError(
                     "flow generator omitted requested forwarding path v3 diagnostics"

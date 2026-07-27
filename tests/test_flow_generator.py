@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections import Counter, defaultdict
+from types import SimpleNamespace
 
 import httpx
 from httpx import ASGITransport, AsyncClient, MockTransport, Request, Response
@@ -13,8 +14,49 @@ from testbed.flow_generator import (
     FlowGeneratorConfig,
     RunSlotResponse,
     RunSlotRequest,
+    _has_complete_forwarding_path_v3,
     create_app,
 )
+
+
+def _diagnostic_link(source_worker_process_id, target_worker_process_id):
+    target_runtime = SimpleNamespace()
+    target_handler = SimpleNamespace(
+        worker_process_id=target_worker_process_id,
+        forwarder_runtime=target_runtime,
+    )
+    return SimpleNamespace(
+        forwarding_path=SimpleNamespace(
+            schema_version="forwarding_path_v3",
+            source_worker_process_id=source_worker_process_id,
+            target_worker_process_id=target_worker_process_id,
+            target_handler_timing=target_handler,
+            source_http_client_timing=SimpleNamespace(
+                schema_version="http_client_path_v2"
+            ),
+            forwarder_runtime=SimpleNamespace(
+                schema_version="forwarder_runtime_v1",
+                target_handler=target_runtime,
+            ),
+        )
+    )
+
+
+def test_forwarding_path_v3_requires_source_worker_handler_chain():
+    first = _diagnostic_link(101, 202)
+    second = _diagnostic_link(202, 303)
+    initial_handler = SimpleNamespace(worker_process_id=101)
+
+    assert _has_complete_forwarding_path_v3(
+        [first, second], initial_handler
+    )
+    assert _has_complete_forwarding_path_v3([first, second])
+
+    second.forwarding_path.source_worker_process_id = 404
+    assert not _has_complete_forwarding_path_v3(
+        [first, second], initial_handler
+    )
+    assert not _has_complete_forwarding_path_v3([first, second])
 
 
 def route(flow_id, replica_by_stage=None, stages=(1, 2, 3)):

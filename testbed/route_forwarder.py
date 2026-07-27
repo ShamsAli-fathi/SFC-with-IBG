@@ -1,6 +1,10 @@
+from __future__ import annotations
+
+import asyncio
 import os
 import re
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from collections.abc import Mapping
@@ -114,6 +118,10 @@ class ForwarderHandlerTiming(BaseModel):
 
     schema_version: str
     clock: str
+    # This PID is meaningful only with the accompanying Pod identity.  It is
+    # opt-in diagnostic metadata so a two-worker public forwarder can be
+    # correlated with an individual request without changing its timing.
+    worker_process_id: int | None = Field(default=None, ge=1)
     started_unix_ns: int = Field(ge=1)
     finished_unix_ns: int = Field(ge=1)
     elapsed_ms: float = Field(ge=0)
@@ -141,6 +149,58 @@ class ForwarderHandlerTiming(BaseModel):
     downstream_round_trip_ms: float | None = Field(default=None, ge=0)
     completion_ms: float | None = Field(default=None, ge=0)
     processor_timing: ProcessorPathTiming | None = None
+    forwarder_runtime: ForwarderRuntimeHandlerTiming | None = None
+
+
+class EventLoopLagTiming(BaseModel):
+    """Bounded scheduler-delay samples from one public-forwarder worker."""
+
+    schema_version: str
+    clock: str
+    sample_period_ms: float = Field(gt=0)
+    sample_count: int = Field(ge=0)
+    max_lag_ms: float | None = Field(default=None, ge=0)
+    p95_lag_ms: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_sample_summary(self):
+        has_samples = self.sample_count > 0
+        if has_samples != (self.max_lag_ms is not None):
+            raise ValueError("event-loop lag max must match sample count")
+        if has_samples != (self.p95_lag_ms is not None):
+            raise ValueError("event-loop lag p95 must match sample count")
+        return self
+
+
+class ForwarderRuntimeHandlerTiming(BaseModel):
+    """Diagnostic-only public-worker state over one handler window."""
+
+    active_route_handlers_at_start: int = Field(ge=1)
+    event_loop_lag: EventLoopLagTiming
+
+
+class ForwarderRuntimeClientTiming(BaseModel):
+    """Diagnostic-only source client state over one selected RPC."""
+
+    active_route_handlers_at_start: int = Field(ge=1)
+    downstream_inflight_at_start: int = Field(ge=1)
+    event_loop_lag: EventLoopLagTiming
+    socket_metadata_available: bool
+    socket_local_port: int | None = Field(default=None, ge=1, le=65535)
+
+    @model_validator(mode="after")
+    def validate_socket_metadata(self):
+        if self.socket_metadata_available != (self.socket_local_port is not None):
+            raise ValueError("socket metadata availability must match local port")
+        return self
+
+
+class ForwarderRuntimeTiming(BaseModel):
+    """Additive, opt-in runtime diagnostics for a selected pair RPC."""
+
+    schema_version: str
+    source_client: ForwarderRuntimeClientTiming
+    target_handler: ForwarderRuntimeHandlerTiming
 
 
 class HttpClientPathTiming(BaseModel):
@@ -188,6 +248,8 @@ class ForwardingPathTiming(BaseModel):
     target_handler_ms: float = Field(ge=0)
     target_to_source_response_ms: float = Field(ge=0)
     source_handler_started_unix_ns: int | None = Field(default=None, ge=1)
+    source_worker_process_id: int | None = Field(default=None, ge=1)
+    target_worker_process_id: int | None = Field(default=None, ge=1)
     source_local_processor_response_received_unix_ns: int | None = Field(
         default=None,
         ge=1,
@@ -201,6 +263,7 @@ class ForwardingPathTiming(BaseModel):
     target_ingress_to_handler_ms: float | None = Field(default=None, ge=0)
     target_handler_timing: ForwarderHandlerTiming | None = None
     source_http_client_timing: HttpClientPathTiming | None = None
+    forwarder_runtime: ForwarderRuntimeTiming | None = None
 
 
 class PairwiseLinkTelemetry(BaseModel):
@@ -381,6 +444,79 @@ class HttpClientTraceRecorder:
         )
 
 
+class EventLoopLagTracker:
+    """Sample one worker's event-loop scheduling lag only while diagnostics run."""
+
+    SAMPLE_PERIOD_SECONDS = 0.005
+    MAX_SAMPLES = 4_096
+
+    def __init__(self):
+        self._active_windows = 0
+        self._samples = deque(maxlen=self.MAX_SAMPLES)
+        self._handle = None
+
+    def start_window(self):
+        self._active_windows += 1
+        if self._handle is None:
+            loop = asyncio.get_running_loop()
+            self._schedule(loop, loop.time() + self.SAMPLE_PERIOD_SECONDS)
+
+    def finish_window(self):
+        if self._active_windows < 1:
+            raise RouteForwardingError("event-loop diagnostic window underflow")
+        self._active_windows -= 1
+        if self._active_windows == 0 and self._handle is not None:
+            self._handle.cancel()
+            self._handle = None
+
+    def _schedule(self, loop, due_loop_time):
+        self._handle = loop.call_at(due_loop_time, self._record, loop, due_loop_time)
+
+    def _record(self, loop, due_loop_time):
+        self._handle = None
+        actual_loop_time = loop.time()
+        actual_unix_ns = time.time_ns()
+        lag_seconds = max(0.0, actual_loop_time - due_loop_time)
+        due_unix_ns = actual_unix_ns - round(lag_seconds * 1_000_000_000)
+        self._samples.append((due_unix_ns, actual_unix_ns, lag_seconds * 1000))
+        if self._active_windows > 0:
+            next_due = max(
+                due_loop_time + self.SAMPLE_PERIOD_SECONDS,
+                actual_loop_time + self.SAMPLE_PERIOD_SECONDS,
+            )
+            self._schedule(loop, next_due)
+
+    def summarize_window(self, started_unix_ns, finished_unix_ns):
+        if (
+            not isinstance(started_unix_ns, int)
+            or not isinstance(finished_unix_ns, int)
+            or started_unix_ns < 1
+            or finished_unix_ns < started_unix_ns
+        ):
+            raise RouteForwardingError("invalid event-loop diagnostic window")
+        lags = sorted(
+            lag_ms
+            for due_unix_ns, observed_unix_ns, lag_ms in self._samples
+            if due_unix_ns <= finished_unix_ns
+            and observed_unix_ns >= started_unix_ns
+        )
+        if not lags:
+            return EventLoopLagTiming(
+                schema_version="event_loop_lag_v1",
+                clock="monotonic-duration",
+                sample_period_ms=self.SAMPLE_PERIOD_SECONDS * 1000,
+                sample_count=0,
+            )
+        return EventLoopLagTiming(
+            schema_version="event_loop_lag_v1",
+            clock="monotonic-duration",
+            sample_period_ms=self.SAMPLE_PERIOD_SECONDS * 1000,
+            sample_count=len(lags),
+            max_lag_ms=lags[-1],
+            p95_lag_ms=lags[round((len(lags) - 1) * 0.95)],
+        )
+
+
 CGROUP_CPU_STAT_PATH = Path("/sys/fs/cgroup/cpu.stat")
 CGROUP_CPU_MAX_PATH = Path("/sys/fs/cgroup/cpu.max")
 CGROUP_CPU_WEIGHT_PATH = Path("/sys/fs/cgroup/cpu.weight")
@@ -475,6 +611,9 @@ class ReplicaRouteForwarder:
             ),
         )
         self.cgroup_reader = cgroup_reader or read_forwarder_cgroup_snapshot
+        self._event_loop_lag_tracker = EventLoopLagTracker()
+        self._diagnostic_active_route_handlers = 0
+        self._diagnostic_downstream_requests = 0
 
     async def _request_processor(self, method, endpoint, **kwargs):
         return await self.processor_client.request(method, endpoint, **kwargs)
@@ -495,6 +634,19 @@ class ReplicaRouteForwarder:
             raise RouteForwardingError(
                 "local processor returned mismatched replica identity"
             )
+
+    def _downstream_socket_metadata(self, response):
+        """Return an opaque local TCP port when the current HTTPX backend exposes it."""
+        try:
+            stream = response.extensions.get("network_stream")
+            socket = stream.get_extra_info("socket")
+            address = socket.getsockname()
+            port = address[1]
+        except (AttributeError, IndexError, OSError, TypeError, ValueError):
+            return False, None
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            return False, None
+        return True, port
 
     async def health(self):
         endpoint = f"{self.config.processor_url}/health"
@@ -587,6 +739,32 @@ class ReplicaRouteForwarder:
         *,
         ingress_started_unix_ns: int | None = None,
     ):
+        if not request.forwarding_path_diagnostics:
+            return await self._process_route_impl(
+                request,
+                ingress_started_unix_ns=ingress_started_unix_ns,
+                diagnostic_active_route_handlers=None,
+            )
+        self._diagnostic_active_route_handlers += 1
+        diagnostic_active_route_handlers = self._diagnostic_active_route_handlers
+        self._event_loop_lag_tracker.start_window()
+        try:
+            return await self._process_route_impl(
+                request,
+                ingress_started_unix_ns=ingress_started_unix_ns,
+                diagnostic_active_route_handlers=diagnostic_active_route_handlers,
+            )
+        finally:
+            self._event_loop_lag_tracker.finish_window()
+            self._diagnostic_active_route_handlers -= 1
+
+    async def _process_route_impl(
+        self,
+        request: RouteProcessRequest,
+        *,
+        ingress_started_unix_ns: int | None = None,
+        diagnostic_active_route_handlers: int | None,
+    ):
         if request.datapath_mode != KERNEL_DATAPATH_MODE:
             raise RouteForwardingError(
                 f"unsupported forwarding mode {request.datapath_mode!r}"
@@ -603,6 +781,9 @@ class ReplicaRouteForwarder:
         handler_started_unix_ns = (
             time.time_ns() if request.forwarding_path_diagnostics else None
         )
+        worker_process_id = (
+            os.getpid() if request.forwarding_path_diagnostics else None
+        )
         if request.forwarding_path_diagnostics:
             ingress_started_unix_ns = (
                 ingress_started_unix_ns or handler_started_unix_ns
@@ -610,9 +791,15 @@ class ReplicaRouteForwarder:
             if (
                 handler_started_unix_ns is None
                 or ingress_started_unix_ns is None
+                or diagnostic_active_route_handlers is None
+                or diagnostic_active_route_handlers < 1
                 or ingress_started_unix_ns > handler_started_unix_ns
             ):
                 raise RouteForwardingError("invalid forwarder ingress timing")
+        elif diagnostic_active_route_handlers is not None:
+            raise RouteForwardingError(
+                "forwarder runtime diagnostics require forwarding path diagnostics"
+            )
         (
             local,
             local_processor_request_started_unix_ns,
@@ -622,6 +809,9 @@ class ReplicaRouteForwarder:
         links = []
         downstream_request_started_unix_ns = None
         downstream_response_received_unix_ns = None
+        source_downstream_inflight_at_start = None
+        source_socket_metadata_available = None
+        source_socket_local_port = None
 
         if request.remaining_hops:
             next_hop = request.remaining_hops[0]
@@ -643,6 +833,11 @@ class ReplicaRouteForwarder:
                 else None
             )
             downstream_request_started_unix_ns = source_request_started_unix_ns
+            if request.forwarding_path_diagnostics:
+                self._diagnostic_downstream_requests += 1
+                source_downstream_inflight_at_start = (
+                    self._diagnostic_downstream_requests
+                )
             try:
                 response = await self._request_downstream(
                     "POST",
@@ -669,12 +864,20 @@ class ReplicaRouteForwarder:
                     ),
                 )
                 response.raise_for_status()
+                if request.forwarding_path_diagnostics:
+                    (
+                        source_socket_metadata_available,
+                        source_socket_local_port,
+                    ) = self._downstream_socket_metadata(response)
                 downstream = RouteProcessResponse.model_validate(response.json())
             except (httpx.HTTPError, ValidationError, ValueError) as error:
                 raise RouteForwardingError(
                     f"flow {request.flow_id} stage {next_hop.stage} "
                     f"forwarding failed: {type(error).__name__}: {error!r}"
                 ) from error
+            finally:
+                if request.forwarding_path_diagnostics:
+                    self._diagnostic_downstream_requests -= 1
             edge_request_latency_ms = (
                 time.perf_counter() - edge_started_at
             ) * 1000
@@ -714,9 +917,13 @@ class ReplicaRouteForwarder:
                     or handler_timing is None
                     or handler_timing.schema_version != "forwarding_path_v2"
                     or handler_timing.clock != "unix-epoch-ns"
+                    or handler_timing.worker_process_id is None
                     or handler_timing.ingress_started_unix_ns is None
+                    or handler_timing.forwarder_runtime is None
                     or local_processor_response_received_unix_ns is None
                     or source_http_client_timing is None
+                    or source_downstream_inflight_at_start is None
+                    or source_socket_metadata_available is None
                     or source_http_client_timing.request_started_unix_ns
                     != source_request_started_unix_ns
                     or source_http_client_timing.response_received_unix_ns
@@ -756,6 +963,8 @@ class ReplicaRouteForwarder:
                     )
                     / 1_000_000,
                     source_handler_started_unix_ns=handler_started_unix_ns,
+                    source_worker_process_id=worker_process_id,
+                    target_worker_process_id=handler_timing.worker_process_id,
                     source_local_processor_response_received_unix_ns=(
                         local_processor_response_received_unix_ns
                     ),
@@ -779,6 +988,28 @@ class ReplicaRouteForwarder:
                     / 1_000_000,
                     target_handler_timing=handler_timing,
                     source_http_client_timing=source_http_client_timing,
+                    forwarder_runtime=ForwarderRuntimeTiming(
+                        schema_version="forwarder_runtime_v1",
+                        source_client=ForwarderRuntimeClientTiming(
+                            active_route_handlers_at_start=(
+                                diagnostic_active_route_handlers
+                            ),
+                            downstream_inflight_at_start=(
+                                source_downstream_inflight_at_start
+                            ),
+                            event_loop_lag=(
+                                self._event_loop_lag_tracker.summarize_window(
+                                    source_request_started_unix_ns,
+                                    source_response_received_unix_ns,
+                                )
+                            ),
+                            socket_metadata_available=(
+                                source_socket_metadata_available
+                            ),
+                            socket_local_port=source_socket_local_port,
+                        ),
+                        target_handler=handler_timing.forwarder_runtime,
+                    ),
                 )
 
             links.append(
@@ -812,6 +1043,7 @@ class ReplicaRouteForwarder:
             if (
                 handler_started_unix_ns is None
                 or ingress_started_unix_ns is None
+                or diagnostic_active_route_handlers is None
                 or local_processor_request_started_unix_ns is None
                 or local_processor_response_received_unix_ns is None
                 or processor_timing is None
@@ -842,9 +1074,17 @@ class ReplicaRouteForwarder:
                 downstream_response_received_unix_ns
                 or local_processor_response_received_unix_ns
             )
+            forwarder_runtime = ForwarderRuntimeHandlerTiming(
+                active_route_handlers_at_start=diagnostic_active_route_handlers,
+                event_loop_lag=self._event_loop_lag_tracker.summarize_window(
+                    handler_started_unix_ns,
+                    handler_finished_unix_ns,
+                ),
+            )
             handler_timing = ForwarderHandlerTiming(
                 schema_version="forwarding_path_v2",
                 clock="unix-epoch-ns",
+                worker_process_id=worker_process_id,
                 started_unix_ns=handler_started_unix_ns,
                 finished_unix_ns=handler_finished_unix_ns,
                 elapsed_ms=elapsed_ms,
@@ -899,6 +1139,7 @@ class ReplicaRouteForwarder:
                 )
                 / 1_000_000,
                 processor_timing=processor_timing,
+                forwarder_runtime=forwarder_runtime,
             )
         return RouteProcessResponse(
             datapath_mode=request.datapath_mode,

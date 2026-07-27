@@ -170,6 +170,42 @@ class FlowExecutionError(RuntimeError):
     pass
 
 
+def _has_complete_forwarding_path_v3(links, initial_source_handler=None):
+    """Validate additive v3 diagnostics and their route-handler PID chain."""
+
+    source_handler = initial_source_handler
+    for link in links:
+        timing = link.forwarding_path
+        if (
+            timing is None
+            or timing.schema_version != "forwarding_path_v3"
+            or timing.target_handler_timing is None
+            or timing.source_worker_process_id is None
+            or timing.target_worker_process_id is None
+            or timing.target_handler_timing.worker_process_id
+            != timing.target_worker_process_id
+            or timing.source_http_client_timing is None
+            or timing.source_http_client_timing.schema_version
+            != "http_client_path_v2"
+            or timing.forwarder_runtime is None
+            or timing.forwarder_runtime.schema_version != "forwarder_runtime_v1"
+            or timing.target_handler_timing.forwarder_runtime is None
+            or timing.forwarder_runtime.target_handler
+            != timing.target_handler_timing.forwarder_runtime
+            or (
+                source_handler is not None
+                and (
+                    source_handler.worker_process_id is None
+                    or source_handler.worker_process_id
+                    != timing.source_worker_process_id
+                )
+            )
+        ):
+            return False
+        source_handler = timing.target_handler_timing
+    return True
+
+
 class FlowGenerator:
     def __init__(
         self,
@@ -473,14 +509,9 @@ class FlowGenerator:
                 f"flow {route.flow_id} returned {len(route_response.links)} links; "
                 f"expected {expected_link_count}"
             )
-        if forwarding_path_diagnostics and any(
-            link.forwarding_path is None
-            or link.forwarding_path.schema_version != "forwarding_path_v3"
-            or link.forwarding_path.target_handler_timing is None
-            or link.forwarding_path.source_http_client_timing is None
-            or link.forwarding_path.source_http_client_timing.schema_version
-            != "http_client_path_v2"
-            for link in route_response.links
+        if forwarding_path_diagnostics and not _has_complete_forwarding_path_v3(
+            route_response.links,
+            initial_source_handler=route_response.handler_timing,
         ):
             raise FlowExecutionError(
                 f"flow {route.flow_id} omitted requested forwarding path v3 diagnostics"

@@ -108,6 +108,49 @@ def _timing_v3():
     return timing
 
 
+def _timing_v3_with_worker_identity():
+    timing = _timing_v3()
+    timing["source_worker_process_id"] = 101
+    timing["target_worker_process_id"] = 202
+    timing["target_handler_timing"]["worker_process_id"] = 202
+    return timing
+
+
+def _timing_v3_with_runtime():
+    timing = _timing_v3_with_worker_identity()
+    target_handler = {
+        "active_route_handlers_at_start": 2,
+        "event_loop_lag": {
+            "schema_version": "event_loop_lag_v1",
+            "clock": "monotonic-duration",
+            "sample_period_ms": 5.0,
+            "sample_count": 3,
+            "max_lag_ms": 1.5,
+            "p95_lag_ms": 1.25,
+        },
+    }
+    timing["target_handler_timing"]["forwarder_runtime"] = target_handler
+    timing["forwarder_runtime"] = {
+        "schema_version": "forwarder_runtime_v1",
+        "source_client": {
+            "active_route_handlers_at_start": 3,
+            "downstream_inflight_at_start": 2,
+            "event_loop_lag": {
+                "schema_version": "event_loop_lag_v1",
+                "clock": "monotonic-duration",
+                "sample_period_ms": 5.0,
+                "sample_count": 2,
+                "max_lag_ms": 2.0,
+                "p95_lag_ms": 1.75,
+            },
+            "socket_metadata_available": True,
+            "socket_local_port": 43210,
+        },
+        "target_handler": target_handler,
+    }
+    return timing
+
+
 def _trace(path, timing=None):
     events = [
         {"event": "run_started", "forwarding_path_diagnostics": True},
@@ -196,6 +239,158 @@ def test_forwarding_path_summary_reports_v3_http_client_components(tmp_path):
     assert boundaries["target_finish_to_source_response_headers_ms"][
         "mean"
     ] == pytest.approx(0.00002)
+
+
+def test_forwarding_path_summary_groups_v3_links_by_forwarder_worker(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    timing = _timing_v3_with_worker_identity()
+    events = [
+        {"event": "run_started", "forwarding_path_diagnostics": True},
+        {
+            "event": "iteration_completed",
+            "summary": {
+                "traffic": {
+                    "flows": [
+                        {
+                            "links": [
+                                {
+                                    "source_stage": 1,
+                                    "target_stage": 2,
+                                    "source_pod_name": "stage-1-0",
+                                    "target_pod_name": "stage-2-0",
+                                    "link_cost_ms": 7.5,
+                                    "forwarding_path": timing,
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+        },
+        {"event": "run_completed"},
+    ]
+    path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    report = summarize_trace(path)
+
+    workers = report["worker_processes"]
+    assert workers["identity_links"] == 1
+    assert workers["source"]["stage-1-0:pid-101"]["links"] == 1
+    assert workers["target"]["stage-2-0:pid-202"]["link_cost_ms"][
+        "mean"
+    ] == pytest.approx(7.5)
+
+
+def test_forwarding_path_summary_reports_additive_forwarder_runtime(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    timing = _timing_v3_with_runtime()
+    events = [
+        {"event": "run_started", "forwarding_path_diagnostics": True},
+        {
+            "event": "iteration_completed",
+            "summary": {
+                "traffic": {
+                    "flows": [
+                        {
+                            "links": [
+                                {
+                                    "source_stage": 1,
+                                    "target_stage": 2,
+                                    "source_pod_name": "stage-1-0",
+                                    "target_pod_name": "stage-2-0",
+                                    "link_cost_ms": 7.5,
+                                    "forwarding_path": timing,
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+        },
+        {"event": "run_completed"},
+    ]
+    path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    report = summarize_trace(path)
+
+    runtime = report["forwarder_runtime"]
+    assert runtime["links"] == 1
+    assert runtime["source_event_loop_sampled_links"] == 1
+    assert runtime["target_event_loop_sampled_links"] == 1
+    assert runtime["socket_metadata_links"] == 1
+    assert runtime["values"]["source_event_loop_lag_max_ms"]["mean"] == pytest.approx(
+        2.0
+    )
+    assert runtime["source_sockets"]["stage-1-0:pid-101:port-43210"]["link_cost_ms"][
+        "mean"
+    ] == pytest.approx(7.5)
+
+
+def test_forwarding_path_summary_scopes_socket_groups_to_source_worker(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    first = _timing_v3_with_runtime()
+    second = _timing_v3_with_runtime()
+    second["source_worker_process_id"] = 102
+    events = [
+        {"event": "run_started", "forwarding_path_diagnostics": True},
+        {
+            "event": "iteration_completed",
+            "summary": {
+                "traffic": {
+                    "flows": [
+                        {
+                            "links": [
+                                {
+                                    "source_stage": 1,
+                                    "target_stage": 2,
+                                    "source_pod_name": "stage-1-0",
+                                    "target_pod_name": "stage-2-0",
+                                    "link_cost_ms": 7.5,
+                                    "forwarding_path": first,
+                                },
+                                {
+                                    "source_stage": 1,
+                                    "target_stage": 2,
+                                    "source_pod_name": "stage-1-1",
+                                    "target_pod_name": "stage-2-0",
+                                    "link_cost_ms": 8.5,
+                                    "forwarding_path": second,
+                                },
+                            ]
+                        }
+                    ]
+                }
+            },
+        },
+        {"event": "run_completed"},
+    ]
+    path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    sockets = summarize_trace(path)["forwarder_runtime"]["source_sockets"]
+
+    assert sorted(sockets) == [
+        "stage-1-0:pid-101:port-43210",
+        "stage-1-1:pid-102:port-43210",
+    ]
+
+
+def test_forwarding_path_summary_rejects_inconsistent_v3_worker_identity(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    timing = _timing_v3_with_worker_identity()
+    timing["target_worker_process_id"] = 203
+    _trace(path, timing)
+
+    with pytest.raises(ValueError, match="worker identity"):
+        summarize_trace(path)
 
 
 def test_forwarding_path_summary_rejects_incomplete_v3_http_client_timing(

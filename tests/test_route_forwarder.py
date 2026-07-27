@@ -188,6 +188,8 @@ def test_opt_in_forwarding_path_diagnostics_split_each_pair_residual():
         timing = link["forwarding_path"]
         assert timing["schema_version"] == "forwarding_path_v3"
         assert timing["clock"] == "unix-epoch-ns"
+        assert timing["source_worker_process_id"] > 0
+        assert timing["target_worker_process_id"] > 0
         assert (
             timing["source_handler_started_unix_ns"]
             <= timing["source_local_processor_response_received_unix_ns"]
@@ -208,9 +210,29 @@ def test_opt_in_forwarding_path_diagnostics_split_each_pair_residual():
         handler = timing["target_handler_timing"]
         client = timing["source_http_client_timing"]
         processor = handler["processor_timing"]
+        runtime = timing["forwarder_runtime"]
         assert handler["schema_version"] == "forwarding_path_v2"
+        assert handler["worker_process_id"] == timing["target_worker_process_id"]
         assert client["schema_version"] == "http_client_path_v2"
         assert client["connection_reused"] is True
+        assert runtime["schema_version"] == "forwarder_runtime_v1"
+        assert runtime["target_handler"] == handler["forwarder_runtime"]
+        assert runtime["source_client"]["active_route_handlers_at_start"] >= 1
+        assert runtime["source_client"]["downstream_inflight_at_start"] >= 1
+        assert runtime["source_client"]["socket_metadata_available"] is False
+        assert runtime["source_client"].get("socket_local_port") is None
+        for window in (
+            runtime["source_client"]["event_loop_lag"],
+            runtime["target_handler"]["event_loop_lag"],
+        ):
+            assert window["schema_version"] == "event_loop_lag_v1"
+            assert window["clock"] == "monotonic-duration"
+            assert window["sample_period_ms"] == pytest.approx(5.0)
+            if window["sample_count"] == 0:
+                assert window.get("max_lag_ms") is None
+                assert window.get("p95_lag_ms") is None
+            else:
+                assert window["max_lag_ms"] >= window["p95_lag_ms"] >= 0
         assert (
             client["request_started_unix_ns"]
             <= client["transport_started_unix_ns"]
