@@ -2,6 +2,8 @@
 
 Updated: 2026-07-22
 
+IBG-Hybrid scope updated: 2026-07-27
+
 ## Completed
 
 - Reviewed the paper draft and its hybrid-testbed proposal.
@@ -192,6 +194,73 @@ All DPDK/VPP work is now deferred until further notice. The dormant `dpdk_vpp_pr
 
 The current IBG-Exact chapter is temporarily frozen as the reproducible reference baseline. The next intended chapter is IBG-Hybrid, but it is not started and no heuristic/hybrid implementation is authorized until the user provides its design and scope. Preserve every Exact solver, learning, outcome, telemetry, runtime, and evidence contract unchanged. Separately, the next bounded Phase 4.1 diagnostic remains read-only per-worker scheduler/context-switch evidence and still requires explicit authorization. Report refinement remains user-directed; Report.md, Tutorial.md, and EVIDENCE_SUMMARY.md remain opt-in.
 
+## Active IBG-Hybrid scope update
+
+The preceding paragraph records the earlier handoff state. The user has now
+provided and authorized the initial IBG-Hybrid scope. IBG-Hybrid is the active
+development track; IBG-Exact remains frozen as its reproducible reference.
+
+The authorized purpose is coupled/budgeted SFC placement using one complete
+route per flow. Candidate pruning, limited lookahead, and Monte Carlo are
+internal parts of one IBG-Hybrid algorithm. The starting configuration is 20
+flows, 3 stages, and 10 replicas per stage.
+
+Hybrid should directly reuse the current Exact latency model, separated
+physical and observation jitter, exact convolved likelihood, selected-only
+learning, retention 0.8, outcome/SLA contracts, adapters, structured
+telemetry, private-processor/public-forwarder split, and Kernel Kubernetes
+runtime. Only the coupled route-selection logic and Hybrid-specific solver
+measurements/replay should differ. This reuse must not change Exact behavior
+or invalidate Exact evidence.
+
+The existing `IBG_Hybrid/` Python files are an old standalone revision. The
+confirmed gaps are:
+
+- It defaults to 50 flows and 80 replicas per stage.
+- Its `budget` value is not enforced.
+- It selects two replicas across two stages rather than one replica from all
+  three stages.
+- Its planner omits link coupling that is added later during reporting.
+- Its synthetic link cost reads hidden true replica states.
+- Its rollout counts the starting action's immediate value twice.
+- Its Monte Carlo generator lacks experiment seed provenance.
+- Its replica, utility, signal, belief, SLA, equilibrium, CSV, and output
+  behavior predate the active Exact contracts.
+- It has no adapter-based Hybrid runner or Kubernetes integration.
+
+The next action is Hybrid Phase 0 in `ROADMAP.md`: freeze deterministic
+paper-aligned meanings for action, budget, feasibility, pruning size,
+lookahead value/depth, Monte Carlo continuation, activation rules, and seed
+ownership, then add characterization fixtures before changing the solver.
+
+Diagnosis-script compatibility is an explicit later phase after lookahead and
+baseline Kernel integration. `netem_v1` is postponed until the core Hybrid
+simulation and replay are stable.
+
+The paper's bandit-based adaptation is recorded as optional Hybrid Phase 10.
+It is deferred until the required pruning/lookahead/Monte-Carlo policy is
+validated and must preserve the same selected-only information boundary.
+
+### IBG-Hybrid budget-action correction
+
+The active user-defined Hybrid model is `L=2`: each flow chooses exactly two
+replicas from two distinct stages out of three and bypasses the remaining
+stage entirely. The prior appended description of one complete three-stage
+route and the statement that the old two-stage action was a gap are superseded
+by this clarification. The old prototype still needs its budget enforcement,
+link/coupling, rollout, latency/learning, adapter, and Kubernetes work.
+
+`IBG_Hybrid/budgeted.py` now defines `HYBRID_STAGE_BUDGET = 2` as the
+code-level source of truth. The current planner rejects another supplied value
+until its two-stage action, embedding, traffic, replay, and tests are
+deliberately generalized.
+
+Because the Exact flow-generator contract currently requires contiguous stages
+beginning at stage 1, Hybrid needs a versioned route-execution extension for
+two selected stages that may be noncontiguous or begin after stage 1. The
+private processor, public forwarder, and selected-only observation boundary
+remain reusable.
+
 The professor-directed Kernel robustness check is now available without altering that baseline: use `--netem 1 --netem-delay-ms D --netem-jitter-ms J` for replica-Pod egress delay/jitter and compare it with a same-shape `--netem 0` run. The initial 10x3x6 matched run is complete and favorable but exploratory. Do not add packet loss, retries, missing observations, or a new learning-noise interpretation without separate scope.
 
 ## New-thread handoff prompt
@@ -203,6 +272,10 @@ The professor-directed Kernel robustness check is now available without altering
 > A dormant `dpdk_vpp_preflight_v1` and launcher `--datapath {kernel,dpdk-vpp}` reference remain from a bounded assessment, but Kernel is the only deployable runtime and unchanged default. Do not invoke or modify those DPDK/VPP parts until explicit user authorization.
 >
 > The current IBG-Exact chapter is temporarily frozen as the reproducible reference baseline. The next intended chapter is IBG-Hybrid, but no hybrid/heuristic design or implementation is authorized yet: wait for the user's requirements, then turn them into a bounded architecture and measurement plan before changing code. Do not alter Exact solver behavior, cache disposal, learning, jitter/outcome/SLA contracts, telemetry, Kernel runtime, or evidence while preparing that plan.
+>
+> The two preceding Hybrid-prohibition statements are retained as historical handoff text. They are superseded by the active Hybrid scope recorded above and in the current `ARCHITECTURE.md`, `DECISIONS.md`, and `ROADMAP.md`.
+>
+> Current scope: IBG-Hybrid is the active development track. Implement it as a coupled complete-route decision engine with pruning, limited lookahead, and Monte Carlo inside one public algorithm, starting at 20 flows/3 stages/10 replicas. Reuse the frozen Exact latency, separated-jitter learning, outcome, adapter, telemetry, processor/forwarder, and Kernel Kubernetes contracts without changing Exact behavior or evidence.
 >
 > The bounded `netem_v1` robustness wrapper is complete and opt-in. `--netem 1 --netem-delay-ms D --netem-jitter-ms J` applies normal-distribution delay/jitter only to replica-Pod `eth0` egress through a `NET_ADMIN` init container; default `--netem 0` runs have no qdisc. It does not change the processor-generated learning signal, physical/observation jitter, exact solver, placement, utility/SLA inputs, or pair formula. `scripts/network_impairment_summary.py` validates matched traces. Normal-build exploratory 10-flow/3-stage/6-replica trace `runs/ibg-experiment-20260727T122310Z.jsonl` (10-ms delay, 3-ms jitter) converged in 18 slots and increased final-five Good/Excellent selection share to 100%; matched no-netem trace `runs/ibg-experiment-20260727T122446Z.jsonl` converged in 12 slots and also ended at 100%. Both exact-replay with zero drift. Packet loss is deferred because the current complete-route contract fails a slot on a dropped request.
 >
@@ -245,3 +318,412 @@ The professor-directed Kernel robustness check is now available without altering
 > The supported command `./scripts/run_experiment.py --flow 3 --stage 3 --replica 5 --max-iterations 100` produced fresh seed-2050 Kernel trace `runs/ibg-experiment-20260715T182717Z.jsonl` from this uncommitted correction worktree. It reached equilibrium in 10 slots; the Phase 3 validator accepted its 90 selected hops and 60 pair records with 98.89% categorical accuracy, 100% server-overshoot tolerance pass rate, complete pairwise integrity, and zero-drift ten-slot replay. The full test suite passes (120 tests), as do Compose config and the local container smoke test. Earlier current-schema traces `171429`, `173555`, `181957`, and `182457` are version-bounded diagnostics, not accepted baseline replacements.
 >
 > The first post-correction 12-flow attempt was deliberately interrupted and remains unusable. Its fresh replacement is `runs/ibg-experiment-20260715T183453Z.jsonl`, produced by `./scripts/run_experiment.py --flow 12 --stage 3 --replica 5 --max-iterations 100 --skip-build` in Kernel mode at seed 2050. It equilibrated in eight slots and replays 288 selected hops and 192 pair records with zero mathematical drift. In its final five slots, mean processing was 69.99 ms/flow, pair cost 22.60 ms/flow, SLA violations 0.0/slot, processing overshoot 1.39 ms/hop, and classification 98.89% across 180 hops. Treat it as exploratory evidence only: the general validator's overall false gate is expected because 12 flows is outside the formal configuration and does not fully populate load-one ordering groups; the other integrity, timing, equilibrium, and replay checks pass. The active equilibrium rule is `<0.033`; `--runs N` now launches N independent controller Jobs after one setup, retaining separate trace files and CSV columns while keeping seed/configuration fixed. Do not alter thresholds, likelihoods, measurement boundaries, solver behavior, placement, or historical trace semantics without explicit authorization. Preserve unrelated user changes in `.gitignore`, `EVIDENCE_SUMMARY.md`, and `Chart/`; do not commit or push unless separately asked.
+
+## IBG-Hybrid Phase 1 completion
+
+Phase 1 is implemented as an import-safe Hybrid-only foundation. The old
+`IBG_Hybrid/main.py` import-time four-run experiment, CSV/pickle activity, and
+verbose output are removed from the import path. The executable module now
+only reports that the production policy is deferred.
+
+The new package boundary contains typed two-stage actions, the active
+20-flow/3-stage/10-replica configuration, immutable global loads, explicit
+feasibility results, and solver results. `HYBRID_STAGE_BUDGET = 2` remains in
+`IBG_Hybrid/budgeted.py`; unsupported budgets fail configuration, prototype
+planner, and prototype embedding validation. Actions contain two
+stage/replica pairs in increasing distinct-stage order. Applying one action
+increments exactly those two replicas, so the third stage is fully bypassed.
+
+A tiny exhaustive coupled oracle is available only for deterministic tests.
+It accepts injected value/feasibility rules, explores copied global load
+states, uses canonical first-action tie behavior, and rejects the production
+20x3x10 problem through hard size limits. It does not implement or validate
+the future production pruning, limited-lookahead, Monte Carlo, bandit,
+utility, link, learning, or Kubernetes behavior.
+
+Local verification on 2026-07-27:
+
+- 10 focused Hybrid Phase 1 tests passed.
+- 23 unchanged Exact characterization, latency-model, and runner regression
+  tests passed.
+- Hybrid modules and the focused test module byte-compiled successfully.
+
+No file under `IBG/` was changed. No Kubernetes, diagnostic, netem, DPDK/VPP,
+image, deployment, experiment, result-data, or excluded-document work was
+performed.
+
+The next implementation phase is not yet authorized by this result. Before
+Phase 2 candidate pruning begins, close the remaining Phase 0 production
+definitions for feasibility units, belief/link route scoring, pruning size,
+continuation objective, depth, Monte Carlo activation/kernel, deterministic
+seed ownership, and trace provenance.
+
+## IBG-Hybrid Phase 0 completion
+
+The remaining Phase 0 contract decisions are complete in
+`IBG_Hybrid/phase0_contract.py`; Phase 1 was not repeated or replaced.
+
+The fixed initial policy is `C=5`, `D=2`, `S=50`, and rollout epsilon `0.10`.
+`C` means replicas retained per stage, giving at most 75 complete actions for
+the active 3-stage, exactly-2-selected-stage model. `D` means future flows
+after the focal flow. The focal action is committed once and its own expected
+two-stage utility is evaluated once at the loads projected after the greedy
+continuation; future-flow utilities are not added.
+
+Feasibility now has explicit units and inputs: selected replicas must be Ready
+and remain within a declared assigned-flow-per-slot limit, and their directed
+selected pair must have a configured nonnegative planning cost in
+milliseconds. The budget is only the exact cardinality `L=2`. Hidden true
+state, legacy replica cost, and post-placement measured pair residual are not
+planner feasibility or scoring inputs. Existing Kubernetes Pod resource
+requests are not multiplied by flow count; any future per-flow node resource
+demand requires a separate versioned contract.
+
+All decisions still belong to one Hybrid policy. Maximum normalized belief
+entropy `>=0.75` activates MC first. Otherwise contention `>=0.70` or a
+high-priority flow activates deterministic lookahead. Remaining decisions use
+pruned joint greedy. Contention is maximum Ready-replica assigned load divided
+by its declared flow limit; entropy is four-state Shannon entropy normalized
+by `log(4)` over the feasible pruned pool.
+
+The core MC continuation is epsilon-greedy over feasible pruned joint
+actions, not bandit-based: bandit remains optional Phase 10. Flow ordering and
+each candidate/sample rollout receive separate, reproducible BLAKE2b-derived
+seeds from the root experiment seed. Future traces must retain contract
+version, parameters, activation inputs/path/reason, flow order, seed
+provenance, candidate identity, and sample count.
+
+Nine focused Phase 0 tests pass together with the ten Phase 1 tests. No
+production pruning, lookahead, Monte Carlo, bandit, runner, Kubernetes,
+diagnostic, or netem implementation was added in this phase, and no Exact file
+was changed.
+
+The next action is IBG-Hybrid Phase 2: implement coupled feasibility,
+belief/load-aware per-stage pruning, and enumeration/scoring of the at-most-75
+complete `L=2` actions using this final contract. Phase 3 then adds the
+deterministic `D=2` focal-value lookahead.
+
+## IBG-Hybrid Phase 2 completion
+
+Phase 2 is complete as a pure Hybrid-only policy boundary. Phase 0 and Phase 1
+were retained; no import-safety, action, budget, seed, or oracle contract was
+redone.
+
+`IBG_Hybrid/policy.py` now provides `IBGHybridPolicy.select_greedy`. It
+filters configured replicas through the Phase 0 Ready/assigned-flow-capacity
+contract, computes belief-driven utility at `current_load + 1`, retains at
+most `C=5` replicas per stage, enumerates every canonical complete `L=2`
+action over those retained sets, applies required directed pair-link
+feasibility, scores all surviving actions, and selects the strict best with
+canonical exact-tie behavior.
+
+The policy does not receive a replica true state, legacy replica cost, or a
+measured runtime pair residual. Its belief expectation delegates each
+state/load utility to the unchanged Exact
+`IBG.latency_model.expected_state_utility`. The third stage bypass remains
+complete: only the two selected replicas are present in the action and
+incremented in the returned global load state.
+
+The returned candidate accounting records available and locally feasible
+replica counts per stage, all structural and complete pre-pruning-feasible
+actions, retained replica identities, total and feasible pruned actions, and
+rejection-reason counts. At the initial 3-stage/10-replica configuration the
+fixture records 300 structural actions, 5 retained replicas per stage, and 75
+feasible pruned actions. An infeasible pool raises
+`NoFeasiblePrunedAction` with its accounting instead of returning a partial
+or invalid placement.
+
+Local verification on 2026-07-29:
+
+- 26 combined Hybrid Phase 0/1/2 tests passed.
+- 23 unchanged Exact characterization, latency-model, and runner regression
+  tests passed in the same command; 49 tests passed overall.
+- `IBG_Hybrid/` and the Phase 2 focused test byte-compiled successfully.
+- `git diff --check` passed.
+- `git diff --name-only -- IBG` remained empty.
+
+No Exact file, runner, Kubernetes/container resource, traffic path, learning,
+outcome/SLA behavior, telemetry, evidence, diagnostic, netem, generated data,
+or excluded document was changed. No experiment, image build, deployment,
+commit, or push was performed.
+
+The next action is IBG-Hybrid Phase 3 only: add deterministic `D=2`
+limited-lookahead over the Phase 2 greedy base, commit each focal candidate
+once on a copied global state, simulate only the next `min(D, remaining)`
+flows, evaluate focal utility once at projected loads, and prove no branch
+leakage or immediate-value double counting. Monte Carlo remains Phase 4.
+
+## IBG-Hybrid Phase 3 completion
+
+Phase 3 is complete inside the existing pure `IBGHybridPolicy`. Phase 0,
+Phase 1, and Phase 2 contracts and behavior were retained; in particular,
+`select_greedy` remains the unchanged continuation policy.
+
+`select_lookahead` enumerates the Phase 2 root-feasible pruned focal actions.
+For each focal candidate it starts from the immutable pre-decision state,
+commits that focal once, derives the actual remaining flows from the
+configured slot and committed `L=2` assignment count, and simulates up to
+`D=2` later arrivals. Every continuation calls Phase 2 again at its updated
+branch-local loads, so Ready/capacity/link feasibility, pruning, scoring,
+canonical ties, and candidate accounting are recomputed rather than reused
+from the root.
+
+Each completed branch is valued only by its focal action at the projected
+final loads, with one configured planning link deduction. No immediate focal
+value or continuation-player welfare is added. The selected solver result
+commits only the focal action; projected future states are retained as
+immutable inspection detail. Root and per-continuation Phase 2 accounting,
+requested/effective depth, ordered future actions, and dead-end branch
+accounting are exposed for deterministic validation. Inputs and sibling
+branches are unchanged.
+
+Local verification on 2026-07-29:
+
+- 39 combined Hybrid Phase 0/1/2/3 tests passed.
+- 23 unchanged Exact characterization, latency-model, and runner regression
+  tests passed in the same command; 62 tests passed overall in 6.88 seconds.
+- Hybrid modules and the Phase 3 focused test byte-compiled successfully.
+- `git diff --check` passed.
+- `git diff --name-only -- IBG` remained empty.
+- No Markdown file exists under `IBG_Hybrid/`.
+
+The default 20x3x10 pure boundary was measured over five identical local
+calls with uniform state-4 beliefs, zero planning-link costs, Ready replicas,
+capacity 20, `C=5`, and `D=2`. Calls took 1.462995, 1.356253, 1.557856,
+1.377547, and 1.412557 seconds (mean 1.433442 seconds). All returned
+`(stage 1, replica 1) -> (stage 2, replica 1)`, objective
+172.813750354781, 75 completed focal evaluations, and two continuation steps
+per branch. This is local solver evidence, not a latency guarantee.
+
+No Exact file, Monte Carlo, activation path, flow-order randomization, slot
+runner, traffic, learning, metrics, replay, Kubernetes/container resource,
+diagnostic, netem, bandit, generated-data, or excluded-document change was
+made. No experiment, image build, deployment, commit, or push was performed.
+The next action is Hybrid Phase 4: seeded Monte Carlo inside the same public
+policy, preserving this focal-only objective and Phase 2 greedy continuation.
+
+## IBG-Hybrid Phase 4 completion
+
+Phase 4 is complete inside the existing pure `IBGHybridPolicy`. The Phase 2
+greedy and Phase 3 deterministic-lookahead methods remain unchanged.
+`select_monte_carlo` evaluates every feasible pruned focal action through
+exactly `S=50` candidate-specific samples by default. Each sample owns a
+`RolloutSeedKey`, derived BLAKE2b seed, local RNG, focal commit, and immutable
+continuation branch.
+
+At every future arrival, the sample recomputes the Phase 2 boundary at its
+updated loads. A step is canonical greedy with probability `0.90`, or a
+uniform seeded draw from the same feasible-pruned action tuple with
+probability `0.10`. Every step records its mode, greedy and selected action,
+feasible pool, Phase 2 accounting, pre-state, and post-state. No exploration
+action can bypass Phase 2 readiness, assigned-flow capacity, pruning,
+canonical action shape, or directed planning-link feasibility.
+
+Samples evaluate only their focal action at the projected final loads and
+subtract its configured planning link once. Immediate focal utility and
+continuation-player welfare are not added. Candidate values are means of
+completed sample focal values only. Failed rollouts and all-failed
+candidates retain deterministic seed/state/accounting detail; no partial
+placement is fabricated. The returned solver state commits only the selected
+focal action.
+
+Local verification on 2026-07-29:
+
+- 57 combined Hybrid Phase 0/1/2/3/4 tests passed.
+- 23 unchanged Exact characterization, latency-model, and runner regression
+  tests passed in the same command; 80 tests passed overall.
+- Hybrid modules and the Phase 4 focused test byte-compiled successfully.
+- `git diff --check` passed.
+- `git diff --name-only -- IBG` remained empty.
+- No Markdown file exists under `IBG_Hybrid/`.
+
+The default 20x3x10 pure Monte Carlo boundary used `C=5`, `D=2`, `S=50`,
+epsilon `0.10`, root seed 2050, slot 4, decision position 2, flow 17, uniform
+state-4 beliefs, zero configured planning-link costs, Ready replicas, and
+capacity 20. The quiet focused test completed in 68.03 seconds. A second
+instrumented call took 68.556997 seconds and returned
+`(stage 1, replica 1) -> (stage 2, replica 1)`, mean focal objective
+172.813750354781, 75 candidate evaluations, 3,750 completed samples, zero
+failed samples, and 702 seeded exploration steps among 7,500 continuations.
+This is local solver evidence, not a latency guarantee.
+
+No Exact file, automatic activation, flow-order randomization, slot runner,
+traffic, learning, metrics, replay, Kubernetes/container resource,
+diagnostic, netem, bandit, generated-data, or excluded-document change was
+made. No experiment, image build, deployment, commit, or push was performed.
+The next action is Hybrid Phase 5: integrate the completed greedy, lookahead,
+and Monte Carlo paths into a complete reproducible simulation slot with
+selected-only learning, shared metrics, and compact per-slot output.
+
+## IBG-Hybrid Phase 5 completion
+
+Phase 5 is complete as an import-safe pure-Python simulation slot.
+`IBG_Hybrid/runner.py` now orchestrates one slot through the unchanged
+`IBGHybridPolicy`; it does not embed placement mathematics. One derived local
+flow-order stream is used across all coupled decisions. Activation uses the
+current feasible pruned pool and preserves Monte Carlo over lookahead over
+greedy precedence. Every real state transition is exactly one selected focal
+`L=2` action; projected lookahead and rollout continuations remain detail
+only.
+
+`IBG_Hybrid/simulation.py` provides the in-process execution adapter. After
+all placements, it generates only selected observations at final assigned
+loads with independent physical/observation seeds and unchanged Exact
+latency, separated-jitter, convolved-likelihood, and state-estimate helpers.
+The runner requires two observations and one separately named measured pair
+per flow, validates the complete set before learning, and keeps hidden true
+state inside the adapter.
+
+The complete observation batch is passed once to unchanged
+`IBG.learning.apply_observations` and frozen Exact local
+posterior/aggregation methods. Selected-only retention remains `0.8`.
+Metrics reuse Exact linear utility, physical-only outcome selection,
+`SLA_v`, Jain fairness, and strict `<0.033` equilibrium. Expected planning
+link, simulated measured pair, physical latency, observation jitter, noisy
+learning signal, raw end-to-end latency, and reference utility are separately
+retained. A skipped stage contributes no load, request, observation, utility,
+latency, SLA, or learning.
+
+`IBG_Hybrid/slot_contracts.py` retains immutable configuration, flow order and
+seed provenance, priorities and activation reasons, actions/skipped stages,
+loads before/after, objectives and candidate accounting, full selected policy
+detail, final loads, selected observations, beliefs before/after, and all
+metrics. `run_hybrid_slot` is silent and in-memory; only the explicit wrapper
+prints one compact completed-slot line. Imports and runs create no CSV,
+pickle, or result file.
+
+Local verification on 2026-07-29:
+
+- The final combined command passed 116 tests in 78.02 seconds: 79 Phase
+  0/1/2/3/4/5 Hybrid tests and 37 relevant unchanged Exact characterization,
+  latency-model, runner, adapter/selected-learning, and learning-footprint
+  tests.
+- Hybrid and Phase 5 test byte-compilation, silent imports,
+  `git diff --check`, the empty `IBG/` diff check, and the
+  no-Markdown-under-`IBG_Hybrid/` check passed.
+- The completed low-entropy 20x3x10 fixture retained `L=2`, `C=5`, `D=2`,
+  `S=50`, epsilon `0.10`, root seed 2050, slot 1, Ready capacity 20, and all
+  default dimensions. It completed in 0.857269 seconds with 20 greedy
+  decisions, 20 actions, 40 observations, 20 measured pairs, and 40 final
+  assignments.
+- That slot recorded aggregate expected utility 3382.319661, physical-only
+  realized utility 2701.635551, total physical/pair/raw latency
+  1258.364449/30.8/1289.164449 ms, raw reference utility 2670.835551, zero
+  physical-only 110-ms SLA violations, Jain fairness
+  0.9999997995824625, maximum belief change 0.198, and no first-slot
+  equilibrium.
+- A separate uniform-initial-belief default attempt correctly activated full
+  `S=50` Monte Carlo but remained non-terminal at the local command session's
+  1,000-second lifetime. No completed runtime is claimed for it and no
+  accepted policy parameter or detail was reduced.
+
+No file under `IBG/` was changed. No HTTP, container, Kubernetes, replay,
+diagnostic, netem, DPDK/VPP, bandit, generated evidence, excluded document,
+image build, deployment, experiment, commit, or push work was performed.
+Phase 6 is next: reuse the existing Kernel container/Kubernetes architecture
+and add the versioned two-selected-stage route execution/replay boundary.
+
+## IBG-Hybrid activation status correction
+
+Paper validation found an activation-policy error in the completed Phase 5
+slot runner: it currently treats entropy `>= 0.75` as sufficient for Monte
+Carlo. Fresh uniform beliefs therefore route all 20 flows into the expensive
+`S=50` method; the manually terminated over-15-minute default attempt exposed
+that behavior. It was a real current-policy execution, not test overhead,
+but it is not representative of the intended normal Hybrid algorithm.
+
+The next task is a bounded activation correction, before Phase 6. It will add
+an explicit slot-level uncertainty-event input, default false, and require
+both that event and high entropy for Monte Carlo. Without the event, high
+contention/high priority selects lookahead and all other decisions select
+greedy. No solver-method, `L=2` action, `C/D/S/epsilon` parameter, Exact
+component, or infrastructure change is authorized in that correction.
+
+### Correction to the correction: default Hybrid path
+
+The immediately preceding next-task description was still wrong in one
+important respect. After rereading the paper's *A Catalog of Approximation
+Heuristics* and *Pruned Lookahead Rollout*, the active Hybrid algorithm is
+the pruned lookahead variant: `C=5` pruning followed by `D=2` lookahead for
+each normal feasible focal decision. Greedy supplies the simulated future
+players' base policy; it is not the normal final decision path. The paper's
+low-contention greedy commit is an optional dynamic fast path and is deferred
+for this project.
+
+The bounded correction before Phase 6 must therefore do two things: prevent
+uniform entropy alone from selecting Monte Carlo, and make pruned `D=2`
+lookahead the default decision method. Monte Carlo remains reserved for an
+explicit uncertainty/churn event with high entropy. No policy-method
+mathematics or Exact/infrastructure behavior is authorized to change.
+
+### Revised next work: core Hybrid before MC
+
+The work is now deliberately split. Immediate work is only the core
+IBG-Hybrid Lookahead correction: default `C=5` pruning plus `D=2` lookahead
+for every feasible focal flow, with greedy reserved for simulated future
+flows. Automatic MC is disabled while this is completed and validated at the
+default 20x3x10 configuration.
+
+Monte Carlo is deferred to a separate redesign phase. Its present
+implementation can execute up to 75 focal candidates times 50 rollouts per
+real decision, measured at roughly 68 seconds for one such decision. It is
+not an acceptable production fallback and must not be automatically enabled
+until a separately accepted scalable design and runtime evidence are in
+place. No implementation work was performed by this documentation update.
+
+### Core Hybrid correction completion
+
+The immediate core-lookahead correction is complete. The active contract is
+now `ibg-hybrid-policy-contract-v2`. A slot always uses the existing pruned
+`D=2` lookahead decision; greedy is used only by projected continuation
+flows, and the explicit MC method is unreachable from automatic
+orchestration. Uniform startup entropy no longer changes that path.
+
+Default uniform-belief 20x3x10 evidence at root seed 2050 and slot 1:
+
+- Three deterministic runs took 4.670068, 3.950284, and 4.080329 seconds
+  (mean 4.233560 seconds).
+- Every run recorded 20 deterministic-lookahead paths with effective depths
+  `[2 x 18, 1, 0]`.
+- Every run completed 20 focal actions, 40 final replica assignments, and
+  exactly 40 selected observations.
+- The measured slot retained aggregate expected utility 2687.391,
+  physical-only realized utility 2701.636, zero 110-ms SLA violations, Jain
+  fairness 0.999994, maximum belief change 0.150, and no first-slot
+  equilibrium.
+
+Semantics-preserving structural reuse and belief-value/load utility
+memoization reduced this corrected path from the first measured 27.456696
+seconds to a 4.233560-second three-run mean. This remains local pure-Python
+evidence, not a millisecond or real-time guarantee.
+
+All 80 Hybrid Phase 0--5 tests pass in 18.61 seconds. The 37 relevant frozen
+Exact regressions also pass. Monte Carlo redesign is the next separate
+algorithm phase; it has not begun and the current explicit Phase 4 method
+remains disabled from automatic slots.
+
+For direct local inspection, `scripts/run_hybrid_iterations.py` runs the
+default pure-Python 20x3x10 Hybrid simulation across successive slots,
+prints one compact line per iteration, carries learned beliefs forward, and
+stops at equilibrium or a user-selected slot limit. It is a no-file-side-
+effect convenience runner; it does not invoke Kubernetes, containers, or
+traffic.
+
+The current user-selected manual check changes the default lookahead depth
+from `D=2` to `D=3` under `ibg-hybrid-policy-contract-v3`. The normal runner
+now projects three future flows where available; automatic MC remains
+disabled. Earlier `D=2` runtime and equilibrium evidence remains historical.
+
+The professor has supplied the authoritative MC scalability direction. The
+current exhaustive Phase 4 method is reference/test-only. Production MC will
+first select canonical top `Q=10` complete actions from the feasible pruned
+set, then run all `S=50` seeded rollouts for each retained candidate. Its
+future flows use greedy, never deterministic lookahead or Bandit; current
+`D=3` is only the stochastic greedy-continuation horizon. MC remains
+unreachable from automatic slots until that redesign is implemented and
+measured.
+
+The user has restored the active depth to `D=2` under
+`ibg-hybrid-policy-contract-v4`; the preceding `D=3` records are historical
+manual-check evidence only. This restoration applies to core lookahead and to
+the planned top-`Q` MC continuation horizon.

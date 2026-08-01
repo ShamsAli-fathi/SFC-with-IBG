@@ -112,6 +112,53 @@
 - Treat source public-forwarder event-loop delay as a supported proximal contributor to the remaining residual, not a complete root cause. In normal-build exploratory trace `runs/ibg-experiment-20260727T105911Z.jsonl`, all 540 selected links carried the runtime block and link cost correlated 0.705 with source event-loop maximum lag; the 55 p90-tail links averaged 40.41 ms source maximum lag versus 7.95 ms in the lower half. The same association remains within reused connections, so reconnects are not the only contributor. Worker identity, socket grouping, route locality, active application concurrency, selected-forwarder cgroup throttling, and the collected global host-pressure/conntrack observations did not isolate a single bad worker or explain the tails. The remaining distinction—worker event-loop occupancy versus OS/runtime descheduling—requires separately authorized, read-only per-worker scheduler counters; it does not authorize a mitigation or retuning.
 - DPDK/VPP work is deferred until further notice. Keep its read-only, fail-closed Phase 5 preflight (`dpdk_vpp_preflight_v1`) dormant as reference only; do not invoke, extend, test, or document it further without explicit user authorization. `dpdk-vpp` remains outside the deployable runtime allow-list and Kernel remains the only active/default mode.
 - Temporarily freeze the current decoupled IBG-Exact chapter as the reproducible reference for a later IBG-Hybrid comparison. Do not change exact behavior, runtime, evidence, or schemas as part of opening the new chapter. IBG-Hybrid is not an authorization to infer or implement a heuristic: its objective, algorithm, telemetry boundary, matched experiment protocol, and acceptance criteria must be supplied and approved first.
+- Supersede only the former lack of Hybrid authorization: the user has now supplied the initial scope and authorized coupled/budgeted IBG-Hybrid as the active development track. Keep IBG-Exact frozen throughout that work.
+- Treat IBG-Hybrid as the coupled evolution of IBG-Exact rather than an unrelated simulation or infrastructure fork.
+- Use the current `IBG_Hybrid/` files as an old prototype only. Preserve useful ideas, but replace behavior that conflicts with the paper or current Exact contracts.
+- Implement one public IBG-Hybrid algorithm containing candidate pruning, limited lookahead, and Monte Carlo rollout components.
+- Start Hybrid at 20 flows, 3 stages, and 10 replicas per stage.
+- Require exactly one replica from every stage. A Hybrid action is a complete ordered route of length `K`; reject the old two-stage `L=2` action.
+- Use one randomized flow order per slot because the complete route is one coupled action.
+- Keep all route decisions belief-driven. Hidden true replica state must not be read by route scoring, link scoring, pruning, lookahead, or Monte Carlo.
+- Include known consecutive-link cost, availability, and approved node/resource or budget feasibility in coupled action evaluation.
+- Reuse the current Exact physical latency, separated observation jitter, exact learning likelihood, belief retention 0.8, selected-only learning, outcome modes, 110-ms active SLA, and strict `<0.033` equilibrium rule until an explicitly approved Hybrid calibration changes one of them.
+- Reuse existing discovery, complete-route traffic, private-processor/public-forwarder, telemetry, result, and Kubernetes contracts wherever they are algorithm-neutral.
+- Keep Kernel as the only active/default runtime. DPDK/VPP remains deferred.
+- Print only compact metrics after each Hybrid slot. Preserve detailed routes, observations, beliefs, and rollout data in structured traces.
+- Audit diagnosis-script compatibility after the main pruning/lookahead implementation. Defer `netem_v1` until the basic Hybrid simulation and Kernel integration are stable.
+- Defer the paper's bandit-based adaptation to an optional final Hybrid phase.
+  It is neither a replacement for the required pruning/lookahead/Monte-Carlo
+  policy nor authorization to expand the observation boundary. Any UCB,
+  Thompson-sampling, fallback, or rollout-kernel role requires separate
+  fixtures and matched evidence.
+- Before accepting Phase 0, resolve whether pruning size `C` counts replicas per stage or complete routes, whether lookahead scores focal utility or truncated social welfare, the exact meaning of depth `D`, the Monte Carlo continuation kernel, activation thresholds, and the units and aggregation of capacity/budget feasibility.
+- Reject the old prototype's unenforced budget, two-of-three-stage action, hidden-state-derived link cost, post-hoc-only coupling, immediate-utility double count, unseeded Monte Carlo, old latency/learning/SLA semantics, import-time execution, and verbose per-flow output.
+
+## IBG-Hybrid budget-action correction
+
+The preceding Hybrid additions originally selected a complete three-stage SFC
+route. The user has clarified that the active intended model is the general
+budgeted formulation: `L=2`, exactly two distinct stages are selected, and
+the remaining stage is bypassed entirely. This supersedes only the earlier
+Hybrid complete-route interpretation.
+
+- A Hybrid action contains exactly two `(stage, replica)` pairs with different
+  stage IDs.
+- `IBG_Hybrid/budgeted.py` defines `HYBRID_STAGE_BUDGET = 2` as the code-level
+  source of truth. The current planner rejects another supplied value rather
+  than silently changing the action shape.
+- The policy jointly chooses the two stages and their two replicas; it does
+  not independently choose the best stages or replicas.
+- The skipped stage has no placement, processor request, observation, or
+  utility contribution for that flow.
+- The old prototype's two-of-three-stage action is not itself a defect. Its
+  missing budget enforcement, incorrect link/hidden-state behavior, rollout
+  double count, old stochastic contracts, and lack of modern adapters remain
+  defects to repair.
+- Hybrid must extend the Exact complete-route traffic contract to support a
+  selected two-stage chain that may be noncontiguous or start after stage 1.
+  The processor/forwarder split and all selected-only learning boundaries are
+  retained.
 - Accept `netem_v1` as an opt-in external transport-robustness test around the frozen IBG-Exact baseline. It uses a replica-Pod init container with only `NET_ADMIN` to apply configured normal-distribution delay/jitter on `eth0` egress, records that configuration in the trace, and is absent when `--netem 0`. It must not feed network delay into the processor-generated learning signal or change placement, utility/SLA inputs, the two existing jitter laws, or raw pair measurement.
 - Evaluate `netem_v1` primarily through equilibrium, true-state posterior growth, and the fraction of selected Good/Excellent replicas under a matched no-netem run. Utility and SLA may be reported as secondary outcomes but do not prove that network impairment entered learning. Defer packet loss: a dropped selected request currently fails the complete slot, and retry, imputation, or missing-observation policies would change the experiment contract.
 - Reject the current VMware host for genuine DPDK/VPP comparison: it has four visible vCPUs, one visible VMXNET3 PCI NIC, no separately identifiable dataplane NIC, zero hugepages, no IOMMU groups or VFIO device, and no installed VPP/DPDK tools. Do not detach the only management NIC, use unsafe no-IOMMU VFIO, or substitute VPP over a Linux interface and label it DPDK. Kernel remains the default and independently runnable.
@@ -124,3 +171,325 @@
 - Large-scale testbed sizing and remote/dedicated Linux hardware.
 
 These omissions still allow validation of Kubernetes orchestration, sequential placement, asymmetric observations, congestion effects, belief learning, utility, SLA behavior, fairness, and control-loop runtime.
+
+## IBG-Hybrid Phase 1 decisions
+
+- Accept the import-safe `IBG_Hybrid` package boundary and remove the old
+  import-time experiment loop from `IBG_Hybrid/main.py`.
+- Keep `IBG_Hybrid/budgeted.py` as the single code-level owner of
+  `HYBRID_STAGE_BUDGET = 2`; configuration, prototype planning, and prototype
+  embedding reject any other value.
+- Represent an action as exactly two typed selections from distinct stages,
+  ordered by increasing stage ID. This canonical order defines deterministic
+  enumeration and exact-tie behavior without independently ranking stages.
+- Enforce the active three-stage problem shape in `HybridConfiguration`.
+  Replica IDs must be positive and within the configured per-stage count.
+- Represent pre-decision coupled load as one immutable global stage-major
+  matrix. Committing an action increments only its selected replicas; the one
+  skipped stage is absent from placement and load change.
+- Make feasibility explicit through `FeasibilityResult` rather than encoding
+  rejection in a score or an invalid replica ID.
+- Use the exhaustive coupled oracle only as a tiny correctness fixture. Its
+  objective and feasibility rules are injected, canonical ties choose the
+  first action, and hard size limits prevent use at 20x3x10.
+- Do not treat retained prototype pruning, rollout, latency, learning,
+  utility, SLA, link, reporting, or output functions as Phase 1 correctness
+  contracts. Production pruning/lookahead/Monte Carlo and Exact-component
+  integration remain later phases.
+
+## IBG-Hybrid Phase 0 final decisions
+
+The paper, old prototype, and accepted initial target now differ as follows:
+
+| Area | Paper text | Old prototype | Accepted Hybrid contract |
+|---|---|---|---|
+| Action/budget | General set permits `1..L`; other SFC text requires every stage | Always two stages but old `budget` was not authoritative | Exactly `L=2`, two distinct stage/replica pairs, third stage fully bypassed |
+| Feasibility | Availability plus an underspecified node resource vector | No Ready/capacity enforcement | Ready plus declared positive per-replica assigned-flow limit; missing admission or pair-link metadata rejects the action |
+| Node resources | CPU/memory/bandwidth capacity notation | Not implemented | Existing Pod requests are not per-flow charges; a future per-flow resource vector needs a new versioned contract |
+| Pruning `C` | Prose says top `C` replicas per stage; notation table says paths | `C=8` per stage, then undocumented top-`X=8` joint actions | `C=5` feasible replicas per stage, dynamic belief/load-aware score, no `X`; 75 maximum `L=2` actions |
+| Link coupling | Deterministic selected host-pair cost | Hidden true-state lookup and later post-hoc deduction | One required known directed selected-pair planning cost; no hidden state or measured runtime residual in selection |
+| Lookahead value | Exact budgeted algorithm scores the focal player at predicted future loads; approximation wording says average utility | Adds current and future-player utilities and counts the focal immediate value twice | Evaluate the focal route once at projected loads; never sum future-player welfare |
+| Depth `D` | Simulate the next `D` flows | Includes the focal action inside its depth handling | `D=2` future arrivals after committing the focal action; clamp to remaining flows |
+| Monte Carlo | `S` epsilon-noisy greedy continuations; later text inconsistently mentions a bandit kernel | Unseeded `S=50`, epsilon `0.10` | `S=50`, epsilon-greedy joint continuation over feasible pruned actions; bandit deferred to Phase 10 |
+| Activation | Example high contention `rho>0.7`, high priority, or high entropy; entropy threshold omitted | Monte Carlo path effectively always active | MC for normalized entropy `>=0.75`; else lookahead for contention `>=0.70` or high priority; else greedy |
+| Seeds | Not specified | Entropy-seeded default RNG with no provenance | Independent versioned BLAKE2b flow-order and candidate/sample rollout seeds derived from one root seed |
+| Learning/runtime | Sparse selected observations and a future sidecar blueprint | Old learning, utility, SLA, CSV, and prints | Reuse frozen Exact latency/learning/outcome/runtime contracts in later phases; compact slot metrics only |
+
+Additional accepted decisions:
+
+- Rank feasible replicas per stage by shared belief-driven expected stage
+  utility at `current load + 1`, breaking ties by lowest replica ID. The
+  paper's static-zero-load pruning phrase is superseded for this project by
+  its own load-aware greedy definition and the active Exact latency model.
+- Enumerate all pruned `L=2` actions at the initial `C=5`; do not add the old
+  top-`X` cut or local search unless measured Phase 2 evidence later requires
+  a separately accepted approximation.
+- Score a complete action as the two selected expected stage utilities at the
+  focal flow's projected final loads minus one known directed pair-link cost
+  at one utility unit/ms.
+- Use maximum Ready-replica assigned-load/capacity ratio as normalized
+  contention. Use maximum normalized Shannon entropy among feasible pruned
+  replica beliefs for uncertainty activation.
+- Give Monte Carlo activation precedence over lookahead, and lookahead
+  precedence over greedy, so exactly one internal path is selected for every
+  decision.
+- Future deterministic and stochastic continuations use joint greedy actions
+  over the feasible pruned action set. MC epsilon exploration is uniform over
+  that same set. Bandit logic cannot enter the core rollout kernel before
+  optional Phase 10.
+- Keep configured planning pair cost separate from the one raw measured
+  selected-pair outcome record. The active two-hop physical-only outcome and
+  110-ms SLA remain unchanged.
+- Record contract/parameter versions, activation values and reason, flow
+  order, root seed, derived seed scheme, focal candidate, and MC sample count
+  in future Hybrid traces.
+
+## IBG-Hybrid Phase 2 decisions
+
+- Accept `IBG_Hybrid.policy.IBGHybridPolicy` as the single production-facing
+  Phase 2 coupled greedy/pruning boundary. The old prototype policy and the
+  tiny exhaustive oracle are not production dependencies.
+- Keep the policy input belief-only: global loads, Ready/assigned-flow
+  admission metadata, belief vectors, and configured directed pair-link
+  costs. Do not pass runtime replica objects, true state, legacy replica cost,
+  or measured pair residuals into Phase 2 selection.
+- Reuse the frozen Exact analytical state/load utility through
+  `IBG.latency_model.expected_state_utility`; form belief expectation in
+  Hybrid without copying the Exact latency or linear-utility implementation.
+- Extract the replica-local portion of Phase 0 feasibility into
+  `evaluate_replica_admission_feasibility` and make complete Phase 0
+  feasibility call it. This preserves the established rejection strings and
+  rules while giving Phase 2 one authoritative Ready/capacity filter before
+  pruning.
+- Enumerate all structural canonical `L=2` actions for pre-pruning
+  accounting. Prune only locally Ready/capacity-feasible replicas, at
+  `current_load + 1`, independently per stage with `C=5`.
+- Keep retained replica order as score-descending/lowest-ID-on-tie for
+  inspection, but enumerate retained complete actions in canonical
+  stage/replica order. Select by strict score improvement so exact complete
+  action ties choose the first canonical action.
+- Apply directed pair-link feasibility after forming a complete action.
+  Score every feasible pruned action as the sum of its two cached
+  belief-driven stage utilities minus the configured planning link cost at
+  one utility unit/ms.
+- Record both replica and complete-action accounting: available and locally
+  feasible replicas by stage, retained identities, structural actions,
+  complete feasible actions before pruning, total/feasible pruned actions,
+  and deterministic rejection-reason counts.
+- Raise `NoFeasiblePrunedAction` with the completed accounting when no valid
+  complete action survives. Do not use an invalid replica ID, negative
+  infinity, or a partial one-stage placement as a fallback.
+- Keep lookahead, Monte Carlo, bandit, runner, traffic, learning, metrics,
+  replay, Kubernetes, diagnostics, and netem out of Phase 2.
+
+## IBG-Hybrid Phase 3 decisions
+
+- Add deterministic limited lookahead as `IBGHybridPolicy.select_lookahead`;
+  retain `select_greedy` unchanged as the Phase 2 continuation boundary.
+- Derive later-flow count from the immutable state's complete `L=2`
+  assignment count and configured slot size. Reject a decision after all
+  configured flows have already been committed.
+- For every canonical root-feasible pruned action, create an independent
+  branch, commit the focal action once, and run exactly
+  `min(D, remaining flows after focal)` joint-greedy continuations.
+- Recompute Phase 2 admission feasibility, belief/load-aware pruning,
+  directed-link feasibility, scoring, and candidate accounting at every
+  continuation state. Do not cache a stale root candidate set across loads.
+- Evaluate a completed branch only as the focal action's two stage utilities
+  at the final projected loads minus its configured planning link once. Do
+  not add the immediate focal score or any continuation-player welfare.
+- Preserve canonical strict-improvement ties for both Phase 2 continuations
+  and the final focal choice.
+- Return the selected focal commit as `HybridSolverResult.state_after`.
+  Retain simulated future states and continuation decisions only in immutable
+  lookahead detail; they are not real placements.
+- Record root Phase 2 accounting and the full Phase 2 decision/accounting at
+  every continuation step. Treat a branch that cannot complete its required
+  continuation as non-selectable, retain its failure accounting, and raise
+  `NoFeasibleLookaheadAction` only when every focal branch dead-ends.
+- Keep Monte Carlo, activation thresholds, flow ordering, orchestration,
+  execution, learning, metrics, replay, Kubernetes, diagnostics, netem, and
+  bandit work deferred to their existing later phases.
+
+## IBG-Hybrid Phase 4 decisions
+
+- Add `IBGHybridPolicy.select_monte_carlo` as the seeded rollout method of the
+  existing public policy. Preserve Phase 2 `select_greedy` and Phase 3
+  `select_lookahead` behavior unchanged.
+- Attempt exactly `S=50` candidate-specific samples for every root-feasible
+  pruned focal action. Commit the focal once per sample and clamp `D=2` to
+  the actual later flows in the configured slot.
+- Build every sample seed only through `RolloutSeedKey` and
+  `derive_rollout_seed`, including root seed, slot, decision position, flow,
+  focal action, and sample index. Use one local `random.Random` instance per
+  sample and never a shared RNG.
+- Recompute the unchanged Phase 2 feasible-pruned joint action set and
+  accounting at every updated continuation state. Do not reuse the root pool
+  as a continuation pool.
+- Implement epsilon-greedy continuation exactly: probability `0.90` selects
+  the Phase 2 greedy result; probability `0.10` draws uniformly from the
+  current feasible-pruned tuple. At epsilon zero every step is greedy; at
+  epsilon one every step is a seeded uniform exploration draw.
+- Retain the current feasible action tuple and accounting with every rollout
+  step so exploration membership and updated-state pruning are auditable.
+- Score every completed sample only by the focal action at projected final
+  loads, with the focal planning link deducted once. Do not add immediate
+  focal value, continuation-player welfare, or another link deduction.
+- Compute a focal candidate mean from completed samples only. Record failed
+  samples separately; reject the candidate only if all `S` samples fail, and
+  raise `NoFeasibleMonteCarloAction` only if every focal candidate is
+  rejected.
+- Preserve strict canonical focal ties on equal sample means. Greedy rollout
+  ties remain Phase 2 canonical ties; seeded exploration is intentionally
+  random within the complete current feasible pool.
+- Keep automatic activation, flow-order randomization, runner/traffic,
+  learning, metrics, replay, Kubernetes, diagnostics, netem, and bandit logic
+  out of Phase 4.
+
+## IBG-Hybrid Phase 5 decisions
+
+- Accept `IBG_Hybrid.runner.run_hybrid_slot` as the pure Phase 5 lifecycle
+  boundary. It orchestrates the existing `IBGHybridPolicy`; it does not
+  duplicate or replace Phase 2 pruning/greedy, Phase 3 lookahead, or Phase 4
+  Monte Carlo mathematics.
+- Derive exactly one slot-wide flow order with
+  `derive_flow_order_seed(root_seed, slot_id)` and one local RNG. Keep that
+  stream independent from rollout, physical-processing, and
+  observation-jitter seeds.
+- Obtain activation inputs from the current feasible pruned action pool.
+  Preserve total precedence: Monte Carlo at entropy `>=0.75`; otherwise
+  lookahead at contention `>=0.70` or explicit high priority; otherwise
+  greedy.
+- Commit exactly the selected focal `L=2` action to real slot loads. Retain
+  lookahead/Monte-Carlo continuation states only in immutable policy detail.
+- Complete all 20 placements before observation generation. Require exactly
+  40 selected observations and 20 selected-pair outcome records at 20x3x10;
+  reject incomplete, duplicate, wrong-route, wrong-load, or unselected
+  adapter data before learning.
+- Keep hidden true state inside the in-process simulation adapter. Use
+  separately derived physical and observation seeds and the unchanged Exact
+  physical sampler, observation-only sampler, convolved likelihood, and
+  state estimator at final assigned load.
+- Reuse `IBG.learning.apply_observations` and the frozen Exact
+  `Replica.local_update`/`Replica.aggregation` methods as the selected-only
+  posterior/aggregation implementation. Apply the complete observation batch
+  once, retain `0.8`, and keep strict equilibrium at every entry change
+  `<0.033`.
+- Compute expected Hybrid utility from the two selected stages at final loads
+  minus configured planning link. Compute active realized utility and SLA
+  only from selected physical processing. Preserve one simulated measured
+  pair per flow solely in raw end-to-end latency and the physical-plus-pair
+  reference utility.
+- Call unchanged Exact linear utility, outcome-latency, `SLA_v`, Jain
+  fairness, and equilibrium helpers. Do not copy formulas into Hybrid when an
+  algorithm-neutral Exact helper applies.
+- Keep Phase 5 results immutable and in memory. The runner prints nothing;
+  the explicit printable wrapper emits exactly one compact line. Add no
+  CSV/pickle sink, HTTP, containers, Kubernetes, replay, diagnostics, netem,
+  DPDK/VPP, or bandit behavior.
+- Treat the completed low-entropy 20x3x10 measurement as local pure-slot
+  evidence only. Uniform initial beliefs activate full `S=50` Monte Carlo for
+  every decision and exceeded the local command-session lifetime of 1,000
+  seconds; do not turn that non-terminal attempt into a runtime result or
+  weaken `C`, `D`, `S`, epsilon, seed ownership, or rollout detail to make it
+  fit.
+
+## IBG-Hybrid activation correction decision (pending implementation)
+
+The earlier Phase 0/5 decision that activated Monte Carlo whenever maximum
+normalized belief entropy was at least `0.75` is superseded. That threshold
+is not sufficient by itself: the paper presents Monte Carlo as an exceptional
+response to uncertainty following conditions such as scaling, failure, or
+churn, while greedy pruning is the normal path and limited lookahead handles
+contention or high priority.
+
+Adopt an explicit immutable slot-level uncertainty-event flag, defaulting to
+false. Automatic precedence will be: Monte Carlo only for
+`uncertainty_event && entropy >= 0.75`; otherwise lookahead for contention
+`>= 0.70` or high priority; otherwise greedy. Uniform initial beliefs alone
+must therefore use the normal greedy/lookahead path. This does not change
+`L=2`, `C=5`, `D=2`, `S=50`, epsilon `0.10`, any policy-method mathematics,
+seed ownership, or the deferral of Bandit/UCB/Thompson work. Implementation
+and tests remain the immediate next task.
+
+### Superseding lookahead-default decision
+
+The preceding activation correction is incomplete where it says greedy is the
+normal placement path. For the active user-authorized IBG-Hybrid algorithm,
+accept the paper's Pruned Lookahead Rollout as the default: every feasible
+focal flow first receives `C=5` candidate pruning and then `D=2` lookahead,
+with clamping only at the end of the slot. Future simulated flows use the
+unchanged joint-greedy policy over their updated pruned feasible pool.
+
+The paper's dynamic low-contention greedy commit describes an optional
+fast-path variant; it is not enabled as the default Hybrid Lookahead decision
+in this project. Greedy remains a continuation policy and an independently
+reportable pruning-only baseline. Monte Carlo remains an exceptional branch
+for explicit uncertainty/churn plus high entropy. This supersedes both the
+old entropy-only MC trigger and the newly appended greedy-normal-path wording.
+
+### Core-Hybrid and Monte-Carlo separation
+
+Accept two distinct next steps. First complete the normal IBG-Hybrid
+Lookahead algorithm: `C=5` pruning and default `D=2` focal lookahead for each
+feasible flow, using joint greedy only as the continuation policy. Automatic
+Monte Carlo is disabled for this core completion path, including during normal
+uniform-belief startup.
+
+Second, reopen Monte Carlo only as a dedicated design phase. The current
+`75` focal candidates times `S=50` rollout structure took about 68 seconds
+for one 20x3x10 decision and cannot be described as an operational fallback.
+Do not mask that issue by silently lowering `S`, `D`, or the candidate set,
+using stale pools, or claiming a runtime guarantee. Any scalable MC redesign
+needs its own explicit contract and evidence before MC can be automatically
+enabled.
+
+### Core-lookahead correction accepted
+
+- Version the corrected automatic-selection contract as
+  `ibg-hybrid-policy-contract-v2`.
+- Make `PipelinePath.LOOKAHEAD` the only path returned to automatic core slot
+  orchestration. Continue recording entropy, contention, and priority as
+  diagnostics without allowing them to trigger MC or greedy placement.
+- Keep the last two effective horizons deterministic: for 20 placements at
+  configured `D=2`, positions 1--18 use depth 2, position 19 uses depth 1,
+  and position 20 uses depth 0.
+- Permit immutable action-space reuse and belief-value/load utility
+  memoization inside one `IBGHybridPolicy`. Cache identity includes the full
+  belief value and load, so changed learned beliefs cannot reuse a stale
+  value. These optimizations must not change feasibility, accounting,
+  ordering, objective, or selected action semantics.
+- Retain the explicit Phase 4 MC implementation only for correctness
+  characterization. It remains inaccessible from automatic slots until the
+  separate MC redesign is accepted.
+
+### Current `D=3` manual override
+
+Supersede the active default lookahead depth with `D=3` at user direction.
+This is versioned as `ibg-hybrid-policy-contract-v3` and applies to the
+current core lookahead runner for manual inspection. The explicit MC method
+shares the parameter object but remains unreachable from automatic slots and
+is still deferred for redesign.
+
+### Professor-authorized MC decision
+
+Accept a separate deterministic root-selection parameter `Q=10` for the
+future production MC path. After ordinary `C=5` per-stage pruning and complete
+action feasibility/scoring, retain the top ten canonical complete actions by
+their immediate joint score. MC then gives each retained focal candidate its
+full `S=50` seeded rollout budget. `Q` is not the per-stage pruning size and
+does not replace `C`.
+
+All simulated future flows use the unchanged Phase 2 greedy policy rather
+than deterministic lookahead; active `D=3` remains their rollout horizon.
+The selected candidate is the greatest mean focal-only projected value, with
+canonical ties. No Bandit/UCB/Thompson policy is authorized. The historical
+all-pruned-actions Phase 4 method remains a test/reference boundary only;
+the new top-`Q` MC path is the required production redesign.
+
+### `D=3` override reverted
+
+The temporary manual `D=3` override is superseded. Restore default `D=2` as
+`ibg-hybrid-policy-contract-v4` for ordinary pruned lookahead and the future
+MC greedy-continuation horizon. This does not alter `Q=10`, `C=5`, `S=50`,
+epsilon, or the no-Bandit decision.
