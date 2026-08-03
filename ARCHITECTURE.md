@@ -1595,3 +1595,43 @@ each stage, reached 6/6 Ready for all three StatefulSets, and completed a
 valid controller slot. A future deliberate profile change for an existing
 replica remains an explicit refresh/redeployment operation, not an implicit
 side effect of scale-up.
+
+### MILP heterogeneous planning-link profile repair
+
+Updated: 2026-08-03.
+
+The pre-placement planning-link boundary now retains the
+`milp-planning-links-v1` contract version, a semantic source identity, the
+`explicit-directed` or `uniform-objective-constant` mode, and the canonical
+whole-experiment fingerprint in both pure and Kernel experiment results. The
+same fields are emitted in their compact provenance output. The canonical
+planner input remains the complete ordered tuple of lower-stage-to-higher-
+stage replica pairs; pure and Kernel builders use the same parser and produce
+equal `MILPProblemInput` values for the same profile and dimensions.
+
+Explicit JSON validation requires exact runtime-dimension coverage, strict
+positive-integer stage/replica IDs, increasing distinct stages, finite
+nonnegative costs, canonical completeness, and no duplicate pair. A requested
+file is never replaced with generated values. Uniform `--planning-link-ms`
+behavior is unchanged and remains explicitly marked objective-constant under
+exact `L=2`.
+
+`MILP/planning_links.py` is an import-safe, stdout-only generator for a
+complete deterministic heterogeneous example at user-supplied stage/replica
+dimensions. Its source is deliberately labelled `not-calibrated`; it is a
+reproducible test/demo profile, not measured network evidence. Actual Kernel
+pair latency is still generated after placement and remains outcome telemetry
+only. It cannot update or replace same-slot planning coefficients.
+
+### Future cross-baseline seeded state-profile boundary
+
+Requested: 2026-08-03. Not implemented.
+
+Every algorithm path—IBG-Exact, IBG-Hybrid, MILP, and future baselines—will
+eventually accept a common --seed state-profile control with default 2050.
+It will deterministically create the complete replica hidden-state map once at
+experiment initialization, retain that map and seed as run provenance, and
+hold it fixed across every slot/iteration of that experiment. The same
+state-profile seed/map must be usable by all compared algorithms. It is
+separate from seeds used for physical, observation, flow-order, or other
+post-placement stochastic streams.

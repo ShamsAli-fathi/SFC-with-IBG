@@ -1530,3 +1530,58 @@ The full MILP Phase 0--6/parity suite passed 177 tests and 32 unchanged Exact
 runtime/latency/forwarder tests passed before live validation. No image build,
 IBG/Hybrid file, solver/outcome policy, worker, or resource change was needed
 for this repair.
+
+### MILP heterogeneous planning-link profile repair completed
+
+Updated: 2026-08-03.
+
+The explicit `--planning-links PATH` path is now a strict, versioned,
+dimension-matched planning input rather than merely a permissive JSON adapter.
+It validates all increasing-stage replica pairs exactly once, rejects invalid
+IDs/directions/duplicates/incomplete coverage/nonfinite or negative costs, and
+retains link source, `milp-planning-links-v1`, link mode, and the canonical
+experiment fingerprint in pure and Kernel structured/compact provenance.
+
+The uniform option remains unchanged:
+
+```text
+PYTHONPATH=. ./.venv/bin/python -m MILP.experiment --flow 1 --stage 3 --replica 2 --cutoff 5 --planning-link-ms 2
+```
+
+An explicit deterministic example can be generated deliberately, then used by
+either execution path:
+
+```text
+PYTHONPATH=. ./.venv/bin/python -m MILP.planning_links --stage 3 --replica 2 > /tmp/milp-planning-links-3x2.json
+PYTHONPATH=. ./.venv/bin/python -m MILP.experiment --flow 1 --stage 3 --replica 2 --cutoff 5 --planning-links /tmp/milp-planning-links-3x2.json
+./.venv/bin/python scripts/run_milp_kernel.py --flow 1 --stage 3 --replica 2 --cutoff 5 --planning-links /tmp/milp-planning-links-3x2.json --timeout 300 --verbose
+```
+
+The generated source is explicitly named
+`deterministic-heterogeneous-example-v1-not-calibrated`. It is suitable for
+repeatable tests/demos, not empirical latency claims. A focused coupled solve
+proved heterogeneous coefficients can change the chosen pair from canonical
+`(1,1) -> (2,1)` to `(2,2) -> (3,2)`. A separate fixture proved measured-pair
+outcomes cannot change the configured coefficients or placement.
+
+Verification: 192 MILP tests and 40 relevant unchanged Exact latency/
+processor/forwarder tests pass. Pure uniform and explicit smoke runs both
+proved optimal at 1x3x2 and emitted the new provenance fields. Compilation,
+silent imports, global-RNG neutrality, `git diff --check`, frozen
+`IBG/`/`IBG_Hybrid/`, no Markdown under `MILP/`, and no Hybrid algorithm
+import under `MILP/` pass. No live Kernel run, image build, deployment,
+calibration, solver/formulation, resource, batching, utility/SLA, or outcome
+policy change was performed.
+
+### Future common state-seed feature
+
+Requested: 2026-08-03. Deferred; nothing implemented yet.
+
+The user wants a general --seed option, default 2050, across IBG-Exact,
+IBG-Hybrid, MILP, and future baselines. It will generate a replica hidden-state
+map once per experiment, preserve it across all iterations, and record the
+seed/map for reproducibility and fair same-state comparisons. This is separate
+from post-placement physical/observation/flow-order randomness. Current active
+IBG Kernel and MILP instead load fixed state values from their runtime profile
+files, so a state-seed implementation will require deliberate pure/Kernel
+parity and safe Pod state-profile refresh work when reopened.

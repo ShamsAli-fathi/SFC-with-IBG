@@ -80,6 +80,7 @@ def _planning_link_document(args):
         return json.loads(Path(args.planning_links).read_text(encoding="utf-8"))
     return {
         "contract_version": "milp-planning-links-v1",
+        "source": "cli-uniform",
         "uniform_cost_ms": args.planning_link_ms,
     }
 
@@ -586,6 +587,9 @@ def main(argv=None):
     _announce(
         f"profile={experiment_profile.source} "
         f"fingerprint={experiment_profile.fingerprint} "
+        f"profile-contract={experiment_profile.contract_version} "
+        f"link-contract={experiment_profile.planning_link_contract_version} "
+        f"link-source={experiment_profile.planning_link_source} "
         f"link-mode={experiment_profile.planning_link_mode}"
     )
     if experiment_profile.uniform_planning_link_is_objective_constant:

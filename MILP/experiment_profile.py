@@ -30,8 +30,11 @@ from .slot_contracts import MeasuredPairLatencyProfile
 MILP_EXPERIMENT_PROFILE_VERSION = "milp-experiment-profile-v1"
 MILP_EXPERIMENT_PROFILE_SOURCE = "milp-experiment"
 MILP_ASSIGNED_FLOW_CAPACITY_UNIT = "assigned-flows-per-slot"
+MILP_PLANNING_LINK_PROFILE_VERSION = "milp-planning-links-v1"
 MILP_UNIFORM_PLANNING_LINK_MODE = "uniform-objective-constant"
 MILP_EXPLICIT_PLANNING_LINK_MODE = "explicit-directed"
+MILP_UNIFORM_PLANNING_LINK_SOURCE = "cli-uniform"
+MILP_EXPLICIT_PLANNING_LINK_SOURCE = "user-explicit-json"
 
 
 def _nonnegative_integer(value: object, field: str) -> int:
@@ -105,6 +108,8 @@ class MILPExperimentProfile:
     measured_pair_profiles: tuple[MeasuredPairLatencyProfile, ...]
     source_identity: str
     planning_link_mode: str
+    planning_link_source: str
+    planning_link_contract_version: str = MILP_PLANNING_LINK_PROFILE_VERSION
     assigned_flow_capacity_unit: str = MILP_ASSIGNED_FLOW_CAPACITY_UNIT
     source: str = MILP_EXPERIMENT_PROFILE_SOURCE
     contract_version: str = MILP_EXPERIMENT_PROFILE_VERSION
@@ -125,6 +130,15 @@ class MILPExperimentProfile:
             MILP_EXPLICIT_PLANNING_LINK_MODE,
         ):
             raise MILPContractError("unexpected planning-link mode")
+        if (
+            self.planning_link_contract_version
+            != MILP_PLANNING_LINK_PROFILE_VERSION
+        ):
+            raise MILPContractError("unexpected planning-link profile version")
+        if not isinstance(self.planning_link_source, str) or not (
+            self.planning_link_source.strip()
+        ):
+            raise MILPContractError("planning-link source must be nonempty")
 
         dimensions = self.configuration.dimensions
         expected_keys = dimensions.replica_keys
@@ -179,6 +193,8 @@ class MILPExperimentProfile:
             "cutoff_seconds": self.configuration.cutoff_seconds,
             "assigned_flow_capacity_unit": self.assigned_flow_capacity_unit,
             "planning_link_mode": self.planning_link_mode,
+            "planning_link_contract_version": self.planning_link_contract_version,
+            "planning_link_source": self.planning_link_source,
             "uniform_planning_link_is_objective_constant": (
                 self.uniform_planning_link_is_objective_constant
             ),
@@ -231,8 +247,27 @@ def planning_link_costs_from_document(
 
     if not isinstance(document, dict):
         raise MILPContractError("planning-link document must be a JSON object")
-    if document.get("contract_version") != "milp-planning-links-v1":
+    if document.get("contract_version") != MILP_PLANNING_LINK_PROFILE_VERSION:
         raise MILPContractError("unexpected planning-link document version")
+    source = document.get("source")
+    if source is not None and (
+        not isinstance(source, str) or not source.strip()
+    ):
+        raise MILPContractError("planning-link document source must be nonempty")
+    dimensions_document = document.get("dimensions")
+    if dimensions_document is not None:
+        if not isinstance(dimensions_document, dict):
+            raise MILPContractError("planning-link dimensions must be an object")
+        expected_dimensions = {
+            "stage_count": configuration.dimensions.stage_count,
+            "replicas_per_stage": list(
+                configuration.dimensions.replicas_per_stage
+            ),
+        }
+        if dimensions_document != expected_dimensions:
+            raise MILPContractError(
+                "planning-link profile dimensions do not match the requested run"
+            )
     expected = required_directed_pairs(configuration.dimensions)
     has_uniform = "uniform_cost_ms" in document
     has_explicit = "links" in document
@@ -252,13 +287,35 @@ def planning_link_costs_from_document(
         if not isinstance(item, dict):
             raise MILPContractError("each explicit planning link must be an object")
         try:
-            pair = (
-                ReplicaKey(int(item["source_stage"]), int(item["source_replica"])),
-                ReplicaKey(int(item["target_stage"]), int(item["target_replica"])),
-            )
+            raw_source_stage = item["source_stage"]
+            raw_source_replica = item["source_replica"]
+            raw_target_stage = item["target_stage"]
+            raw_target_replica = item["target_replica"]
             raw_cost = item["cost_ms"]
-        except (KeyError, TypeError, ValueError) as error:
+        except KeyError as error:
             raise MILPContractError("explicit planning link has invalid fields") from error
+        for value, field in (
+            (raw_source_stage, "source_stage"),
+            (raw_source_replica, "source_replica"),
+            (raw_target_stage, "target_stage"),
+            (raw_target_replica, "target_replica"),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, Integral)
+                or value < 1
+            ):
+                raise MILPContractError(
+                    f"explicit planning-link {field} must be a positive integer"
+                )
+        pair = (
+            ReplicaKey(int(raw_source_stage), int(raw_source_replica)),
+            ReplicaKey(int(raw_target_stage), int(raw_target_replica)),
+        )
+        if pair[0].stage >= pair[1].stage:
+            raise MILPContractError(
+                "explicit planning link must point from a lower to a higher stage"
+            )
         if pair in result:
             raise MILPContractError(f"duplicate explicit planning link: {pair}")
         result[pair] = _finite_nonnegative(raw_cost, "explicit planning-link cost")
@@ -269,6 +326,23 @@ def planning_link_costs_from_document(
             f"planning-link metadata mismatch: missing={missing}, extra={extra}"
         )
     return ({pair: result[pair] for pair in expected}, MILP_EXPLICIT_PLANNING_LINK_MODE)
+
+
+def planning_link_source_from_document(document: object, mode: str) -> str:
+    """Return stable semantic provenance without making fingerprints path-dependent."""
+
+    if not isinstance(document, dict):
+        raise MILPContractError("planning-link document must be a JSON object")
+    source = document.get("source")
+    if source is None:
+        return (
+            MILP_UNIFORM_PLANNING_LINK_SOURCE
+            if mode == MILP_UNIFORM_PLANNING_LINK_MODE
+            else MILP_EXPLICIT_PLANNING_LINK_SOURCE
+        )
+    if not isinstance(source, str) or not source.strip():
+        raise MILPContractError("planning-link document source must be nonempty")
+    return source.strip()
 
 
 def build_experiment_profile(
@@ -293,6 +367,9 @@ def build_experiment_profile(
             raise MILPContractError(f"experiment {field} metadata must cover every replica")
     costs, mode = planning_link_costs_from_document(
         planning_link_document, configuration
+    )
+    planning_link_source = planning_link_source_from_document(
+        planning_link_document, mode
     )
     pairs = required_directed_pairs(dimensions)
     return MILPExperimentProfile(
@@ -321,6 +398,7 @@ def build_experiment_profile(
         ),
         source_identity=source_identity,
         planning_link_mode=mode,
+        planning_link_source=planning_link_source,
     )
 
 
@@ -419,6 +497,19 @@ def experiment_profile_from_document(document: object) -> MILPExperimentProfile:
             measured_pair_profiles=measured,
             source_identity=document["source_identity"],
             planning_link_mode=document["planning_link_mode"],
+            planning_link_source=document.get(
+                "planning_link_source",
+                (
+                    MILP_UNIFORM_PLANNING_LINK_SOURCE
+                    if document["planning_link_mode"]
+                    == MILP_UNIFORM_PLANNING_LINK_MODE
+                    else MILP_EXPLICIT_PLANNING_LINK_SOURCE
+                ),
+            ),
+            planning_link_contract_version=document.get(
+                "planning_link_contract_version",
+                MILP_PLANNING_LINK_PROFILE_VERSION,
+            ),
             assigned_flow_capacity_unit=document["assigned_flow_capacity_unit"],
             source=document["source"],
             contract_version=document["contract_version"],

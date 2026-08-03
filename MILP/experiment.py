@@ -84,6 +84,7 @@ def _planning_document(arguments) -> object:
         return json.loads(arguments.planning_links.read_text(encoding="utf-8"))
     return {
         "contract_version": "milp-planning-links-v1",
+        "source": "cli-uniform",
         "uniform_cost_ms": arguments.planning_link_ms,
     }
 
@@ -164,6 +165,9 @@ def format_experiment_result(result: MILPExperimentRunResult) -> str:
         f"jain={metrics.jain_fairness:.6f} "
         f"solve={metrics.solver_seconds:.6f}s total={metrics.total_slot_seconds:.6f}s "
         f"profile={profile.source} fingerprint={profile.fingerprint} "
+        f"profile-contract={profile.contract_version} "
+        f"link-contract={profile.planning_link_contract_version} "
+        f"link-source={profile.planning_link_source} "
         f"link-mode={profile.planning_link_mode}"
     )
 
@@ -179,6 +183,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"scale={arguments.flow}x{arguments.stage}x{arguments.replica} "
             f"cutoff={arguments.cutoff:g}s profile={profile.source} "
             f"fingerprint={profile.fingerprint} "
+            f"profile-contract={profile.contract_version} "
+            f"link-contract={profile.planning_link_contract_version} "
+            f"link-source={profile.planning_link_source} "
             f"link-mode={profile.planning_link_mode} HiGHS-progress=enabled",
             flush=True,
         )

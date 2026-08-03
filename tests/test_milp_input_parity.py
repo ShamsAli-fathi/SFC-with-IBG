@@ -14,6 +14,7 @@ from MILP.experiment_profile import (
     MILP_ASSIGNED_FLOW_CAPACITY_UNIT,
     MILP_EXPLICIT_PLANNING_LINK_MODE,
     MILP_UNIFORM_PLANNING_LINK_MODE,
+    MILP_PLANNING_LINK_PROFILE_VERSION,
     build_experiment_profile_from_runtime_states,
     experiment_profile_from_document,
 )
@@ -88,6 +89,52 @@ def test_pure_and_kernel_commands_construct_identical_canonical_input():
     assert pure.fingerprint == kernel.fingerprint
     assert pure.assigned_flow_capacity_unit == MILP_ASSIGNED_FLOW_CAPACITY_UNIT
     assert {item.assigned_flow_capacity for item in pure.replicas} == {2}
+    assert pure.planning_link_contract_version == MILP_PLANNING_LINK_PROFILE_VERSION
+    assert pure.planning_link_source == "cli-uniform"
+
+
+def test_pure_and_kernel_explicit_profile_commands_construct_identical_input(tmp_path):
+    launcher = _launcher_module()
+    uniform_arguments = build_pure_parser().parse_args(_common_argv())
+    dimensions = build_pure_experiment_profile(uniform_arguments).configuration.dimensions
+    links = [
+        {
+            "source_stage": source.stage,
+            "source_replica": source.replica,
+            "target_stage": target.stage,
+            "target_replica": target.replica,
+            "cost_ms": 1.0 + index / 10.0,
+        }
+        for index, (source, target) in enumerate(required_directed_pairs(dimensions))
+    ]
+    path = tmp_path / "explicit-links.json"
+    path.write_text(
+        json.dumps(
+            {
+                "contract_version": MILP_PLANNING_LINK_PROFILE_VERSION,
+                "source": "explicit-parity-fixture-v1",
+                "dimensions": {
+                    "stage_count": dimensions.stage_count,
+                    "replicas_per_stage": list(dimensions.replicas_per_stage),
+                },
+                "links": links,
+            }
+        ),
+        encoding="utf-8",
+    )
+    argv = _common_argv()
+    argv[-2:] = ["--planning-links", str(path)]
+
+    pure = build_pure_experiment_profile(build_pure_parser().parse_args(argv))
+    kernel, _runtime = launcher.build_launcher_experiment_profile(
+        launcher.build_parser().parse_args(argv)
+    )
+
+    assert pure == kernel
+    assert pure.problem_input() == kernel.problem_input()
+    assert pure.fingerprint == kernel.fingerprint
+    assert pure.planning_link_source == "explicit-parity-fixture-v1"
+    assert pure.planning_link_mode == MILP_EXPLICIT_PLANNING_LINK_MODE
 
 
 def test_large_construction_only_parity_does_not_solve_or_contact_kubernetes():

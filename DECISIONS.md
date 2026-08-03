@@ -1064,3 +1064,44 @@ Updated: 2026-08-03.
   ordinal 0--4 Pod UID remained unchanged; only ordinal 5 was created per
   stage. This preserves active Pod processes during append-only scale-up and
   does not alter workers, resources, traffic, MILP policy, or outcomes.
+
+### MILP planning-link profile decision
+
+Updated: 2026-08-03.
+
+- Retain both mutually exclusive user controls. `--planning-link-ms` is the
+  unchanged uniform smoke/control mode and is labelled
+  `uniform-objective-constant`; `--planning-links PATH` is the latency-aware
+  input boundary for a complete `milp-planning-links-v1` directed table.
+- Treat only lower-stage-to-higher-stage replica pairs as valid, matching the
+  frozen increasing-stage two-hop route. Require every such pair exactly once
+  at the requested dimensions, with strict integer IDs and finite nonnegative
+  millisecond coefficients.
+- Retain planning-link source/version/mode with the canonical experiment
+  fingerprint in pure and Kernel provenance. Equal dimensions are not enough
+  for parity; equal canonical planner inputs are required.
+- Accept an explicit deterministic example generator for repeatable tests and
+  operating examples, but label it not calibrated and never select it
+  implicitly. Empirical planning-link calibration remains a separate future
+  evidence task.
+- Keep measured Kernel pair latency outcome-only. No observed same-slot pair
+  value may feed back into the centralized solve or mutate the configured
+  planning profile.
+
+### Future cross-baseline seeded hidden-state decision
+
+Requested: 2026-08-03. Deferred; no current behavior changes.
+
+- Add a general --seed control, defaulting to 2050, to initialize one
+  deterministic hidden-state assignment per experiment.
+- Do not regenerate hidden states at each slot/iteration. Keep the assignment
+  fixed for the complete experiment and retain both the seed and full state
+  map in provenance.
+- For a fair IBG-Exact/IBG-Hybrid/MILP comparison, require the same generated
+  state-profile seed or the same recorded state map across all baselines.
+- Keep this state-profile seed distinct from physical/observation/flow-order
+  outcome seeds. Changing it changes the planner population; it is not merely
+  a telemetry-noise change.
+- Implement only when explicitly reopened, with pure/Kernel parity and
+  controlled profile-refresh behavior where running Pods must receive new
+  state configuration.

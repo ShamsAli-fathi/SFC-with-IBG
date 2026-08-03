@@ -1501,3 +1501,41 @@ that append-only profile expansion preserves the existing 15 replica-Pod UIDs
 and creates only the three new ordinal-5 Pods. Future rollout-scale gates may
 use this non-disruptive behavior, but a deliberate state/profile change of an
 existing replica remains a separately explicit refresh operation.
+
+### MILP planning-latency profile repair complete
+
+Updated: 2026-08-03. Status: complete.
+
+- Strengthened the shared `milp-planning-links-v1` parser for complete
+  dimension-matched directed profiles, strict IDs, stage direction,
+  duplicates, finite nonnegative costs, source, and version provenance.
+- Added explicit source/contract/mode provenance to the canonical pure/Kernel
+  experiment profile and compact output while preserving the existing
+  whole-input fingerprint and byte-equal planner-input parity.
+- Added the opt-in `python -m MILP.planning_links` deterministic heterogeneous
+  example generator. It writes only to stdout and is explicitly not calibrated.
+- Proved in a one-flow coupled fixture that uniform links choose canonical
+  `(1,1) -> (2,1)`, while a heterogeneous table with otherwise identical
+  states/capacities changes the selected pair to `(2,2) -> (3,2)`.
+- Proved that changing outcome-only measured-pair profiles changes measured
+  telemetry but not planner coefficients or placement.
+- Gate result: 192 MILP Phase 0--6/parity/rollout/planning-link tests and 40
+  relevant unchanged Exact latency/processor/forwarder tests pass. Compilation,
+  silent imports, RNG neutrality, diff checking, frozen IBG/Hybrid trees, no
+  MILP Markdown, and no Hybrid algorithm import checks pass.
+
+The next planning-link task, if requested, is evidence-backed coefficient
+calibration. It is not part of this contract repair and must not reinterpret
+the deterministic example as measured latency.
+
+### Future: common seeded hidden-state experiments
+
+Requested: 2026-08-03. Deferred.
+
+Add a cross-baseline --seed option with default 2050. It must generate one
+reproducible hidden-state map at experiment start, keep it unchanged through
+all slots, retain it in provenance, and allow IBG-Exact, IBG-Hybrid, MILP, and
+future baselines to run against the same map. This is distinct from
+post-placement outcome RNG streams. Acceptance requires pure/Kernel parity,
+same-seed reproducibility, different-seed state-map variation, no global-RNG
+mutation, and explicit safe refresh behavior for existing Kernel Pods.

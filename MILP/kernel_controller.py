@@ -182,7 +182,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "MILP Kernel starting: "
             f"scale={arguments.flow}x{arguments.stage}x{arguments.replica} "
             f"cutoff={arguments.cutoff:g}s profile={profile.source} "
-            f"fingerprint={profile.fingerprint} HiGHS-progress=enabled",
+            f"fingerprint={profile.fingerprint} "
+            f"profile-contract={profile.contract_version} "
+            f"link-contract={profile.planning_link_contract_version} "
+            f"link-source={profile.planning_link_source} "
+            f"link-mode={profile.planning_link_mode} HiGHS-progress=enabled",
             flush=True,
         )
     execution = execute_milp_kernel_experiment(
@@ -197,6 +201,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         f"{format_milp_kernel_metrics(result)} profile={profile.source} "
         f"fingerprint={profile.fingerprint} "
+        f"profile-contract={profile.contract_version} "
+        f"link-contract={profile.planning_link_contract_version} "
+        f"link-source={profile.planning_link_source} "
         f"link-mode={profile.planning_link_mode} replay=ok",
         flush=True,
     )

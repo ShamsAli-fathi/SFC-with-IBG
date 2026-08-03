@@ -79,6 +79,7 @@ from .trace_contracts import (
 from .experiment_profile import (
     MILP_ASSIGNED_FLOW_CAPACITY_UNIT,
     MILP_EXPERIMENT_PROFILE_VERSION,
+    MILP_PLANNING_LINK_PROFILE_VERSION,
     MILPExperimentProfile,
     build_experiment_profile,
     build_experiment_profile_from_runtime_states,
@@ -89,6 +90,7 @@ __all__ = (
     "MILP_ACTION_CARDINALITY",
     "MILP_ASSIGNED_FLOW_CAPACITY_UNIT",
     "MILP_EXPERIMENT_PROFILE_VERSION",
+    "MILP_PLANNING_LINK_PROFILE_VERSION",
     "MILP_PHASE0_CONTRACT_VERSION",
     "MILP_PHASE1_CONTRACT_VERSION",
     "MILP_PHASE3_SLOT_CONTRACT_VERSION",
