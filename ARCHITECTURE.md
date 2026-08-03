@@ -821,3 +821,647 @@ active default is again `D=2`, versioned as
 `ibg-hybrid-policy-contract-v4`. This applies to core lookahead and the
 future MC greedy-continuation horizon; the final two core decisions clamp to
 depths 1 and 0.
+
+## MILP baseline architecture
+
+This section opens a separate MILP workstream and does not replace or remove
+the preceding IBG-Exact or IBG-Hybrid history. IBG-Hybrid core lookahead and
+its professor-directed top-`Q` Monte Carlo redesign are temporarily paused in
+their current state. No Hybrid or Exact behavior is to change while the MILP
+baseline is developed.
+
+The active MILP target is the centralized, coupled/budgeted benchmark using
+the user-selected `L=2` action model. The initial default configuration is 15 flows,
+3 stages, and 10 replicas per stage (`M=30` total), matching the
+largest small-scale MILP topology stated in `misc/vesal_tex.tex`. Every flow
+must select exactly `L=2` replicas from two distinct stages; at the initial
+three-stage profile the third stage is bypassed completely, while a run with
+`K` stages bypasses `K-2` stages. This is an explicit project override of the paper's
+separate SFC-specific `L=K` remark.
+
+MILP is not another IBG equilibrium solver. It receives the complete batch of
+flows and solves one centralized whole-slot social-welfare problem. Its
+planner is intentionally clairvoyant: the paper defines the MILP baseline as
+having perfect knowledge of each replica's true state. True state is therefore
+an authorized MILP planning input, while it remains forbidden in Exact and
+Hybrid selection. Flow beliefs, private-signal learning, sequential
+best-response continuation, pruning, lookahead, and Monte Carlo do not enter
+the MILP objective.
+
+The target pure formulation uses explicit binary placement and stage-selection
+variables, final replica-load/count indicators, and linearized selected-pair
+variables. Its constraints must enforce:
+
+- exactly two selected stages per flow and exactly one replica in each of
+  those stages;
+- no assignment or outcome contribution from the bypassed stage;
+- Ready/availability and declared assigned-flow capacity;
+- one configured nonnegative directed planning-link value for the selected
+  ordered pair; and
+- any later node-resource constraint only through an explicit versioned
+  demand/capacity contract, never by treating existing Pod requests as a
+  per-flow charge.
+
+The objective maximizes aggregate final-load social welfare. Replica welfare
+uses the frozen state/load-conditioned physical-latency and linear-utility
+concepts under the known true state. The one configured selected-pair planning
+cost is deducted per flow through the linearized pair choice. Measured runtime
+pair latency and observation-only jitter are outcome telemetry and must never
+be substituted into the optimization coefficients.
+
+An optimal result is accepted only when the backend reports a proven optimal
+status. A time-limited feasible incumbent must retain the best bound, gap,
+runtime, solver/backend version, and termination reason and must not be called
+optimal. The paper names Gurobi 10.0; the implementation will keep a
+backend-neutral model boundary so small deterministic tests can use an
+available open solver, while paper-replication claims require the actual
+backend and version to be recorded.
+
+The existing files under `MILP/` are disposable prototype material. The audit
+found that they currently:
+
+- run fifty experiments, print, and write CSV/pickle-related output from the
+  import path;
+- default to the decoupled solver (`is_budgeted = 0`);
+- configure 30 replicas *per stage* rather than the paper's 30 total;
+- define `budget = num_of_stages + 2` but ignore it in the budgeted solver,
+  which instead hard-codes `B=20`;
+- model budget as a sum of legacy random replica costs rather than exact
+  cardinality `L=2`;
+- allow arbitrary stage skipping and do not require exactly two selected
+  stages;
+- omit selected-pair link cost, Ready availability, and declared capacity
+  from the optimization;
+- optimize obsolete two-state inverse utility and positive-seat filtering
+  rather than the active four-state physical-latency/linear-utility contract;
+- use beliefs and iterative learning even though the paper's MILP baseline
+  has perfect state information;
+- shuffle global RNG state and accept a merely feasible solver status without
+  preserving bound/gap provenance;
+- contain a broken budgeted orchestration path whose solver returns
+  `(assignment, counts)` but whose caller passes that tuple to the old
+  per-stage update function; and
+- depend on OR-Tools without declaring it in `requirements.txt`.
+
+The replacement must be import-safe and pure at its solver boundary. A later
+MILP slot runner may reuse algorithm-neutral Exact latency, physical versus
+observation jitter, utility/SLA/fairness, result, and simulation/Kubernetes
+adapter concepts. It may reuse the stable two-selected-stage route shape from
+Hybrid, but must not import Hybrid pruning, lookahead, Monte Carlo, activation,
+or belief-driven scoring. MILP-specific contracts remain under `MILP/`.
+
+For simulation and Kernel execution, solve all placements first and then run
+only the selected two-hop routes. The existing private-processor/public-
+forwarder split, Ready discovery, final-assigned-load conditioning, and one
+selected-pair telemetry record per flow should be reused through adapters.
+Physical realized utility, the active physical-only 110-ms SLA, raw
+physical-plus-pair latency, Jain fairness, and runtime must keep their existing
+units and separation. Because MILP already knows the true states, selected
+observations may be retained for matched traffic/telemetry evidence but do not
+update or steer the MILP policy, and MILP runs do not stop on belief
+equilibrium.
+
+### MILP per-run cutoff contract
+
+The future MILP executable must accept `--cutoff SECONDS` on every run. The
+value is a finite positive number of wall-clock seconds supplied by the user
+and passed to the selected solver backend through its native time-limit API;
+it is not a hard-coded model constant. Structured results must retain the
+requested cutoff, actual solve duration, termination status, incumbent, best
+bound, and optimality gap. Reaching the cutoff with an incumbent yields a
+usable but unproven feasible result; it must never be labelled optimal.
+
+## MILP Phase 0 formulation boundary
+
+`MILP/phase0_contract.py` is the import-safe, solver-free source of truth for
+`milp-coupled-phase0-contract-v1`. The paper supplies the centralized
+perfect-state baseline envelope, Gurobi 10.0 identity, and the maximum
+reported `N=15`, `K=3`, `M=30` topology; it does not give a complete MILP
+linearization. The variable families and constraints below are therefore an
+explicit project contract for the user-authorized `L=2` override, not a claim
+that the paper prints this exact model.
+
+All mathematical indices are one-based and runtime-configurable: flow count,
+stage count, and replicas per stage vary per run. The initial default profile
+is 15 flows, 3 stages, and `(10,10,10)` replicas, for 30 replicas total. A per-flow action
+is an immutable canonical pair ordered by `(stage, replica)`, with exactly two
+distinct stages and one replica in each. The initial three-stage profile has
+one bypassed stage; a general `K`-stage run has `K-2` bypassed stages.
+Whole-slot records are ordered by
+flow ID and replica records by stage then replica; this deterministic record
+order does not pretend that a backend's arbitrary symmetric optimum is itself
+canonical.
+
+The future backend-neutral formulation has four binary variable families:
+
+- `x[i,k,j]` places flow `i` on replica `(k,j)`.
+- `y[i,k]` selects stage `k` for flow `i`.
+- `z[k,j,n]`, including `n=0`, selects the final assigned load of a replica.
+- `p[i,k,j,k2,j2]` linearizes the selected directed pair for `k<k2`.
+
+The frozen constraints are `sum_k y[i,k]=2`,
+`sum_j x[i,k,j]=y[i,k]`, Ready availability, a declared nonnegative
+assigned-flow-per-slot capacity, exactly one final-load indicator, equality
+between placement counts and the selected final load, standard binary-AND
+pair linearization, and exactly one directed pair per flow. Model input must
+provide one finite nonnegative planning-link coefficient for every
+structurally possible lower-stage/higher-stage replica pair: 300 coefficients
+at the initial topology. Node CPU, memory, and bandwidth vectors remain
+absent until per-flow demand units are separately accepted.
+
+The objective is centralized final-load welfare:
+
+```text
+maximize sum[k,j,n] n * U_true_state[k,j,n] * z[k,j,n]
+         - sum[i,selected directed pair] planning_link_ms * p
+```
+
+`U_true_state` is deterministic expected physical utility under the known
+true replica state and the final assigned load, using the frozen shared
+state/load physical-latency and linear-utility semantics in Phase 2. Each
+flow contributes its two selected stage utilities and exactly one configured
+planning-link deduction. Observation-only jitter and measured selected-pair
+latency are outcome-only values and cannot enter these coefficients.
+
+The Phase 0 result boundary distinguishes proven optimal, time limit with a
+feasible incumbent, time limit without an incumbent, infeasible, unbounded,
+and solver/configuration error. Proven optimal requires matching incumbent
+and bound with zero gaps. A timed incumbent remains non-optimal and must carry
+its bound and normalized gaps. The normalized absolute gap is
+`abs(best_bound-incumbent)` and relative gap divides that value by
+`max(1,abs(incumbent))`. Every result also carries the positive finite
+requested cutoff, build and solve durations in seconds, backend/version,
+termination reason, and supported variable/constraint counts.
+
+The local environment has SciPy 1.18.0 with `scipy.optimize.milp` backed by
+HiGHS 1.12.0; a one-binary-variable development smoke solve completed
+optimally. This is the available Phase 1/2 candidate for deterministic small
+correctness tests. OR-Tools/CBC, Gurobi/gurobipy, PuLP, python-mip, highspy,
+Pyomo, GLPK, and standalone HiGHS are not locally available. No dependency
+was installed. Only a recorded Gurobi 10.0 run may be described as the
+paper-named backend; SciPy/HiGHS timing is separate local evidence.
+
+Phase 1 must expose the runtime dimension inputs through `--flow`, `--stage`,
+and `--replica`, together with the independently validated `--cutoff SECONDS`.
+The current Phase 0 module deliberately has no executable CLI.
+
+## MILP Phase 1 package boundary
+
+MILP Phase 1 is implemented as `milp-coupled-phase1-boundary-v1`. The
+`MILP` package is now import-safe: importing its package, contract, backend,
+oracle, CLI, executable, or legacy compatibility modules does not parse
+arguments, run an experiment or solve, print, seed an RNG, or create output
+files. Explicit execution is available through `python -m MILP` (and the
+guarded compatibility module), but Phase 1 accepts configuration only and
+states that the production solve remains deferred to Phase 2.
+
+`MILPConfiguration` carries one Phase 0 `MILPDimensions` value and the exact
+per-run cutoff. The CLI maps `--flow N --stage K --replica M` to runtime
+dimensions `(N, (M,...,M))`, with 15, 3, and 10 as defaults. `--cutoff
+SECONDS` is required and is retained without rounding or clamping. All
+dimensions are positive, `K>=2`, and `L=2` cannot be overridden. Thus a
+general run selects two stages and bypasses `K-2`; only the default `K=3`
+case has exactly one bypassed stage.
+
+The complete immutable planner boundary contains canonical replica records
+with the authorized true state and Phase 0 admission metadata, every required
+directed planning-link coefficient, canonical whole-slot placements and
+final loads, the unchanged Phase 0 social-welfare breakdown, and the
+unchanged Phase 0 normalized solver provenance. Mapping-shaped adapter data
+is validated and converted to ordered tuples so callers cannot mutate the
+stored solver input through a shared dictionary.
+
+`MILP.backend` performs read-only capability discovery for the selected free
+development family. It verifies that `scipy.optimize.milp` and embedded
+HiGHS version metadata are available without constructing or solving a
+model, and raises an explicit configuration error when they are absent. The
+local result is SciPy 1.18.0 with embedded HiGHS 1.12.0. This boundary makes
+no Gurobi or paper-runtime claim.
+
+`MILP.oracle` is an exhaustive centralized final-load welfare oracle for
+tests only. It enumerates canonical exact-`L=2` actions, applies the Phase 0
+Ready/capacity/link feasibility rules, reconstructs the Phase 0 objective,
+and keeps the first canonical placement on an exact tie. It refuses more
+than four flows or more than 100,000 complete placements, explicitly
+excluding the default 15x3x10 profile. It is not a production solver or a
+fallback backend.
+
+The former import-time experiment entry point is replaced by a guarded CLI
+shim. The invalid legacy budgeted solver is an explicit retired tombstone,
+and the remaining legacy header no longer imports unavailable OR-Tools at
+module import time. Phase 0's twelve prototype mismatch records remain the
+historical characterization; they are not current behavior to preserve.
+
+## MILP Phase 2 pure solver architecture
+
+MILP Phase 2 is implemented through two import-safe layers. `MILP/model.py`
+constructs `milp-coupled-phase2-model-v1` as a backend-neutral immutable
+binary linear model. `MILP/solver.py` translates that model to the selected
+SciPy/HiGHS backend and returns the existing Phase 1 result wrapped around
+the unchanged Phase 0 status and provenance semantics. Neither layer imports
+or depends on Hybrid policy code.
+
+The pure model allocates all four frozen variable families in canonical
+order: per-flow/replica `x`, per-flow/stage `y`, per-replica/final-load `z`
+including zero, and per-flow/directed-pair `p`. It emits explicit rows for
+exact `L=2` stage cardinality, one replica in each selected stage, Ready
+availability, assigned-flow capacity, one load indicator, final-load
+reconstruction, all three binary-AND inequalities, and one selected directed
+pair per flow. Complete planning-link metadata remains a validated input, so
+there is no fabricated zero-cost link or partial action fallback.
+
+Known-state stage coefficients call the unchanged
+`IBG.latency_model.expected_state_utility` for each replica and possible
+positive final load. The model minimizes the negated replica welfare term on
+`z` plus the configured planning-link term on `p`, which is exactly the Phase
+0 maximization objective. Observation jitter, measured pair latency,
+beliefs, learning, flow order, and runtime telemetry do not appear in the
+model or callback boundary.
+
+The SciPy adapter builds a sparse constraint matrix only at invocation time,
+sets every variable binary on `[0,1]`, passes the requested Phase 1 cutoff to
+SciPy's native `time_limit`, and requests zero relative MIP gap. The primary
+solve receives the exact requested cutoff. When a primary optimum is proven,
+deterministic secondary solves preserve the primary objective exactly and
+lexicographically minimize the selected directed-pair rank for each flow in
+flow order. Each secondary solve receives only the remaining per-run time.
+If the cutoff prevents completion, the result remains an honestly proven
+primary optimum but records `canonicalization=flow-label-only`; flow-label
+permutations are still normalized by sorting the selected action multiset.
+
+Backend output is independently checked for vector length, finiteness,
+binary bounds, integrality, every linear constraint, exact two-stage action
+extraction, Phase 0 feasibility, final-load reconstruction, and agreement
+between the backend objective and reconstructed social welfare. Invalid
+output becomes a solver/configuration error rather than a partial placement.
+SciPy status 0, 1, 2, 3, and 4 map respectively to proven optimal, one of the
+two time-limit states, infeasible, unbounded, and solver/configuration error.
+For maximization, SciPy's minimized primal and dual values are sign-corrected
+before applying the Phase 0 normalized absolute and relative gaps.
+
+The default 15x3x10 model has 5,475 binary variables and 14,115 explicit
+constraints: 450 `x`, 45 `y`, 480 `z`, and 4,500 `p` variables. Phase 2 only
+builds this boundary to verify its dimensions; it does not solve or time the
+default target. The public API is `MILP.solve_coupled_milp`. The guarded CLI
+continues to validate dimensions/cutoff and reports that problem-input and
+slot execution are deferred to Phase 3, because no fabricated true-state,
+admission, or planning-link profile is authorized.
+
+## MILP Phase 3 pure simulation-slot architecture
+
+MILP Phase 3 is implemented under `milp-coupled-phase3-slot-v1` without
+changing the Phase 0--2 formulation or solver. `MILP/runner.py` calls the
+public `solve_coupled_milp` boundary once for the complete slot. It executes
+only a proven optimum or a validated time-limited feasible incumbent; every
+non-incumbent status and every invalid placement fails before simulation.
+The requested cutoff and the complete backend, termination, incumbent,
+bound, gap, model-count, build-time, and solve-time provenance remain attached
+to the slot result. A timed incumbent remains explicitly unproven.
+
+`MILP/simulation.py` is a pure in-process adapter. Placement is complete
+before it samples anything, and every selected physical latency and exact
+convolved likelihood is conditioned on the selected replica's final assigned
+load. Each flow produces exactly two selected observations and one measured
+selected-pair outcome. A `K`-stage action still bypasses `K-2` stages, which
+produce no load, sample, utility, SLA contribution, or pair endpoint.
+
+The adapter derives independent BLAKE2b seeds for physical processing,
+observation-only jitter, and measured-pair outcome streams from immutable
+root-seed/slot/flow/identity data; final endpoint loads are included where
+relevant. Every sample uses a local NumPy generator, so slot execution does
+not seed or consume Python or NumPy process-global RNG state. True replica
+state remains available only in the already-authorized clairvoyant planner
+input and inside the physical observation generator; it is not emitted as an
+observed value and does not create a learning loop.
+
+Measured-pair profiles are explicit outcome-only inputs, separate from the
+configured directed planning-link coefficients. Their in-process law is
+`base_ms + |Normal(0,jitter_ms)|`. This does not replace or feed back into the
+MILP objective. Likewise, physical processing, observation-only jitter, noisy
+telemetry signal, measured pair latency, and raw physical-plus-pair latency
+remain distinct fields. Observation-only jitter is excluded from physical
+realized utility and the active physical-only 110-ms SLA.
+
+The immutable slot result retains all Phase 0--3 contract versions,
+configuration/cutoff, root seed and slot ID, placement and bypasses, final
+loads, observations, pair outcomes, expected planner welfare/link deduction,
+physical realized and reference utility, per-flow and total latency, SLA,
+Jain fairness, and build/solve/simulation/total timing. Jain fairness retains
+the Exact/Hybrid comparison basis of expected per-flow planner utility;
+realized per-flow utility is recorded separately. The pure runner is silent;
+only the explicit wrapper prints one compact line. The guarded dimension CLI
+still refuses to fabricate true-state, admission, link, seed, or outcome
+profiles and instead points callers to a fully supplied `MILPSlotInput`.
+
+## MILP Phase 4 scale-evidence architecture
+
+MILP Phase 4 adds `milp-coupled-phase4-scale-v1` without changing the model,
+solver, or slot contracts. `MILP/scaling.py` builds a declared synthetic
+benchmark profile from stable BLAKE2b values rather than global RNG state.
+The profile supplies complete true states, Ready/capacity records, configured
+planning links, and separate measured-pair outcome profiles. It is versioned
+as `milp-scale-synthetic-profile-v1` and is scale evidence only, not a
+deployment or paper input profile.
+
+One scale case owns runtime dimensions, exact `L=2`, the user-requested
+cutoff, profile/root seeds, and slot ID. It calls the public Phase 2 solver
+exactly once through the Phase 3 runner. A proven optimum or timed feasible
+incumbent executes the in-process slot; a timeout without an incumbent or
+another terminal failure remains solver evidence and skips simulation. No
+heuristic placement is substituted.
+
+Scale evidence retains backend/version, status/proof flag, incumbent, bound,
+normalized gaps, model-build/solve/simulation/total wall time, variable and
+constraint counts, and current-process peak RSS. Memory is explicitly the
+`resource.getrusage(RUSAGE_SELF).ru_maxrss` process-lifetime high-water mark,
+converted to bytes; it is not a solver-only allocation measurement. The
+native solver cutoff remains distinct from total process time and is not a
+hard process kill, so model construction, result normalization, simulation,
+imports, and small backend-return overhead may make total wall time—and even
+reported solve-call duration—larger than the requested native limit.
+
+`python -m MILP.benchmark --flow N --stage K --replica M --cutoff SECONDS`
+is a guarded one-case benchmark entry point. It prints exactly one compact
+evidence line and writes no report. The ordinary `python -m MILP` CLI remains
+configuration-only and does not silently adopt the synthetic profile.
+`--verify-oracle` is accepted only for deliberately tiny cases and requires
+exact objective and canonical-placement agreement with the Phase 1 oracle.
+
+The local free backend remains SciPy 1.18.0 with embedded HiGHS 1.12.0.
+No second backend is installed, so backend parity is explicitly
+`not-applicable-single-available-backend`; the results are not Gurobi 10.0 or
+paper-runtime evidence. The isolated-process one-second scale ladder produced:
+
+| Case | Status | Incumbent | Best bound | Relative gap | Build | Solve | Total | Variables | Constraints | Peak RSS |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1x2x1 | proven optimal | 119.199 | 119.199 | 0 | 0.000534 s | 0.007584 s | 1.026003 s | 9 | 15 | 126.480 MiB |
+| 2x3x2 | proven optimal | 299.256 | 299.256 | 0 | 0.003051 s | 0.041854 s | 0.924918 s | 60 | 112 | 128.250 MiB |
+| 5x3x4 | proven optimal | 755.652 | 755.652 | 0 | 0.029940 s | 0.752963 s | 1.672026 s | 387 | 841 | 130.070 MiB |
+| 10x3x6 | timed feasible incumbent | 1421.08 | 1448.69 | 0.0194227 | 0.056745 s | 1.022321 s | 2.084141 s | 1,488 | 3,524 | 138.586 MiB |
+| 15x3x10 | timed feasible incumbent | 1628.29 | 2281.98 | 0.401463 | 0.140502 s | 1.210599 s | 2.458909 s | 5,475 | 14,115 | 182.141 MiB |
+
+The 15x3x10 case therefore completed with an executable incumbent but did not
+prove optimality. A second isolated one-second run reproduced its status,
+incumbent, bound, and gap; build/solve/total time and peak RSS were naturally
+different. These bounded local results expose the baseline's scale limit and
+must not be generalized into a real-time guarantee.
+
+### MILP benchmark verbose output
+
+The Phase 4 benchmark now accepts opt-in `--verbose`. It prints an immediate
+start banner and passes `disp=True` to the existing SciPy/HiGHS adapter, which
+exposes native presolve, branch-and-bound, incumbent, bound, gap, node, LP-
+iteration, and timing progress. Default execution remains silent until its
+single compact completion line. When an optimum is proven, verbose mode also
+shows the existing objective-preserving canonicalization solves; these are
+secondary tie-resolution solves within the same cutoff contract, not repeated
+independent benchmark runs. Verbosity changes output only and does not alter
+the formulation, cutoff, seed, status, objective, or evidence contract.
+
+## MILP Phase 5 Kernel architecture
+
+MILP Phase 5 is implemented as a separate `milp-coupled-phase5-kernel-v1`
+execution boundary. It does not modify the frozen Exact or Hybrid trees and
+does not reinterpret Exact's contiguous, stage-1-first route contract.
+`MILP/kernel_contracts.py` defines the versioned
+`milp-two-selected-stage-route-v1` wire shape: every route contains exactly
+two replicas from distinct stages in increasing stage order. The two stages
+may be noncontiguous, such as 1 to 3, and the first selected stage may be
+greater than one, such as 2 to 3. Different flows in one centralized slot may
+select different stage pairs. The other `K-2` stages are absent from the
+route and therefore receive no request, load, observation, pair endpoint,
+utility, or SLA contribution.
+
+The controller-side order is strict. `MILP/kernel_adapter.py` first discovers
+the complete expected set of Running and Ready StatefulSet ordinals and maps
+each ordinal to an immutable `(stage, replica, Pod, node, endpoint)` record.
+Only after that snapshot exists does `MILP/kernel_profiles.py` combine the
+mounted deterministic replica profiles, their declared assigned-flow
+capacities, and a complete versioned directed planning-link document into the
+clairvoyant `MILPProblemInput`. `MILP/kernel_runner.py` invokes the public
+`solve_coupled_milp` boundary exactly once. A proven optimum or validated
+time-limited incumbent proceeds; every status without an incumbent fails
+before traffic and has no fallback. All placements are complete before the
+adapter publishes any route.
+
+`MILP/kernel_flow_generator.py` is a separate service rather than a change to
+the Exact generator. It validates the controller-supplied final assigned load
+against the complete route set, starts all flows concurrently, and submits
+each route to its first selected public forwarder. The unchanged forwarder
+then processes the first selected hop and forwards to the second selected
+hop sequentially. The existing private processor remains the only source of
+state/load-conditioned physical processing, independent observation-only
+jitter, noisy signal, and exact convolved likelihood. The response boundary
+requires exact flow/slot/stage/replica/load/Pod/endpoint correlation, exactly
+two selected observations, and exactly one selected-pair record per flow.
+
+Kernel observations deliberately have no simulated seed fields and expose no
+true-state value. They retain physical processing, observation-only jitter,
+noisy signal, likelihood, modeled delay, admitted concurrency, request and
+transport timing, and Pod identity. The one measured pair retains the
+forwarder-to-forwarder residual and endpoint identities. The frozen Phase 3
+status/placement validator and metric computation are reused structurally,
+so expected planner welfare, configured planning-link deduction, physical-
+only realized utility, the physical-only 110-ms SLA, measured-pair reference
+utility, raw physical-plus-pair latency, Jain fairness, and solver provenance
+have the same definitions. Traffic time replaces in-process simulation time
+only in the Phase 5 timing projection; configured planning links and measured
+Kernel pairs remain separate.
+
+The container and Kubernetes resources live under
+`deploy/milp-kubernetes/` and use the isolated `milp-testbed` namespace and
+`milp-testbed:kernel-phase5` image. The MILP image adds the MILP package and
+pins the accepted SciPy 1.18.0 backend while reusing the unchanged Exact
+processor and forwarder code. Dynamic replica Services, StatefulSets, and
+profile ConfigMap are generated through the unchanged
+`testbed.kubernetes_resources.build_runtime_resources` helper. Therefore the
+single processor worker on 8081, two public-forwarder workers on 8080,
+resource requests/limits, separate local/downstream clients, and 30-second
+downstream keep-alive remain unchanged. Namespace-scoped RBAC still permits
+only Pod get/list. `scripts/run_milp_kernel.py` accepts runtime dimensions,
+mandatory cutoff, an explicit user-supplied uniform planning-link coefficient,
+and optional verbose output; it generates one isolated controller Job after
+all long-running rollouts are Ready. It creates no CSV or pickle output.
+
+The read-only parity audit against the completed Hybrid Phase 5 pure runner
+found no missing algorithm-neutral outcome policy in MILP Phase 3. Both use
+final-load physical latency, the same separate half-normal physical and
+observation laws, the same exact convolved likelihood, physical-only utility
+and 110-ms SLA, planning/measured-pair separation, raw reference utility, and
+the same expected-per-flow Jain basis. Phase 5 applies those accepted policies
+to Kernel telemetry without importing Hybrid policy, belief, pruning,
+lookahead, or Monte Carlo code.
+
+## MILP Phase 6 replay and diagnostic architecture
+
+MILP Phase 6 adds `milp-coupled-phase6-trace-v1` as an immutable in-memory,
+JSON-safe record over either a completed pure slot or a completed Kernel slot.
+It retains runtime dimensions, Phase 0--6 versions, cutoff/backend/status/
+bound/gap provenance, placement and bypasses, final loads, configured selected
+planning links, objective components, observations, measured pairs, metrics,
+timing, and optional diagnostics. Clairvoyant replica state and admission data
+exist only under the explicitly named `private_planner_input` replay section;
+observations still expose no true state. Kernel traces additionally retain
+Ready endpoint/Pod/node identity without inventing simulation seeds.
+
+`MILP/replay.py` has two separate boundaries. Mathematical/outcome replay does
+not construct a model or call a solver: it revalidates exact-`L=2` feasibility,
+readiness, capacity, links, bypasses, and final loads; reconstructs known-state
+final-load social welfare from configured planning coefficients; validates two
+selected observations and one selected pair per flow; and reconstructs
+physical-only utility, the 110-ms SLA, raw physical-plus-pair latency,
+reference utility, and expected-per-flow Jain fairness. It raises categorized
+drift for contracts, placement, loads, coefficients, objective, solver status,
+observation/pair coverage, utility, SLA, and fairness. Optional solver replay
+is separate: a recorded proven optimum must reproduce its objective and
+canonical placement, while a timed incumbent remains unproven and has no
+placement-identity requirement.
+
+`MILP/diagnostics.py` records an explicit compatibility catalog and an opt-in
+collector. Controller timing and solver resources are adapted to model-build,
+solve, execution, total time, model counts, and optional process RSS. Kernel
+HTTP timing, forwarding-path telemetry, and selected-forwarder cgroup counters
+are algorithm-neutral compatible concepts. Payload diagnostics retain logical
+record counts unless explicit wire capture exists. Exact memo-cache entries,
+learning footprint, beliefs/equilibrium, and Hybrid candidate/rollout/sample
+counts are inapplicable. Diagnostics never enter placement, objective,
+physical latency, utility, SLA, or RNG ownership. The guarded
+`scripts/milp_diagnostic_compatibility.py` prints this catalog and writes no
+report.
+
+## MILP Kernel live-repair architecture correction
+
+Updated: 2026-08-01.
+
+The first live 2x3x2 MILP attempt failed during controller readiness because
+the restarted kind cluster had stale `kindnet` and `kube-proxy` Pods whose
+host-network addresses no longer matched their nodes. New MILP Pods therefore
+received addresses from the wrong node PodCIDRs; both trailing and
+non-trailing Service names, kube-dns, and cross-node replica traffic failed.
+The existing absolute Service URL was not defective. Restarting only the
+`kindnet` and `kube-proxy` DaemonSets and recycling only the isolated MILP
+workloads restored correct PodCIDRs, Service DNS, and cross-node reachability.
+
+The repaired retry reached the flow generator and completed the primary MILP
+solve, then exposed a separate Phase 5 integration defect. The MILP-specific
+flow generator accepts the versioned two-selected-stage route, but each
+replica Pod still starts the unchanged Exact public forwarder. That forwarder
+requires the next stage to equal `current_stage + 1`, so it rejects a valid
+MILP route such as stage 1 to stage 3 with `next forwarded stage must be 2,
+got 3`.
+
+The required correction is an isolated MILP public-forwarder application in
+the MILP image/deployment path. It must retain the same private processor,
+ports, worker counts, HTTP clients, keep-alive, resources, physical/observation
+laws, and telemetry schema while validating exactly one later selected hop
+rather than Exact's contiguous full-chain rule. `IBG/`, `IBG_Hybrid/`, and the
+independently reproducible Exact deployment remain unchanged. This correction
+is identified but not yet implemented; no completed live MILP slot or live
+utility/SLA result is claimed.
+
+### MILP Kernel forwarder correction implemented
+
+Updated: 2026-08-01.
+
+The live-route gap is now closed by `MILP/kernel_route_forwarder.py`. The
+shared Exact forwarder exposes a protected next-hop validation hook and an
+optional runtime-injection seam; its default implementation and application
+still require `current_stage + 1`. The MILP subclass overrides only that hook:
+an entry forwarder may receive exactly one remaining hop whose stage is
+strictly greater than the current selected stage. All local processing,
+downstream HTTP, keep-alive, pair measurement, identity checks, separated-
+jitter telemetry, diagnostics, cgroup behavior, and lifecycle code continue
+through the shared implementation.
+
+`MILP/kernel_resources.py` projects the shared resource document into the
+isolated namespace and replaces only the forwarder application target with
+`MILP.kernel_route_forwarder:app`. The live StatefulSets retain the private
+processor on 8081, the public forwarder on 8080, two forwarder workers, the
+same requests/limits, separate clients, and 30-second keep-alive. Exact
+resources still target `testbed.route_forwarder:app` and retain contiguous
+route behavior.
+
+The controller now performs solver-independent Phase 6 trace replay against
+the complete in-memory live result before printing success. Replay treats the
+optional HTTP root slash introduced by Pydantic `AnyHttpUrl` as a representation
+normalization only; host, port, path, Pod, replica, stage, load, action, and
+pair identities remain strict. The compact result line exposes route,
+observation, and pair counts plus expected-stage, configured-planning,
+physical, measured-pair, raw-reference, solver, and timing metrics.
+
+### MILP Kernel launcher progress boundary
+
+Updated: 2026-08-01.
+
+`scripts/run_milp_kernel.py` now emits an automatic compact preflight before
+any build, deployment, or solver work. It reports the requested flow/stage/
+replica scale, exact `L=2`, replica-Pod/container/serving-worker footprint,
+cutoff, planning-link coefficient, cluster node snapshot, build mode, and a
+capacity notice when the request exceeds the live-validated 2x3x2 topology.
+It then announces and streams each StatefulSet rollout, reports the Ready
+snapshot, and names the controller Job before waiting for it. This makes the
+deployment/rollout phase visibly distinct from MILP solving. Native HiGHS
+branch-and-bound output remains opt-in through `--verbose`; the automatic
+launcher progress does not change model inputs, runtime dimensions, placement,
+traffic, results, or file-output behavior.
+
+## MILP canonical experiment-input parity repair
+
+Updated: 2026-08-01.
+
+`MILP/experiment_profile.py` defines immutable, JSON-safe
+`milp-experiment-profile-v1`, shared by ordinary pure and Kernel experiments.
+It retains dimensions and cutoff, exact `L=2`, every replica's true state and
+Ready flag, explicit capacity in `assigned-flows-per-slot`, all directed
+planning links, the separate pure measured-pair profile, source/mode
+provenance, and a canonical BLAKE2b fingerprint. Equal dimensions alone can
+therefore no longer be mistaken for equal inputs.
+
+The shared Exact runtime profile remains unchanged and supplies only the
+true-state map for the default `milp-experiment` profile. Its historical
+`ReplicaProfile.capacity` is not read by MILP admission. The default MILP
+limit is the configured flow count per replica, measured in assigned flows per
+slot; `--assigned-flow-capacity FLOWS` provides an explicit override. This
+dimension-aware complete-slot default is not paper-calibrated or empirically
+validated capacity.
+
+Planning coefficients come from either `--planning-link-ms` or a complete
+versioned table through `--planning-links`. Uniform mode is faithfully
+labelled `uniform-objective-constant`: exact `L=2` deducts the same value once
+per flow, so it cannot distinguish pair choices. Measured Kernel pair latency
+remains outcome telemetry and never becomes a planning coefficient.
+
+`python -m MILP.experiment` is the import-safe pure entry point. The Kernel
+launcher constructs the same profile before Kubernetes work, mounts it into
+the controller, and builds the model only after Ready discovery. Kernel adds
+endpoint identity and real traffic only after input and placement are fixed.
+Compact and structured results retain source, fingerprint, and link mode.
+
+Phase 4 `python -m MILP.benchmark` remains separate and unchanged. Its
+`milp-scale-synthetic-profile-v1` continues to use hashed heterogeneous
+states/links for scale evidence. The historical pure and Kernel 14x3x7 runs
+had equal model dimensions but were not runs of the same input.
+
+A same-input 2x3x2 live gate used fingerprint
+`011001de78293ceefae74d4c52a330a5`. Pure and Kernel both proved social welfare
+`333.62750071` optimal with equal bound and zero gap under a 10-second cutoff.
+Kernel completed two routes, four observations, two measured pairs, and
+replay. Expected pure/HTTP outcome differences do not change planner parity.
+
+### MILP planning-latency correction pending
+
+Updated: 2026-08-01.
+
+The uniform `--planning-link-ms 2` option is now explicitly limited to a
+solver/route smoke-control input. Under exact `L=2`, it deducts the same
+configured value once per flow and therefore carries no pair-selection
+information. It is not an acceptable default for a latency-aware coupled
+MILP experiment.
+
+The immediate next MILP repair is to provide one deterministic, complete,
+heterogeneous directed planning-latency profile to both the pure and Kernel
+paths. The centralized MILP will use those declared coefficients before
+placement. Post-placement measured Kernel pair latency remains separate
+outcome telemetry: it must evaluate the plan and never silently replace its
+planning coefficient. This is a profile/input correction, not a change to the
+MILP formulation, state/load physical latency law, jitter, utility, or SLA.

@@ -493,3 +493,463 @@ The temporary manual `D=3` override is superseded. Restore default `D=2` as
 `ibg-hybrid-policy-contract-v4` for ordinary pruned lookahead and the future
 MC greedy-continuation horizon. This does not alter `Q=10`, `C=5`, `S=50`,
 epsilon, or the no-Bandit decision.
+
+## MILP baseline decisions
+
+- Temporarily pause IBG-Hybrid and Monte Carlo work. Preserve the completed
+  Hybrid core-lookahead implementation, the explicit historical exhaustive
+  MC reference, and the unimplemented professor-directed top-`Q=10` redesign
+  exactly as they are until the user reopens that track.
+- Make `MILP/` the active workstream. Keep both `IBG/` and `IBG_Hybrid/`
+  frozen while establishing the baseline.
+- Implement the centralized coupled/budgeted MILP baseline, not the old
+  decoupled per-stage model and not the recursive budgeted IBG/SPNE algorithm.
+- Use `N`, `K`, and per-stage replica counts as runtime configuration
+  variables. The initial paper-scale default is `N=15`, `K=3`, and 10
+  replicas per stage (`M=30` total).
+- Match the user-authorized Hybrid action budget: each flow selects exactly
+  `L=2` replicas from two distinct stages out of three. The skipped stage has
+  no assignment, load, processing, link endpoint, observation, utility, or
+  SLA contribution. This project choice supersedes the paper's SFC-specific
+  `L=K` remark for this MILP workstream.
+- Interpret `L` as action cardinality. Do not reuse the old random replica
+  `cost` field or hard-coded `B=20` as the stage budget. A monetary/resource
+  budget would be a different, separately versioned constraint.
+- Optimize the complete slot jointly for aggregate social welfare at final
+  replica loads. MILP does not process flows sequentially and does not use an
+  IBG flow-order, best response, pruning, lookahead, rollout, epsilon, or
+  bandit policy.
+- Give the MILP planner perfect true-state knowledge, as the paper explicitly
+  defines this baseline. This exception is confined to `MILP/`; true state
+  remains prohibited from Exact and Hybrid decision logic.
+- Reuse the frozen state/load-conditioned physical-latency and linear-utility
+  semantics. Compute deterministic expected physical utility under each
+  known true state and final load; do not optimize the old two-state inverse
+  utility, noisy observation signal, or measured wall-clock latency.
+- Deduct exactly one configured directed planning-link cost for every selected
+  two-stage route. Keep this coefficient separate from the later measured
+  selected-pair outcome.
+- Require exact `L=2` shape, Ready availability, declared assigned-flow
+  capacity, valid replica IDs, and complete directed pair-link metadata.
+  Missing metadata or infeasibility must fail explicitly rather than produce
+  a partial placement or replica ID zero.
+- Do not infer per-flow CPU/memory/bandwidth charges from Kubernetes Pod
+  requests. Add node-resource constraints only after an explicit demand and
+  node-capacity contract is accepted.
+- Accept “MILP optimal” only with a proven optimal solver status. For a time
+  limit or nonzero gap, report the incumbent, best bound, relative/absolute
+  gap, runtime, backend/version, and termination reason without an optimality
+  claim.
+- Keep the formulation backend-neutral. The paper's result is specifically
+  Gurobi 10.0; local correctness may use a declared open-source backend, but
+  results must never merge runtimes or solver claims across backends.
+- Keep solver construction/solve pure and import-safe. Imports may not run an
+  experiment, seed global RNGs, print, or write CSV/pickle files.
+- Do not make belief convergence an MILP stopping condition. Perfect-state
+  MILP may execute selected routes and record matched observations for common
+  telemetry, but those observations do not update or influence its policy.
+- Reuse algorithm-neutral Exact simulation/runtime and metric helpers through
+  adapters where semantics match. Reuse Hybrid's two-stage route *shape* if
+  stable, but do not depend on Hybrid policy, candidate accounting,
+  lookahead, Monte Carlo, activation, or learning behavior.
+- Keep all MILP-specific documentation in these existing top-level handoffs;
+  do not create Markdown files under `MILP/`.
+
+### MILP cutoff decision
+
+- Require a user-adjustable `--cutoff SECONDS` option on the future MILP
+  command. Validate that it is finite and strictly positive and apply it to
+  every solve invocation.
+- Record the requested cutoff and actual solve duration with solver status,
+  incumbent, best bound, and optimality gap.
+- A cutoff is an operational limit, not an optimality tolerance. A feasible
+  incumbent returned at the cutoff remains non-optimal unless the backend
+  separately proves optimality before termination.
+
+## MILP Phase 0 decisions
+
+- Accept `MILP/phase0_contract.py` and
+  `milp-coupled-phase0-contract-v1` as the formulation source of truth. It is
+  pure and import-safe and does not import the unsafe legacy entry point.
+- Record that the paper describes a centralized perfect-state MILP solved by
+  Gurobi 10.0 at up to `N=15`, `K=3`, and `M=30`, but does not print a full
+  linearized MILP. Treat the Phase 0 variable/constraint construction as the
+  explicit project model for the user-authorized exact `L=2` action.
+- Use one-based runtime-configurable flow, stage, and per-stage replica
+  indices. The initial default is 15 flows, three stages, ten replicas per
+  stage, and 30 replicas total. Require canonical stage/replica ordering, exactly two
+  distinct selected stages, exactly one selected replica in each, and `K-2`
+  fully bypassed stages per flow (one at the initial three-stage profile).
+- Require complete admission metadata for all replicas and complete finite
+  nonnegative directed planning-link metadata for all lower-stage/higher-
+  stage replica pairs. Ready and assigned-flow-per-slot capacity constrain
+  placement. Do not infer a flow-resource vector from Pod requests.
+- Use binary placement `x`, selected-stage `y`, final-load indicator `z`
+  (including load zero), and directed-pair `p` variables. Link placement to
+  stage selection, load indicators, capacity, availability, and binary-AND
+  pair variables through the Phase 0 constraint catalog.
+- Maximize whole-slot social welfare at final loads. Each selected occurrence
+  uses deterministic expected physical utility under its replica's known true
+  state and final load; deduct exactly one configured planning-link cost per
+  flow. Beliefs, private signals, learning, flow order, observation jitter,
+  measured pair latency, and runtime telemetry are not planner inputs.
+- Canonically order extracted records by flow/stage/replica. Do not claim a
+  symmetric backend assignment is canonical. A later deterministic secondary
+  solve or objective-preserving canonicalization must be documented; do not
+  hide an epsilon objective perturbation.
+- Validate `--cutoff` as finite and strictly positive seconds, without an
+  implicit default, clamp, or rounding. Carry the same requested duration to
+  the backend adapter and retain it in result provenance.
+- Phase 1 must expose the runtime dimension variables through `--flow`,
+  `--stage`, and `--replica`, alongside `--cutoff SECONDS`. The current
+  Phase 0 module deliberately provides validation/configuration only, no CLI.
+- Normalize maximization gaps as
+  `absolute=abs(best_bound-incumbent)` and
+  `relative=absolute/max(1,abs(incumbent))`. Only matching incumbent/bound and
+  zero gaps with a proven backend status may set `optimality_proven`.
+- Keep six distinct statuses: proven optimal, time limit with incumbent, time
+  limit without incumbent, infeasible, unbounded, and solver/configuration
+  error. Retain cutoff, build/solve times, backend/version, termination,
+  incumbent, bound, gaps, and supported model counts.
+- Select locally available SciPy 1.18.0 `scipy.optimize.milp` with embedded
+  HiGHS 1.12.0 as the candidate development backend for later small
+  deterministic correctness tests. It passed a trivial local solve. Gurobi,
+  OR-Tools/CBC, PuLP, python-mip, highspy, Pyomo, GLPK, and standalone HiGHS
+  are absent; install nothing in Phase 0. Never present SciPy/HiGHS evidence
+  as Gurobi 10.0 or paper replication.
+- Retain the twelve confirmed legacy mismatch categories as deterministic
+  source-characterization tests. Do not import or repair the unsafe legacy
+  experiment in Phase 0; replacement and CLI work begin in Phase 1.
+
+## MILP Phase 1 decisions
+
+- Accept `milp-coupled-phase1-boundary-v1` as the import-safe package and
+  configuration boundary. Reuse the Phase 0 dimensions, action, admission,
+  welfare, status, gap, and provenance types rather than defining competing
+  semantics.
+- Keep `N`, `K`, and uniform per-stage `M` as runtime CLI inputs named
+  `--flow`, `--stage`, and `--replica`. Defaults are 15, 3, and 10; they are
+  not limits. Require positive integers, `K>=L`, and keep `L=2` fixed.
+- Require `--cutoff SECONDS` for explicit execution. Preserve the finite
+  positive value exactly in `MILPConfiguration`; do not add a hidden default,
+  clamp, rounding rule, or optimality interpretation.
+- Store complete MILP planner inputs as canonical immutable tuples: every
+  replica has true-state plus Ready/capacity data, and every structurally
+  possible lower-to-higher-stage pair has one configured planning cost.
+  Returned dictionary views are copies, not mutable stored state.
+- Wrap a possible incumbent only with the unchanged Phase 0
+  `SolverRunProvenance`, canonical placement, and
+  `SocialWelfareBreakdown`. Incumbent presence and objective values must
+  agree; Phase 1 introduces no new status or gap convention.
+- Select the already installed SciPy 1.18.0 `scipy.optimize.milp` with
+  embedded HiGHS 1.12.0 as the future free Phase 2 development backend. The
+  Phase 1 gate detects capability and versions only; it does not solve a
+  model. Install no other solver and make no Gurobi/paper-runtime claim.
+- Limit the exhaustive oracle to tests with at most four flows and 100,000
+  complete placements. It uses Phase 0 feasibility and final-load social
+  welfare, preserves canonical exact ties, and must reject 15x3x10 before
+  enumeration.
+- Replace the legacy `milp_main` import-time experiment with a guarded
+  configuration-only entry point. Retire the invalid old budgeted solver
+  explicitly, and remove OR-Tools from legacy header import requirements.
+  Preserve the Phase 0 mismatch catalog as historical evidence rather than
+  preserving invalid executable behavior.
+- Keep production model construction/solving, simulation, common outcome
+  metrics, scale evidence, Kernel/Kubernetes reuse, replay, and diagnostics
+  deferred to MILP Phases 2--6.
+
+## MILP Phase 2 decisions
+
+- Accept `milp-coupled-phase2-model-v1` and
+  `milp-coupled-phase2-solver-v1` as the production-facing pure coupled MILP
+  boundary. Keep model construction independent from SciPy data structures;
+  translate to the free backend only inside the solver adapter.
+- Implement the Phase 0 `x/y/z/p` formulation literally. Use explicit rows
+  for `L=2`, selected-stage/replica linkage, Ready status, capacity, zero-
+  inclusive final-load selection, load reconstruction, directed-pair AND
+  linearization, and one pair per flow.
+- Precompute every known-state/final-load stage coefficient with unchanged
+  `IBG.latency_model.expected_state_utility`. Do not copy the latency or
+  linear-utility formula into MILP and do not import Hybrid scoring.
+- Negate stage welfare for SciPy minimization and add the configured planning
+  link positively. Reconstruct the returned maximization objective through
+  the Phase 0 helper before accepting an incumbent.
+- Pass the exact requested cutoff to the primary SciPy/HiGHS native
+  `time_limit` option and request `mip_rel_gap=0.0`. Count model build time
+  separately from all solve/canonicalization time.
+- Canonicalize proven optima with objective-preserving sequential secondary
+  solves, one flow at a time, using only remaining per-run cutoff. Do not use
+  an epsilon perturbation. If secondary canonicalization cannot finish,
+  retain the valid proven primary optimum, normalize objective-symmetric flow
+  labels, and record that only flow-label canonicalization completed.
+- Validate backend vectors and every constraint independently before
+  extraction. Reject fractional, out-of-bounds, incomplete, wrong-objective,
+  or otherwise infeasible incumbents as solver/configuration errors.
+- Normalize SciPy status and minimization bounds into the six Phase 0 result
+  categories. A timed incumbent requires a finite bound and computed Phase 0
+  gaps; a timeout without an incumbent remains distinct; only backend status
+  zero with matching reconstructed objective receives proven-optimal status.
+- Keep the Phase 1 CLI configuration-only until Phase 3 supplies an explicit
+  complete problem/slot input. Do not synthesize default true states,
+  readiness, capacity, or link metadata merely to make the CLI solve.
+- Build but do not solve the 15x3x10 boundary in Phase 2. Its 5,475 variables
+  and 14,115 constraints are structural evidence only; cutoff/scale behavior
+  remains Phase 4 work.
+- Continue deferring physical simulation, observations, SLA/fairness,
+  15x3x10 runtime evidence, Kernel/Kubernetes traffic, replay, and diagnostics
+  to MILP Phases 3--6.
+
+## MILP Phase 3 decisions
+
+- Keep the runner as orchestration around `solve_coupled_milp`; do not embed,
+  duplicate, approximate, or fall back from the Phase 2 formulation.
+- Execute only proven optima and validated timed feasible incumbents. Preserve
+  the latter's unproven status and reject every result without a complete
+  incumbent before generating an observation.
+- Finish the centralized placement before simulation. Generate exactly two
+  selected observations and one selected-pair outcome per flow, using final
+  replica loads; bypassed and unselected replicas remain absent.
+- Use independent deterministic local physical, observation, and measured-pair
+  RNG streams. Seed derivation includes root seed, slot, flow, selected
+  identity, and final load where applicable and never touches global RNGs.
+- Reuse the frozen Exact state/load physical sampler, observation-only
+  half-normal sampler, convolved likelihood, state estimator, utility/SLA,
+  physical-versus-pair outcome separation, and Jain comparison semantics
+  without modifying `IBG/`.
+- Keep measured-pair outcome profiles outside `MILPProblemInput`. They are
+  simulation-only data and cannot replace the configured planning-link
+  coefficient or enter the solver objective.
+- Retain likelihoods and noisy signals as telemetry only. MILP performs no
+  belief update, posterior aggregation, equilibrium test, sequential flow
+  ordering, Hybrid policy, or convergence loop.
+- Keep the pure runner silent and results in memory. Permit only the explicit
+  wrapper to print one completed-slot metrics line; keep all file reporting
+  deferred.
+- Validate the default 15x3x10 runner shape with a supplied complete incumbent
+  in Phase 3, but reserve an actual cutoff-bound default solve and scale claim
+  for the Phase 4 gate.
+
+## MILP Phase 4 decisions
+
+- Add a separate, versioned synthetic scale profile instead of making the
+  ordinary dimension CLI fabricate true-state, admission, planning-link, or
+  measured-pair data. The profile is benchmark evidence, not deployment data.
+- Keep `--cutoff SECONDS` mandatory on the guarded benchmark and propagate it
+  unchanged to the existing native solver limit. Do not reinterpret it as a
+  hard process deadline or an optimality tolerance.
+- Run each scale case through the public Phase 2 solver exactly once and the
+  Phase 3 slot boundary only when a validated incumbent exists. Preserve
+  timeout-without-incumbent evidence without simulation or fallback.
+- Use a fixed increasing ladder `(1,2,1)`, `(2,3,2)`, `(5,3,4)`, `(10,3,6)`,
+  `(15,3,10)` for local evidence while retaining arbitrary valid runtime
+  dimensions in the public case constructor.
+- Require exhaustive oracle equality only on deliberately tiny cases. Never
+  invoke the oracle at the 15x3x10 boundary.
+- Record process peak RSS as an explicitly scoped process-lifetime high-water
+  mark. Do not label it solver-only memory or subtract an unreliable baseline
+  after the process has already reached a higher peak.
+- Record local SciPy/HiGHS results as free-backend evidence. Backend parity is
+  unavailable because no second backend is installed; do not infer Gurobi
+  10.0 or paper-runtime parity.
+- Accept the actual 15x3x10 one-second result only as a time-limited feasible
+  incumbent: objective 1628.29, best bound 2281.98, relative gap 0.401463.
+  It is executable but not optimal.
+- Keep evidence in memory and print one compact line per explicitly invoked
+  case. Do not add CSV, pickle, JSONL, report files, HTTP, containers, or
+  Kubernetes work in Phase 4.
+- Permit `--verbose` only as an opt-in benchmark display mode. It prints a
+  start banner and native HiGHS progress, including any objective-preserving
+  canonicalization solves. Keep `disp=False` and one completion line as the
+  default; verbosity must not change solver mathematics or evidence.
+
+## MILP Phase 5 decisions
+
+- Keep Exact and Hybrid frozen. Reuse their algorithm-neutral processor,
+  forwarder, latency, observation, likelihood, outcome, and infrastructure
+  boundaries without importing Hybrid policy logic or changing existing
+  route behavior.
+- Define a separate `milp-two-selected-stage-route-v1` contract. Require two
+  distinct increasing stages per flow, permit noncontiguous and non-stage-1
+  routes, permit different stage pairs across flows, and completely omit the
+  other `K-2` stages.
+- Discover the complete expected Running/Ready ordinal set before constructing
+  `MILPProblemInput`. Missing readiness, profiles/capacity, or complete
+  directed planning-link metadata is a configuration failure, not a partial
+  model.
+- Require planning-link metadata to be a versioned explicit document. The
+  launcher accepts a user-supplied nonnegative `--planning-link-ms` and expands
+  it to every structurally possible directed pair; no measured Kernel pair or
+  legacy replica cost is used as an optimization coefficient.
+- Invoke `solve_coupled_milp` exactly once per slot. Execute a proven optimum
+  or validated time-limited incumbent while preserving its unproven label;
+  fail every non-incumbent status before traffic and add no heuristic fallback.
+- Complete placement before traffic, then execute all selected routes
+  concurrently while preserving sequential execution inside each two-hop
+  route. Validate final assigned loads from the complete route set.
+- Reuse the unchanged private processor on port 8081 and public forwarder on
+  port 8080. Preserve one processor worker, two forwarder workers, current
+  CPU/memory requests and limits, separate HTTP clients, and the 30-second
+  downstream keep-alive.
+- Keep true state controller-private. It may enter the authorized MILP input
+  and private processor configuration but never appears in an observation or
+  public result. MILP performs no belief update or equilibrium iteration.
+- Keep physical processing, observation-only jitter, noisy likelihood signal,
+  configured planning link, measured pair, and raw end-to-end latency
+  separate. Observation-only jitter never enters realized utility or the
+  physical-only 110-ms SLA; Kernel telemetry never enters the MILP objective.
+- Use an isolated `milp-testbed` namespace, MILP-specific flow generator and
+  controller, separate image, and namespace-scoped get/list RBAC so Exact
+  remains independently reproducible.
+- Keep the pure/controller runner silent and allow only one compact completed-
+  slot line by default. `--verbose` may add an immediate start banner and
+  native HiGHS progress. Do not write CSV/pickle output or alter evidence.
+- The Hybrid parity audit is outcome-only. The applicable latency, jitter,
+  likelihood, utility, SLA, measured-pair, raw-reference, and Jain policies
+  already agree; do not import Hybrid pruning, lookahead, Monte Carlo,
+  activation, beliefs, or learning into MILP.
+- Defer replay/diagnostic compatibility to Phase 6. Netem, forwarding-path and
+  cgroup evidence extensions, DPDK/VPP, bandits, Gurobi, new calibration, and
+  report generation remain outside Phase 5.
+
+## MILP Phase 6 decisions
+
+- Accept `milp-coupled-phase6-trace-v1` and
+  `milp-coupled-phase6-replay-v1` as the MILP replay boundary. Traces are
+  immutable, JSON-safe, in-memory by default, and perform no file output.
+- Keep all authorized true-state/admission information inside the trace's
+  explicitly private planner-input/replay section. Never add true state to a
+  selected observation or treat it as measured telemetry.
+- Make ordinary replay solver-independent. Reconstruct feasibility, final
+  loads, final-load known-state welfare, configured planning-link deduction,
+  physical-only utility/SLA, raw pair reference utility, and Jain fairness
+  without building or solving a model.
+- Categorize and reject contract, placement, load, configured-coefficient,
+  objective, solver-status, observation-count, pair-count, metric, SLA, and
+  fairness drift. Measured selected-pair latency can affect only outcome
+  metrics and can never replace a configured planning coefficient.
+- Keep solver replay optional. Require accepted objective and canonical
+  placement equality only for a recorded proven optimum. A timed incumbent
+  remains unproven even if a later rerun proves an optimum, and identical
+  timed placements are not a reproducibility requirement.
+- Treat controller timing and model resource accounting as MILP adaptations;
+  treat Kernel HTTP/forwarding/cgroup telemetry as algorithm-neutral and
+  opt-in; treat payload counts as logical records unless wire capture exists.
+  Explicitly reject Exact memo-cache, learning-footprint, belief/equilibrium,
+  and Hybrid pruning/lookahead/Monte-Carlo diagnostics as inapplicable.
+- Keep every diagnostic opt-in and behavior-neutral. Optional process RSS is
+  labelled process memory, separate from variable/constraint counts; no
+  solver-only memory claim is inferred.
+- Phase 6 does not authorize netem, new forwarding/cgroup instrumentation,
+  DPDK/VPP, beliefs, bandits, Gurobi, new calibration, CSV/pickle/JSONL
+  reporting, or changes to Phases 0--5.
+
+## MILP Kernel live-repair decisions
+
+Updated: 2026-08-01.
+
+- Keep the existing absolute trailing-root-label Service and Pod DNS forms.
+  Read-only in-Pod checks proved that both trailing and non-trailing names,
+  including `kubernetes.default`, failed while cluster networking was stale;
+  after restarting `kindnet`/`kube-proxy` and recycling only MILP workloads,
+  the same absolute names resolved and cross-node connections succeeded.
+- Treat the first failure as cluster lifecycle state, not a MILP cutoff,
+  solver, URL, utility, or SLA defect. Do not hard-code Service or Pod IPs and
+  do not weaken readiness checks.
+- Record the live route rejection as a Phase 5 correctness gap: the Exact
+  forwarder enforces a contiguous next stage and cannot execute every accepted
+  `milp-two-selected-stage-route-v1` action.
+- Correct that gap only with an isolated MILP forwarder boundary that permits
+  exactly one strictly later selected hop, including 1 to 3 and 2 to 3. Do
+  not modify Exact or Hybrid forwarder behavior, route contracts, algorithms,
+  latency/jitter, utility/SLA, resources, clients, or keep-alive settings.
+- The MILP-specific forwarder correction remains pending implementation and
+  focused/live validation. Until then, retain the failed transcript and do
+  not label the Kernel slot complete even though its primary solver run proved
+  the attempted placement optimal.
+
+### MILP Kernel forwarder correction accepted
+
+Updated: 2026-08-01.
+
+- Accept `milp-kernel-two-stage-forwarder-v1` as the isolated execution
+  adapter for `milp-two-selected-stage-route-v1`. It permits exactly one
+  strictly later selected hop and therefore supports both contiguous and
+  noncontiguous two-stage actions.
+- Keep the shared Exact validator as the default. The new protected hook and
+  runtime-injection seam are behavior-preserving for Exact; unchanged Exact
+  forwarder tests must continue proving that stage 1 to stage 3 is rejected.
+- Change only the MILP StatefulSet forwarder application target. Preserve the
+  processor/forwarder split, ports, workers, resources, HTTP clients,
+  keep-alive, physical/observation laws, likelihood, pair telemetry, utility,
+  SLA, and default diagnostic behavior.
+- Require the live controller to run ordinary Phase 6 mathematical/outcome
+  replay in memory before reporting completion. A replay failure fails the
+  Job rather than emitting a successful metrics line.
+- Treat a single trailing HTTP root slash as equivalent endpoint syntax in
+  replay because `AnyHttpUrl` adds it during live serialization. Do not relax
+  any other endpoint or Pod/stage/replica identity check.
+- Accept the final 2x3x2 live gate as successful. It used one public solver
+  invocation, exact `L=2`, two routes, four observations, two measured pairs,
+  separate 4-ms configured planning cost and 14.045-ms measured-pair outcome,
+  and successful replay. This is small live evidence, not 15x3x10 capacity or
+  Gurobi/paper-runtime evidence.
+
+### MILP Kernel launcher progress decision
+
+Updated: 2026-08-01.
+
+- Make the MILP Kernel launcher's preflight and deployment progress automatic,
+  not conditional on `--verbose`. Users must be able to distinguish image
+  work, cluster readiness, replica rollout, controller creation, and solver
+  execution from terminal output alone.
+- Report the requested physical footprint honestly: `stage * replica` Pods,
+  two containers per Pod, and one processor plus two public-forwarder serving
+  workers per Pod. A request above the 2x3x2 live boundary receives a capacity
+  notice but remains runtime-configurable; no new arbitrary dimension cap is
+  accepted.
+- Keep native HiGHS progress behind `--verbose`, and keep controller result
+  output, solver semantics, latency/utility/SLA policies, and no-file-output
+  behavior unchanged.
+
+## MILP experiment-input parity decisions
+
+Updated: 2026-08-01.
+
+- Accept `milp-experiment-profile-v1` as the same-input boundary for pure and
+  Kernel MILP experiments. Equal dimensions/model counts are insufficient;
+  the canonical profile fingerprint must match.
+- Keep Phase 4 `milp-scale-synthetic-profile-v1` unchanged and separately
+  labelled as scale evidence. Do not compare it with Kernel runtime unless
+  both paths deliberately receive the same canonical input.
+- Reuse only true state from shared Exact runtime profiles. Never interpret
+  legacy `ReplicaProfile.capacity` as MILP admission.
+- Define MILP capacity in `assigned-flows-per-slot`; use flow count as the
+  dimension-aware per-replica default and expose
+  `--assigned-flow-capacity FLOWS`. This is not calibrated capacity evidence.
+- Retain uniform planning links but label them objective-constant under exact
+  `L=2`. Accept a complete directed JSON table through `--planning-links` for
+  pair-sensitive experiments.
+- Fingerprint dimensions, cutoff, action cardinality, states, readiness,
+  capacities, links, outcome-pair profiles, source, and modes. Never
+  substitute measured pair outcomes into this profile.
+- Keep solver/model/status/canonicalization behavior unchanged. Kernel-only
+  endpoints and transport outcomes are added after shared placement is fixed.
+- Accept the 2x3x2 same-input result as planner parity at that boundary, not
+  15x3x10 capacity evidence or a Gurobi/paper-runtime claim.
+
+### MILP planning-latency priority correction
+
+Updated: 2026-08-01.
+
+- Reject a uniform planning-link coefficient as the default latency-aware
+  MILP experiment input. It remains permitted only as an explicit smoke/control
+  case, because exact `L=2` makes its one deduction per flow objective-constant.
+- Prioritize a deterministic complete heterogeneous directed planning-latency
+  profile shared byte-for-byte by pure and Kernel runs. Its provenance and
+  fingerprint must be retained.
+- Keep actual measured Kernel pair latency as post-placement outcome telemetry.
+  It must not be fed directly back into the same slot's solve or substituted
+  for the declared planning coefficient.
+- Do not alter the frozen state/load physical latency, jitter, utility, SLA,
+  cutoff, central MILP formulation, or outcome separation while making this
+  input-profile correction.

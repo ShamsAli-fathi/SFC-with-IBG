@@ -848,3 +848,598 @@ deferred after this gate.
 The temporary `D=3` manual check is complete. The active default is restored
 to `D=2` under contract v4 before the professor-authorized top-`Q` MC redesign
 proceeds.
+
+## Active workstream: coupled/budgeted MILP baseline
+
+IBG-Hybrid and its Monte Carlo redesign are temporarily paused. Their code,
+tests, contracts, and preceding roadmap history remain preserved. The phases
+below are the active ordered plan; they do not authorize changes to `IBG/` or
+`IBG_Hybrid/`.
+
+The initial default MILP profile is 15 flows, 3 stages, 10 replicas per stage (30 total),
+and exactly `L=2` selected stages per flow. The initial three-stage profile
+bypasses its third stage; a `K`-stage run bypasses `K-2` stages. MILP
+is the centralized perfect-state whole-slot social-welfare baseline for this
+same coupled/budgeted problem.
+
+## MILP Phase 0: Freeze the formulation and characterize the prototype
+
+Status: next.
+
+Suggested model: GPT-5 Codex. Suggested reasoning level: xhigh.
+
+- Turn the paper, the user-selected `L=2` action, and the old `MILP/` code
+  into one versioned formulation contract.
+- Write deterministic characterization tests that expose import-time side
+  effects, the inactive budgeted path, 30-per-stage versus 30-total mismatch,
+  ignored caller budget/hard-coded `B=20`, arbitrary skipping, missing link
+  and admission constraints, obsolete utility/learning, global RNG mutation,
+  and incomplete solver-status reporting.
+- Fix the runtime-configurable mathematical indices and units: variable `N`,
+  `K`, and `M_k`, with initial default `N=15`, `K=3`, `M_k=10`, total
+  `M=30`; exact cardinality `L=2`; assigned-flow capacity; milliseconds; and
+  utility units.
+- Specify the centralized final-load welfare objective, exact selected-pair
+  link deduction, deterministic symmetry/tie expectations, infeasibility
+  behavior, and perfect-state information boundary.
+- Decide and record solver backends/dependencies. Keep the model
+  backend-neutral; record that paper-runtime replication requires Gurobi 10.0
+  while an available open solver may support local correctness tests.
+
+Gate: the complete MILP variable set, objective, constraints, information
+boundary, status semantics, and every old-code mismatch have deterministic,
+reviewable definitions before solver replacement begins.
+
+## MILP Phase 1: Establish an import-safe package and test oracle
+
+Status: pending MILP Phase 0.
+
+Suggested model: GPT-5 Codex. Suggested reasoning level: high.
+
+- Remove import-time experiments, prints, global seeding, and file writes from
+  `MILP/`; add package-relative imports and a guarded executable entry point.
+- Expose validated runtime dimensions through `--flow`, `--stage`, and
+  `--replica`; keep the initial `15x3x10` values as defaults, not limits.
+- Expose the independently validated `--cutoff SECONDS` option on that entry
+  point without changing or silently clamping the requested duration.
+- Add immutable MILP configuration, replica/admission, directed-link, action,
+  placement, solver-status, objective-breakdown, and result contracts.
+- Add explicit `L=2` validation and reject unsupported budgets rather than
+  silently changing the action shape.
+- Add a tiny exhaustive centralized social-welfare oracle for tractable
+  fixtures only; it must not be used at 15x3x10.
+- Pin or clearly gate the chosen solver dependency and fail with a helpful
+  import/configuration error when it is unavailable.
+
+Gate: imports are silent and side-effect free; tiny valid/infeasible cases,
+canonical actions, skipped-stage behavior, and solver-result contracts pass
+without modifying Exact or Hybrid.
+
+## MILP Phase 2: Implement the correct pure coupled MILP
+
+Status: pending MILP Phase 1; this is the critical baseline phase.
+
+Suggested model: GPT-5 Codex. Suggested reasoning level: xhigh.
+
+- Build binary per-flow stage/replica placement variables, selected-stage
+  variables, final replica-load/count selectors, and linearized directed
+  selected-pair variables.
+- Enforce exactly two stages and one replica per selected stage for every
+  flow, with no bypassed-stage load.
+- Enforce Ready availability, replica assigned-flow capacity, valid identity,
+  and complete planning-link metadata.
+- Precompute known-state expected stage utility for every replica/final-load
+  pair using the frozen physical latency and linear utility concepts.
+- Maximize total final-load stage welfare minus one configured link cost per
+  flow. Preserve stage and link objective components separately.
+- Validate the linearization, final loads, objective reconstruction,
+  deterministic extraction, infeasibility, and optimum against the tiny
+  exhaustive oracle.
+- Return proven-optimal, time-limit, feasible-incumbent, infeasible, and
+  solver-error states explicitly with bound/gap/runtime provenance.
+
+Gate: controlled tractable fixtures agree exactly with exhaustive centralized
+welfare, every placement is valid `L=2`, and no result is called optimal
+without proof.
+
+## MILP Phase 3: Add a pure simulation-slot and common metrics
+
+Status: pending MILP Phase 2.
+
+Suggested model: GPT-5 Codex. Suggested reasoning level: high.
+
+- Add an import-safe in-memory slot runner that calls the pure MILP solver and
+  then executes only its committed two-hop routes through an adapter.
+- Reuse Exact physical and observation jitter generation, final-load
+  conditioning, outcome/SLA, Jain fairness, timing, and result concepts
+  without modifying `IBG/`.
+- Keep perfect true state confined to MILP input and the simulation generator.
+  Selected observations may be recorded for matched telemetry but must not
+  update or steer MILP placement.
+- Require exactly 15 actions, 30 selected observations, and 15 measured-pair
+  outcomes at the initial 15x3x10 target; skipped and unselected replicas emit
+  nothing.
+- Print at most one compact metrics line per completed slot and retain the
+  complete solver/objective/status/result structure in memory. Do not write
+  CSV/pickle files in this phase.
+
+Gate: a seeded pure slot reconstructs the solver objective, preserves
+planning-versus-measured latency separation, and reports common physical-only
+110-ms SLA and fairness metrics with no belief-equilibrium loop.
+
+## MILP Phase 4: Validate optimality and scale
+
+Status: pending MILP Phase 3.
+
+Suggested model: GPT-5 Codex. Suggested reasoning level: xhigh.
+
+- Run deterministic small cases against the exhaustive oracle and establish
+  solver-backend parity where more than one backend is available.
+- Measure build time, solve time, total slot time, variable/constraint counts,
+  incumbent, best bound, gap, status, and memory at increasing small sizes.
+- Run the paper-scale 15x3x10, `L=2` boundary with an explicit time limit and
+  report whether optimality was proven. Do not turn a feasible incumbent into
+  an “optimal” result.
+
+Gate: the supported baseline size, backend/version, optimality evidence, and
+scalability limitations are reproducible and honestly bounded.
+
+## MILP Phase 5: Reuse the Kernel container/Kubernetes architecture
+
+Status: pending MILP Phase 4.
+
+Suggested model: GPT-5 Codex. Suggested reasoning level: high.
+
+- Add a MILP controller entry point without replacing the frozen Exact or
+  paused Hybrid entry points.
+- Reuse the existing Ready discovery, profiles, RBAC, private processor,
+  public route forwarder, flow generator, resource settings, and keep-alive
+  configuration through adapters.
+- Add a MILP-side versioned two-selected-stage route contract compatible with
+  Hybrid's action shape, including noncontiguous selected stages and one
+  correlated selected pair per flow. The frozen Exact flow generator does not
+  already support this route shape and must not be silently reinterpreted.
+- Solve all placements before traffic, execute the 15 selected two-hop routes
+  concurrently, and retain final-load/identity validation.
+- Keep true-state oracle inputs controller-private and clearly mark the MILP
+  baseline as centralized/clairvoyant.
+
+Gate: simulation and Kernel execution use identical MILP inputs/placements
+and agree on deterministic solver outputs and replayed mathematical metrics;
+runtime-only telemetry remains separate.
+
+## MILP Phase 6: Replay and diagnostic compatibility
+
+Status: pending MILP Phase 5.
+
+Suggested model: GPT-5 Codex. Suggested reasoning level: high.
+
+- Add MILP trace/replay validation without importing Exact memo-cache or
+  Hybrid candidate/rollout assumptions.
+- Audit forwarding-path, cgroup, control-plane, learning-footprint, and
+  resource summaries as algorithm-neutral, extendable, or inapplicable.
+- Record MILP-specific model-build/solve counts, incumbent/bound/gap, backend,
+  termination, and memory separately from HTTP/controller metrics.
+- Keep all diagnostics opt-in and behavior-neutral.
+
+Gate: every reused diagnostic is proven compatible or explicitly rejected,
+and replay catches placement, coefficient, status, objective, or metric drift.
+
+### MILP configurable-cutoff requirement
+
+MILP Phase 1 must expose a validated per-run `--cutoff SECONDS` option and
+carry it unchanged through configuration into result provenance. MILP Phase 2
+must apply that value through the backend's native time-limit mechanism rather
+than hiding a different hard-coded solver limit. Tests must cover invalid
+nonpositive/nonfinite values, propagation, optimal completion before cutoff,
+timeout with an incumbent, and timeout without an incumbent.
+
+## MILP Phase 0 implementation result
+
+Status: complete. MILP Phase 1 is next.
+
+Suggested model: GPT-5 Codex. Suggested reasoning level: xhigh.
+
+- Added pure `MILP/phase0_contract.py` with version
+  `milp-coupled-phase0-contract-v1`; importing it cannot run an experiment,
+  print, seed a global RNG, or create a result file.
+- Froze one-based runtime-configurable `N`, `K`, and `(M_1,...,M_K)`
+  dimensions, with initial default `N=15`, `K=3`, `(10,10,10)` and 30 total
+  replicas; also froze exact `L=2`, canonical two-stage actions, and the
+  one-stage bypass for the default three-stage profile.
+- Froze complete Ready/assigned-flow capacity and directed-link metadata,
+  final-load reconstruction, centralized known-state welfare, one planning
+  link per flow, and the exclusion of learning/observation telemetry from the
+  planner.
+- Defined the future binary `x/y/z/p` variable families and all action,
+  availability, capacity, load-indicator, pair-linearization, and link-input
+  constraints. No production model or solver adapter was added.
+- Defined deterministic extraction/tie expectations without assuming a
+  backend canonically resolves symmetric optima.
+- Defined finite-positive per-run cutoff validation and six solver outcomes
+  with build/solve timing, backend/version, termination, incumbent, bound,
+  normalized absolute/relative gaps, and optional model counts.
+- Added 27 focused tests. They cover the positive contract and all twelve
+  legacy mismatches: import-time execution/output risk, decoupled default,
+  90-versus-30 topology, ignored budget/hard-coded `B=20`, random-cost
+  budget, arbitrary skipping, missing admission/link constraints, obsolete
+  utility/learning, global RNG mutation, incomplete status provenance, broken
+  budgeted result/update shape, and undeclared OR-Tools.
+- Inspected local backends without installing packages. SciPy 1.18.0 with
+  embedded HiGHS 1.12.0 is available and passed a trivial binary MILP smoke;
+  Gurobi/gurobipy, OR-Tools/CBC, PuLP, python-mip, highspy, Pyomo, GLPK, and
+  standalone HiGHS are absent.
+
+Gate result: the Phase 0 mathematical and information boundary is explicit
+and reviewable, focused tests pass, and no file under `IBG/` or
+`IBG_Hybrid/` changed. Phase 1 may now establish the replacement package,
+immutable solver/result contracts, tiny exhaustive oracle, declared backend
+adapter, and user-facing `--cutoff SECONDS` option. Production formulation,
+15x3x10 solving, simulation, Kubernetes, replay, and diagnostics remain
+Phases 2--6.
+
+## MILP Phase 1 implementation result
+
+Status: complete. MILP Phase 2 is next.
+
+Suggested next model: GPT-5 Codex. Suggested next reasoning level: xhigh.
+
+- Added the import-safe `MILP` package boundary and immutable Phase 1
+  configuration, complete perfect-state input, canonical placement,
+  objective, normalized solver-result, and backend-availability contracts.
+  These extend the Phase 0 types and do not replace its mathematics.
+- Added guarded `python -m MILP` configuration parsing for `--flow`,
+  `--stage`, `--replica`, and required `--cutoff SECONDS`. Defaults remain
+  15x3x10; non-default positive dimensions are accepted; `K>=2`; `L=2`
+  remains fixed; a `K`-stage action bypasses `K-2` stages.
+- Added read-only SciPy/HiGHS availability discovery. The local gate reports
+  SciPy 1.18.0 and embedded HiGHS 1.12.0, and the missing-backend path raises
+  a helpful Phase 2 configuration error. No solver invocation or dependency
+  installation occurs in Phase 1.
+- Added a deterministic tiny exhaustive centralized-welfare oracle that uses
+  Phase 0 feasibility and final-load objective reconstruction. It refuses
+  more than four flows, more than 100,000 placements, and therefore the
+  default 15x3x10 production boundary.
+- Removed the old entry point's import-time fifty-experiment loop, output,
+  and absolute imports. The old invalid budgeted solver now fails explicitly
+  as retired, and importing the remaining legacy header no longer requires
+  unavailable OR-Tools.
+- Updated the Phase 0 characterization tests to retain the twelve historical
+  mismatch records after the unsafe source behavior was isolated, and added
+  focused Phase 1 tests for imports, CLI validation, immutable contracts,
+  backend gating, exact `L=2`/`K-2` behavior, oracle correctness/ties/scope,
+  result reuse, and retired legacy behavior.
+
+Gate result: 55 combined MILP Phase 0/1 tests pass. All supported MILP
+modules and both focused test modules compile. Supported imports are silent,
+RNG-neutral, and file-safe. The executable prints only one configuration
+acceptance/deferred-solver line. No file under `IBG/` or `IBG_Hybrid/`
+changed, and no Markdown file exists below `MILP/`.
+
+MILP Phase 2 remains the critical next phase: construct the backend-neutral
+`x/y/z/p` model, adapt it to SciPy/HiGHS with the requested cutoff, extract
+canonical feasible incumbents and full status/bound/gap provenance, and
+prove small cases against the test-only oracle. Production simulation,
+15x3x10 scale evidence, Kernel/Kubernetes reuse, and replay/diagnostics remain
+Phases 3--6.
+
+## MILP Phase 2 implementation result
+
+Status: complete. MILP Phase 3 is next.
+
+Suggested next model: GPT-5 Codex. Suggested next reasoning level: high.
+
+- Added a pure backend-neutral model containing all canonical `x/y/z/p`
+  binaries and the complete Phase 0 equality/inequality families for exact
+  two-stage placement, admission, final loads, and directed pairs.
+- Reused unchanged Exact known-state expected physical utility for every
+  replica/load coefficient. The minimized SciPy objective is the exact sign-
+  converted Phase 0 final-load social welfare with one configured link per
+  flow.
+- Added the SciPy 1.18.0/embedded HiGHS 1.12.0 sparse adapter. It passes the
+  exact requested cutoff to the primary native `time_limit`, requires zero
+  relative MIP gap for proof, and records separate model-build/solve time,
+  backend/version, termination, incumbent, bound, normalized gaps, and model
+  counts.
+- Added objective-preserving deterministic secondary canonicalization and
+  explicit validation of backend bounds, integrality, constraints, action
+  shape, feasibility, final loads, and reconstructed objective.
+- Added focused Phase 2 tests for exact model families/counts, default
+  15x3x10 construction without solving, Exact-helper equivalence, oracle
+  agreement, link-aware joint choices, Ready/capacity infeasibility, general
+  `K-2` bypass, native cutoff propagation, optimal/time-limit/infeasible/
+  unbounded/error normalization, invalid backend output, and deterministic
+  repeated symmetric solves.
+
+Gate result: 73 combined MILP Phase 0/1/2 tests pass. The controlled tiny
+centralized solve agrees with the exhaustive oracle in objective and
+canonical placement. The default model boundary constructs 5,475 variables
+and 14,115 constraints but is deliberately not solved or timed. Imports stay
+silent and no file under `IBG/` or `IBG_Hybrid/` changed.
+
+MILP Phase 3 is next: add the pure in-memory slot runner, execute only the
+selected two-hop routes through an in-process adapter, reuse Exact physical
+and observation-jitter separation plus common physical-only SLA/fairness
+metrics, record matched observations without learning, and print at most one
+compact metrics line. Phase 4 retains scale/15x3x10 cutoff evidence; Phases
+5--6 retain Kernel/Kubernetes and replay/diagnostic work.
+
+## MILP Phase 3 implementation result
+
+Status: complete. MILP Phase 4 is next.
+
+Suggested next model: GPT-5 Codex. Suggested next reasoning level: high.
+
+- Added immutable Phase 3 slot, selected-observation, measured-pair,
+  simulation-result, metric, and complete slot-result contracts with Phase
+  0--3 version and solver provenance retention.
+- Added a pure runner that calls the public Phase 2 solver, validates a proven
+  or timed feasible incumbent, and fails every non-incumbent status before
+  simulation without a heuristic fallback.
+- Added an in-process adapter that executes exactly the selected two-stage
+  actions after whole-slot placement, conditions physical samples and exact
+  likelihoods on final loads, and produces two observations and one pair
+  outcome per flow.
+- Added separate deterministic BLAKE2b seed schemes and local RNGs for
+  physical jitter, observation-only jitter, and measured pair outcomes.
+- Reused unchanged Exact physical latency, separated observation jitter,
+  convolved likelihood/state estimate, physical-only utility and 110-ms SLA,
+  raw physical-plus-pair reference, and Jain comparison behavior. No belief
+  update or equilibrium path exists in MILP.
+- Kept planning-link coefficients separate from explicit outcome-only
+  measured-pair profiles and retained all expected/realized/timing fields in
+  memory. The pure runner prints nothing; its explicit wrapper prints one
+  compact completed-slot line.
+- Covered the default 15x3x10 orchestration boundary with a supplied validated
+  incumbent: 15 actions, 30 assignments/observations, and 15 pair outcomes.
+  This is structural runner evidence, not an actual default solver runtime or
+  optimality/scale claim.
+
+Gate result: 89 combined MILP Phase 0/1/2/3 tests pass, including a real tiny
+SciPy/HiGHS slot solve and deterministic default-shape adapter coverage. The
+27 relevant unchanged Exact characterization, latency, learning-signal, and
+runner tests also pass. Imports remain silent, file-safe, and global-RNG
+neutral; no file under `IBG/` or `IBG_Hybrid/` changed.
+
+MILP Phase 4 is next: establish controlled cutoff, incumbent, bound, gap, and
+runtime evidence at increasing dimensions through the default 15x3x10
+boundary. Do not call a timed incumbent optimal, compare local HiGHS timing
+to Gurobi/paper timing, or hide a missing incumbent behind a fallback.
+Kernel/Kubernetes integration and replay/diagnostic compatibility remain
+Phases 5 and 6.
+
+## MILP Phase 4 implementation result
+
+Status: complete. MILP Phase 5 is next.
+
+Suggested next model: GPT-5 Codex. Suggested next reasoning level: high.
+
+- Added immutable Phase 4 case, evidence, and run-result contracts plus a
+  deterministic synthetic scale-profile builder that consumes no global RNG.
+- Added an increasing scale ladder through 15x3x10 and a guarded
+  `python -m MILP.benchmark` entry point with required `--cutoff SECONDS`.
+- Retained complete status/proof, incumbent, bound, gap, backend, model-count,
+  build/solve/simulation/total-time, and process-peak-RSS evidence in memory.
+- Added tiny-case oracle verification and explicitly recorded that backend
+  parity is unavailable with only SciPy 1.18.0/HiGHS 1.12.0 installed.
+- Added focused tests for deterministic complete profiles, cutoff/dimension/
+  seed validation, oracle parity, no-incumbent handling, memory units,
+  import/file/RNG safety, one-line output, and the real cutoff-bound 15x3x10
+  model.
+
+The isolated-process one-second ladder produced proven optima through 5x3x4,
+a timed feasible 10x3x6 incumbent with relative gap 0.0194227, and a timed
+feasible 15x3x10 incumbent of 1628.29 against bound 2281.98 with relative gap
+0.401463. The default model used 5,475 variables and 14,115 constraints,
+reported 0.140502-second build, 1.210599-second solve-call duration,
+2.458909-second total wall time including simulation/runtime overhead, and
+182.141 MiB process peak RSS. A repeat reproduced status/incumbent/bound/gap,
+not identical timing or memory. This is bounded local HiGHS evidence, not an
+optimality proof, hard real-time guarantee, Gurobi result, or paper-runtime
+replication.
+
+Gate result: all Phase 4 evidence fields are reproducible from declared seeds
+and dimensions, small cases match the oracle, and the supported default size
+is honestly labelled time-limited and unproven. MILP Phase 5 may now add the
+separate Kernel/container/Kubernetes controller and two-selected-stage route
+contract without changing the solver or scale evidence. Replay and diagnostic
+compatibility remain Phase 6.
+
+### MILP Phase 4 verbose-output addendum
+
+The completed Phase 4 benchmark now supports optional `--verbose` native
+HiGHS progress. Default output remains one compact final line. Focused tests
+cover both `disp=False` and `disp=True`, the immediate start banner, and the
+final structured summary; no solver or evidence semantics changed.
+
+## MILP Phase 5 implementation result
+
+Status: complete. MILP Phase 6 is next only when explicitly authorized.
+
+- Added immutable Phase 5 Kernel, Ready-endpoint, selected-observation,
+  measured-pair, metric, and result contracts under `MILP/`.
+- Added `milp-two-selected-stage-route-v1`, which supports routes such as
+  1 to 3 and 2 to 3 without weakening Exact's separate contiguous route.
+- Added a MILP-specific flow generator that validates complete-slot final
+  loads, runs flows concurrently, reuses the unchanged public forwarder, and
+  requires two correlated hop observations plus one pair per flow.
+- Added Ready-only StatefulSet ordinal discovery and a Kubernetes traffic
+  adapter with complete identity/load/likelihood/pair validation.
+- Added a controller-side profile/link adapter, solve-once Kernel runner, and
+  guarded controller CLI with runtime flow/stage/replica dimensions,
+  mandatory cutoff, and optional native HiGHS verbosity.
+- Added an isolated MILP image/namespace/RBAC/flow-generator Kustomization and
+  a guarded launcher. Dynamic Services, StatefulSets, deterministic profiles,
+  processor/forwarder resources, and keep-alive settings reuse the unchanged
+  Exact resource builder. The planning coefficient is an explicit launcher
+  input rather than a new implicit calibration.
+- Reused the Phase 3 incumbent gate and metric policy so Kernel results retain
+  solver objective/provenance, physical-only realized utility and SLA,
+  configured-versus-measured pair separation, raw reference utility, Jain
+  fairness, and separate build/solve/traffic/total timing.
+- Completed the read-only Hybrid Phase 5 parity audit. No missing pure MILP
+  latency or utility policy was found, and no Hybrid algorithm import was
+  introduced.
+
+Gate result: 129 combined MILP Phase 0--5 tests pass. A separate 109-test
+Exact/runtime regression selection passes. Compilation, import/RNG/file
+safety, Kustomize rendering, and frozen-tree checks pass. The live kind
+cluster was inspected read-only and has three Ready nodes but no
+`milp-testbed` namespace or Phase 5 image; no image was built and no resource
+was deployed, so there is no live Kernel result in this phase handoff. The
+default 15x3x10 Kernel result shape was validated with a supplied complete
+incumbent (15 routes, 30 observations/assignments, 15 pairs), but deploying
+30 two-container replica Pods was not assumed safe or claimed as live
+evidence.
+
+Phase 6 remains replay and diagnostic compatibility. It may be opened only by
+explicit user direction and must not silently add netem, forwarding/cgroup
+diagnostics, DPDK/VPP, bandits, learning, Gurobi claims, or reporting changes.
+
+## MILP Phase 6 implementation result
+
+Status: complete. The bounded MILP Phase 0--6 implementation roadmap is
+complete; no MILP Phase 7 is implied.
+
+- Added an immutable JSON-safe trace for pure and Kernel slot results with
+  complete dimensions, versions, solver provenance, placement/bypasses,
+  final loads, selected configured links, objective, identities, observations,
+  measured pairs, outcome metrics, and timing.
+- Confined true state to the explicitly private planner-input/replay section;
+  observation records remain true-state-free.
+- Added solver-independent mathematical and outcome replay with categorized
+  drift failures. Replay revalidates feasibility and reconstructs both the
+  configured-link social-welfare objective and physical/measured outcome
+  views without calling the solver.
+- Added optional solver replay. Proven canonical optima require objective and
+  placement equality; timed incumbents retain their unproven status and do
+  not require identical rerun placements.
+- Added an explicit diagnostic audit and opt-in collector. Controller timing,
+  HTTP route timing, logical payload counts, and MILP model/process resource
+  values are retained only when requested. Forwarding/cgroup concepts are
+  compatible but were not newly instrumented. Exact memo cache, learning
+  footprint, beliefs/equilibrium, and Hybrid candidate/rollout/sample counts
+  are explicitly inapplicable.
+- Added a guarded compatibility-audit script that prints one JSON-safe line
+  and writes no file.
+
+Gate result: 144 combined MILP Phase 0--6 tests pass, including 15 focused
+Phase 6 tests for pure/Kernel replay, corruption, optional solver replay,
+diagnostic opt-in behavior, JSON safety, true-state privacy, RNG neutrality,
+and controlled in-process pure-versus-Kernel parity. A separate 108-test
+unchanged Exact/runtime regression selection passes. No live MILP workload
+was present or deployed; the cluster still has no `milp-testbed` namespace.
+The 15x3x10 live topology therefore remains unreviewed for local capacity and
+is not claimed safely runnable. Netem, new forwarding/cgroup instrumentation,
+DPDK/VPP, bandits, Hybrid work, Gurobi integration, new calibration, and file
+reporting remain deferred until explicitly authorized.
+
+## MILP Kernel live-repair gate
+
+Updated: 2026-08-01. Status: DNS/network repair complete; MILP forwarder
+correction pending.
+
+- Proved that the initial readiness failure was caused by stale kind node
+  networking after restart, not by the absolute flow-generator URL.
+- Restarted only `kindnet` and `kube-proxy`, then recycled only the isolated
+  2x3x2 MILP workloads. Correct node PodCIDRs, Service DNS, and cross-node
+  replica reachability are restored.
+- Re-ran the exact verbose 2x3x2/cutoff-10/planning-link-2 command. The
+  controller reached the Service and the primary SciPy/HiGHS model proved an
+  incumbent objective of 333.62750071 optimal before traffic.
+- Traffic then failed explicitly because the frozen Exact forwarder rejected
+  the valid MILP stage-1-to-stage-3 route as noncontiguous. Therefore no
+  completed metrics or Phase 6 live replay exists yet.
+- Before the live gate can close, add and test an isolated MILP forwarder that
+  accepts the already-authoritative two-selected-stage route without changing
+  Exact/Hybrid or any processor, latency, utility, SLA, resource, or telemetry
+  policy. Rebuild only the MILP image and repeat the same 2x3x2 run. Require
+  two routes, four observations, two measured pairs, one public solver call,
+  complete provenance/metrics, and successful Phase 6 replay.
+
+### MILP Kernel live-repair gate result
+
+Updated: 2026-08-01. Status: complete.
+
+- Added the isolated MILP forwarder and resource projection while preserving
+  Exact's contiguous-route default and every accepted processor/resource/
+  latency/utility contract.
+- Added regression coverage for noncontiguous MILP acceptance, reverse-stage
+  rejection, unchanged Exact rejection, generated MILP application command,
+  absolute readiness URL/failure provenance, and live `AnyHttpUrl` replay
+  normalization.
+- Added silent in-memory Phase 6 replay to the live controller and expanded
+  its single final metrics line with complete aggregate/count separation.
+- Rebuilt only `milp-testbed:kernel-phase5` and ran the requested verbose
+  2x3x2 experiment with cutoff 10 seconds and planning link 2 ms. The Job
+  completed with proven optimum 333.62750071, equal bound, zero gap, two
+  routes, four observations, two pairs, and `replay=ok`.
+- The final live aggregate metrics were expected-stage welfare 337.628,
+  configured planning deduction 4.000, physical realized utility 338.040,
+  physical latency 57.960 ms, measured-pair latency 14.045 ms, raw latency
+  72.005 ms, pair-reference utility 323.995, zero physical-only SLA
+  violations, Jain fairness 0.999997, solver time 0.033037 seconds, traffic
+  time 0.074069 seconds, and total controller-slot time 0.111500 seconds.
+- Gate verification: 150 MILP Phase 0--6 tests and 95 relevant unchanged
+  Exact/runtime tests pass. Compilation, silent import, global-RNG neutrality,
+  no-file-side-effect coverage, diff checking, frozen IBG/Hybrid trees, no
+  MILP Markdown, and no Hybrid algorithm import checks pass.
+
+The small 2x3x2 testbed remains deployed. No 15x3x10 topology, netem,
+forwarding/cgroup extension, DPDK/VPP, Gurobi, Hybrid algorithm, learning,
+calibration, or file reporting was added or run.
+
+### MILP Kernel launcher observability addendum
+
+Status: complete.
+
+The guarded launcher now automatically prints pre-solver scale/footprint,
+cutoff/planning inputs, capacity notice, cluster nodes, image mode, rollout
+milestones, Ready snapshot, controller Job name, and controller-wait state.
+`--verbose` still controls only native HiGHS output. This addendum does not
+create persisted reports, change the MILP/Kernel contract, or impose a new
+replica cap. The prior 15-replicas-per-stage live attempt demonstrates why
+deployment progress must be visible: 45 two-container Pods exceeded the
+small local cluster's live capacity and stalled before a controller Job was
+created.
+
+## MILP bounded experiment-input parity repair result
+
+Updated: 2026-08-01. Status: complete; this is not a new MILP phase.
+
+- Added immutable `milp-experiment-profile-v1` and a fingerprint over the
+  complete planner input, cutoff, source/mode provenance, and separate pure
+  measured-pair profile.
+- Added `python -m MILP.experiment` for pure same-input runs. It performs no
+  Kubernetes/image/report-file work and prints one compact line by default;
+  `--verbose` enables native HiGHS output and a provenance banner.
+- Changed the Kernel launcher/controller to mount and consume the same profile
+  after Ready discovery. MILP admission no longer comes from old runtime
+  profile capacity.
+- Added `assigned-flows-per-slot` admission, a flow-count default,
+  `--assigned-flow-capacity`, and complete explicit link input through
+  `--planning-links`; uniform link mode remains available and labelled
+  objective-constant.
+- Added mutation, round-trip, CLI construction, legacy-capacity,
+  uniform/explicit-link, large construction-only, RNG, and small real-solver
+  parity tests. Existing Phase 4 behavior remains unchanged.
+- Completed a live 2x3x2 gate. Pure and Kernel shared fingerprint
+  `011001de78293ceefae74d4c52a330a5`; both proved objective/bound
+  `333.62750071` with zero gap under cutoff 10 seconds. Kernel completed two
+  routes, four observations, two pairs, and replay.
+
+Gate result: 158 MILP Phase 0--6/parity tests and 127 relevant unchanged
+Exact/runtime tests pass. No new phase, heuristic, solver, calibration,
+learning, report, netem, DPDK/VPP, Gurobi, Hybrid behavior, commit, or push was
+added.
+
+### Immediate MILP follow-up: latency-aware planning profile
+
+Status: pending explicit implementation authorization.
+
+Replace the uniform `--planning-link-ms` smoke/control default with a complete
+deterministic heterogeneous directed planning-latency profile consumed by both
+pure and Kernel paths. Demonstrate that it changes pair selection where
+appropriate, preserve its provenance/fingerprint, and retain actual Kernel
+pair latency only as post-placement outcome telemetry. This is a bounded input
+profile correction, not a new formulation/solver/Kubernetes phase.
