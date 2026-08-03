@@ -8,9 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# The controller alone owns the SciPy/HiGHS MILP backend.
 COPY requirements-runtime.txt ./
-RUN tdnf install -y iproute iproute-tc \
-    && tdnf clean all
 RUN python3 -m pip install --no-cache-dir -r requirements-runtime.txt "scipy==1.18.0"
 
 COPY IBG ./IBG
@@ -19,6 +18,4 @@ COPY testbed ./testbed
 
 USER 10001:10001
 
-EXPOSE 8080 8081
-
-CMD ["python3", "-m", "uvicorn", "MILP.kernel_flow_generator:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python3", "-m", "MILP.kernel_controller"]

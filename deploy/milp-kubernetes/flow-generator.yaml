@@ -30,7 +30,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: flow-generator
-          image: milp-testbed:kernel-phase5
+          image: milp-testbed:kernel-service-phase5
           imagePullPolicy: Never
           command:
             - python3

@@ -22,14 +22,19 @@ from MILP.experiment_profile import (
     build_experiment_profile_from_runtime_states,
     experiment_profile_json,
 )
-from MILP.kernel_resources import build_milp_kernel_runtime_resources
+from MILP.kernel_resources import (
+    MILP_PROFILE_CONFIG_MAP,
+    build_milp_kernel_runtime_resources,
+)
 from MILP.runtime_profiles import (
     expand_milp_runtime_profiles,
     load_milp_runtime_profiles,
+    milp_runtime_profiles_from_document,
 )
 
 
-IMAGE = "milp-testbed:kernel-phase5"
+SERVICE_IMAGE = "milp-testbed:kernel-service-phase5"
+CONTROLLER_IMAGE = "milp-testbed:kernel-controller-phase5"
 NAMESPACE = "milp-testbed"
 FORWARDER_WORKERS_PER_REPLICA = 2
 
@@ -77,6 +82,39 @@ def _planning_link_document(args):
         "contract_version": "milp-planning-links-v1",
         "uniform_cost_ms": args.planning_link_ms,
     }
+
+
+def rollout_batch_targets(replica_target, batch_size, existing_replicas=None):
+    """Return deterministic rollout targets without shrinking a scale-up first."""
+
+    if not isinstance(replica_target, int) or isinstance(replica_target, bool) or replica_target < 1:
+        raise ValueError("replica target must be a positive integer")
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+        raise ValueError("rollout batch size must be a positive integer")
+    if existing_replicas is not None and (
+        not isinstance(existing_replicas, int)
+        or isinstance(existing_replicas, bool)
+        or existing_replicas < 0
+    ):
+        raise ValueError("existing replica count must be a nonnegative integer")
+    if existing_replicas is None or existing_replicas == 0:
+        return tuple(
+            min(replica_target, current)
+            for current in range(batch_size, replica_target + batch_size, batch_size)
+        )
+    if existing_replicas >= replica_target:
+        return (replica_target,)
+    return tuple(
+        (existing_replicas,)
+        + tuple(
+            min(replica_target, current)
+            for current in range(
+                existing_replicas + batch_size,
+                replica_target + batch_size,
+                batch_size,
+            )
+        )
+    )
 
 
 def build_launcher_experiment_profile(args):
@@ -151,6 +189,16 @@ def build_parser():
     parser.add_argument("--slot-id", type=_positive_integer, default=1)
     parser.add_argument("--cluster", default="ibg")
     parser.add_argument("--timeout", type=_positive_integer, default=900)
+    parser.add_argument(
+        "--rollout-batch-size",
+        type=_positive_integer,
+        default=2,
+        metavar="REPLICAS",
+        help=(
+            "replicas per stage added in each bounded rollout step "
+            "(default: 2)"
+        ),
+    )
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -176,20 +224,33 @@ def _ensure_cluster(cluster):
 
 
 def _build_and_load(cluster):
-    _announce(f"building isolated image {IMAGE}")
+    _announce(f"building lean MILP service image {SERVICE_IMAGE}")
     _run(
         [
             "docker",
             "build",
             "--tag",
-            IMAGE,
+            SERVICE_IMAGE,
             "--file",
-            str(ROOT / "deploy/milp-kubernetes/Dockerfile"),
+            str(ROOT / "deploy/milp-kubernetes/Dockerfile.service"),
             ".",
         ]
     )
-    _announce(f"loading {IMAGE} into kind-{cluster}")
-    _run(["kind", "load", "docker-image", "--name", cluster, IMAGE])
+    _announce(f"building MILP controller image {CONTROLLER_IMAGE}")
+    _run(
+        [
+            "docker",
+            "build",
+            "--tag",
+            CONTROLLER_IMAGE,
+            "--file",
+            str(ROOT / "deploy/milp-kubernetes/Dockerfile.controller"),
+            ".",
+        ]
+    )
+    _announce(f"loading MILP service and controller images into kind-{cluster}")
+    _run(["kind", "load", "docker-image", "--name", cluster, SERVICE_IMAGE])
+    _run(["kind", "load", "docker-image", "--name", cluster, CONTROLLER_IMAGE])
 
 
 def _print_cluster_nodes(context):
@@ -228,6 +289,125 @@ def _print_runtime_status(context):
         print(f"  {line}", flush=True)
 
 
+def _wait_for_replica_batch(context, args, target, batch_index, batch_count):
+    _announce(
+        f"replica rollout batch {batch_index}/{batch_count}: "
+        f"target={target}/{args.replica} replicas/stage"
+    )
+    for stage in range(1, args.stage + 1):
+        _announce(
+            f"waiting for stage-{stage}: {target} replica Pods to become Ready "
+            f"(timeout={args.timeout}s; MILP has not started)"
+        )
+        _run(
+            [
+                "kubectl",
+                "--context",
+                context,
+                "rollout",
+                "status",
+                f"statefulset/stage-{stage}",
+                "--namespace",
+                NAMESPACE,
+                f"--timeout={args.timeout}s",
+            ],
+            capture=False,
+        )
+    _announce(
+        f"replica rollout batch {batch_index}/{batch_count}: "
+        f"all {args.stage} stages Ready at {target} replicas/stage"
+    )
+
+
+def _scale_replica_batch(context, args, target):
+    for stage in range(1, args.stage + 1):
+        _run(
+            [
+                "kubectl",
+                "--context",
+                context,
+                "scale",
+                f"statefulset/stage-{stage}",
+                "--namespace",
+                NAMESPACE,
+                f"--replicas={target}",
+            ]
+        )
+
+
+def _existing_replica_target(context, args):
+    """Return a consistent existing desired count, or None for a fresh deployment."""
+
+    counts = []
+    for stage in range(1, args.stage + 1):
+        result = _run(
+            [
+                "kubectl",
+                "--context",
+                context,
+                "get",
+                f"statefulset/stage-{stage}",
+                "--namespace",
+                NAMESPACE,
+                "--ignore-not-found",
+                "-o",
+                "jsonpath={.spec.replicas}",
+            ]
+        )
+        value = result.stdout.strip()
+        counts.append(None if not value else int(value))
+    if all(count is None for count in counts):
+        return None
+    if any(count is None for count in counts):
+        raise RuntimeError(
+            "incomplete existing MILP StatefulSet set; remove or repair "
+            "milp-testbed before scaling"
+        )
+    if len(set(counts)) != 1:
+        raise RuntimeError(
+            "MILP StatefulSets have inconsistent existing replica counts; "
+            "remove or repair milp-testbed before scaling"
+        )
+    return counts[0]
+
+
+def _validate_existing_runtime_profiles(context, args, profiles, existing_replicas):
+    """Reject a scale-up that would silently change a running Pod's profile."""
+
+    if existing_replicas is None or existing_replicas == 0:
+        return
+    result = _run(
+        [
+            "kubectl",
+            "--context",
+            context,
+            "get",
+            f"configmap/{MILP_PROFILE_CONFIG_MAP}",
+            "--namespace",
+            NAMESPACE,
+            "--ignore-not-found",
+            "-o",
+            "jsonpath={.data.profiles\\.json}",
+        ]
+    )
+    profile_json = result.stdout.strip()
+    if not profile_json:
+        raise RuntimeError(
+            "existing MILP StatefulSets have no runtime profile ConfigMap; "
+            "remove or repair milp-testbed before scaling"
+        )
+    existing_profiles = milp_runtime_profiles_from_document(json.loads(profile_json))
+    for stage in range(1, args.stage + 1):
+        for replica_id in range(1, existing_replicas + 1):
+            key = (stage, replica_id)
+            if existing_profiles.get(key) != profiles.get(key):
+                raise RuntimeError(
+                    "scale-up would change the runtime profile of existing "
+                    f"stage-{stage} replica-{replica_id}; refresh the topology "
+                    "explicitly instead of silently restarting or leaving it stale"
+                )
+
+
 def _apply_long_running(context, args, experiment_profile, runtime_profiles):
     deploy = ROOT / "deploy/milp-kubernetes"
     _announce(f"applying isolated namespace, RBAC, and flow generator in {NAMESPACE}")
@@ -245,35 +425,61 @@ def _apply_long_running(context, args, experiment_profile, runtime_profiles):
         ["kubectl", "--context", context, "apply", "--filename", "-"],
         input_text=json.dumps(experiment_document),
     )
+    existing_replicas = _existing_replica_target(context, args)
+    _validate_existing_runtime_profiles(
+        context,
+        args,
+        runtime_profiles,
+        existing_replicas,
+    )
+    batch_targets = rollout_batch_targets(
+        args.replica,
+        args.rollout_batch_size,
+        existing_replicas,
+    )
+    if existing_replicas is None:
+        _announce(
+            f"fresh replica rollout: starting at {batch_targets[0]} "
+            f"replicas/stage"
+        )
+    elif existing_replicas < args.replica:
+        _announce(
+            f"preserving {existing_replicas} existing replicas/stage; "
+            f"scaling only new replicas toward {args.replica}"
+        )
+    elif existing_replicas > args.replica:
+        _announce(
+            f"requested scale-down: {existing_replicas} -> {args.replica} "
+            "replicas/stage"
+        )
+    else:
+        _announce(
+            f"requested replica count already present: {args.replica} replicas/stage"
+        )
     resources = build_milp_kernel_runtime_resources(
         runtime_profiles,
         num_of_stages=args.stage,
-        num_of_replicas=args.replica,
+        num_of_replicas=batch_targets[0],
         namespace=NAMESPACE,
-        image=IMAGE,
+        image=SERVICE_IMAGE,
     )
     _run(
         ["kubectl", "--context", context, "apply", "--filename", "-"],
         input_text=json.dumps(resources),
     )
-    for stage in range(1, args.stage + 1):
-        _announce(
-            f"waiting for stage-{stage}: {args.replica} replica Pods to become Ready "
-            f"(timeout={args.timeout}s; MILP has not started)"
-        )
-        _run(
-            [
-                "kubectl",
-                "--context",
-                context,
-                "rollout",
-                "status",
-                f"statefulset/stage-{stage}",
-                "--namespace",
-                NAMESPACE,
-                f"--timeout={args.timeout}s",
-            ],
-            capture=False,
+    for batch_index, target in enumerate(batch_targets, start=1):
+        if batch_index > 1:
+            _announce(
+                f"scaling all {args.stage} stages to {target} replicas/stage "
+                "before waiting for the next batch"
+            )
+            _scale_replica_batch(context, args, target)
+        _wait_for_replica_batch(
+            context,
+            args,
+            target,
+            batch_index,
+            len(batch_targets),
         )
     _announce("waiting for MILP flow-generator Deployment to become Ready")
     _run(
@@ -328,7 +534,7 @@ def _controller_job(args, name):
                     "containers": [
                         {
                             "name": "controller",
-                            "image": IMAGE,
+                            "image": CONTROLLER_IMAGE,
                             "imagePullPolicy": "Never",
                             "command": ["python3", "-m", "MILP.kernel_controller"],
                             "args": controller_args,
@@ -391,7 +597,10 @@ def main(argv=None):
     if not args.skip_build:
         _build_and_load(args.cluster)
     else:
-        _announce(f"skipping image build; using the image already loaded in kind-{args.cluster}")
+        _announce(
+            "skipping image build; using the MILP service and controller images "
+            f"already loaded in kind-{args.cluster}"
+        )
     context = f"kind-{args.cluster}"
     _print_cluster_nodes(context)
     _apply_long_running(

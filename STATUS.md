@@ -1404,3 +1404,129 @@ IBG-labelled immutable StatefulSet selector. Remove `milp-testbed` before the
 first post-separation MILP deployment, then run once without `--skip-build` to
 build/load the updated isolated MILP image. Later unchanged-image runs may use
 `--skip-build`.
+
+### MILP lean service image built locally
+
+Updated: 2026-08-03.
+
+The new service image built and imported `MILP.kernel_flow_generator` without
+loading SciPy or pandas. Its local Docker image size is 79,393,189 bytes,
+versus 150,312,729 bytes for the former single MILP image; the new controller
+image is 146,283,157 bytes and retains the solver dependencies. These image
+sizes are local build evidence only, not Pod-RSS evidence. No image was loaded
+into kind and no Pod was deployed during this validation. The next safe test
+is one fresh MILP-only rollout without `--skip-build`, followed by measured
+resource comparison at the same dimensions.
+
+The fresh MILP-only 12x3x6 rollout completed after the image split: all 18
+replica Pods were Ready with zero restarts and used
+`milp-testbed:kernel-service-phase5`. The sampled private processors used
+40.6MiB on average, unchanged from the prior broad image; sampled two-worker
+forwarders used 119.7MiB on average, down from 175.5MiB (55.8MiB or 31.8% per
+forwarder). Worker-node Docker snapshots were 1.784GiB and 1.720GiB, but they
+are not a direct before/after lean-image comparison because the unrelated IBG
+deployment was also removed. The forwarder still recorded startup/traffic CPU
+throttling under its unchanged one-CPU limit; no resource adjustment is
+authorized by this measurement alone.
+
+### MILP processor right-sizing and batched rollout completed
+
+Updated: 2026-08-03.
+
+MILP-only resource declarations now set the private processor to 50m CPU/64Mi
+request and 1 CPU/256Mi limit. The public forwarder remains exactly 25m
+CPU/128Mi request and 1 CPU/256Mi limit with two workers; the processor remains
+one worker. `--rollout-batch-size` is positive, defaults to two replicas per
+stage, and implements bounded all-stage rollout targets before the controller
+is created.
+
+Fresh validation removed and recreated only `milp-testbed`, rebuilt/loaded the
+two MILP images, and ran:
+
+```text
+./.venv/bin/python scripts/run_milp_kernel.py --flow 6 --stage 3 --replica 3 --cutoff 60 --planning-link-ms 2 --rollout-batch-size 2 --timeout 300 --verbose
+```
+
+It applied/waited the `2 -> 3` per-stage rollout. All nine replica Pods reached
+2/2 Ready with zero container restarts, used
+`milp-testbed:kernel-service-phase5`, and each StatefulSet ended desired=3,
+ready=3. The controller made one completed slot and reported:
+
+```text
+MILP-Kernel scale=6x3x3 slot=1 cutoff=60s status=proven-optimal optimal=1 incumbent=963.087 bound=963.087 gap=0 routes=6 observations=12 pairs=6 expected-stage=975.087 planning=12.000 social=963.087 realized=965.573 physical-ms=222.427 measured-pair-ms=99.771 raw-ms=322.198 reference=865.802 sla=0 jain=0.999795 solve=0.288494s traffic=0.127412s total=1.401264s profile=milp-experiment fingerprint=ab24dfb2bcb099ae8e9142aed8b2fb11 link-mode=uniform-objective-constant replay=ok
+```
+
+Post-run cgroup samples were processor 40.61/40.45MiB with a 256MiB cgroup
+maximum, and forwarder 120.26/119.15MiB with its unchanged 256MiB maximum.
+The two sampled forwarders had zero throttling counters in this short run; this
+does not invalidate the earlier longer/larger forwarder-throttling evidence.
+The current MILP-only worker-node Docker snapshots were 999.2MiB and 1.077GiB
+(control plane 769.1MiB). These are current small-topology snapshots, not a
+same-scale RSS comparison with the 12x3x6 result.
+
+Focused rollout/resource tests plus all MILP Phase 0--6/parity tests passed
+(170), and 32 unchanged Exact runtime/latency/forwarder tests passed. Python
+compilation, import-safety/no-global-RNG/no-file-side-effect coverage,
+`git diff --check`, frozen IBG/IBG_Hybrid, no MILP Markdown, and no Hybrid
+algorithm import checks pass. No MILP planning-latency, solver, route,
+utility/SLA, jitter, replay, diagnostic, Exact, or Hybrid behavior changed.
+
+### MILP existing-replica batching bug corrected
+
+Updated: 2026-08-03.
+
+Code review found that the initial batching implementation applied the first
+batch target even when MILP StatefulSets already existed. Thus an existing
+three-replica deployment would have become two before growing to a requested
+six. This was corrected without changing resources or solver/runtime policy:
+the launcher now reads all existing per-stage desired counts, requires them to
+be complete and consistent, and uses that count as the scale-up starting
+point. The tested plan for existing three, target six, batch two is exactly
+`3 -> 5 -> 6`; no scale-to-two command is emitted. Fresh deployments retain
+their `2 -> 4 -> 6` behavior. A requested lower target still scales down by
+design.
+
+Live follow-up ran a completed 6x3x3 slot after the intentional 16-to-3
+scale-down, then requested 10x3x5 with the default batch. It printed
+`preserving 3 existing replicas/stage`, waited at three, and scaled only to
+five; all three StatefulSets finished 5/5 Ready. However, applying the changed
+5-replica profile also changed the `milp.profile-hash` Pod-template annotation,
+which rolled the existing three Pods before adding ordinals 3 and 4. Thus the
+fix preserves existing replica *count*, not existing Pod-process identity.
+The 10x3x5 controller completed proven-optimal with social objective 1601.744,
+zero gap, 10 routes, 20 observations, 10 pairs, zero SLA violations, solve
+time 1.805920s, traffic 0.132834s, total 2.955081s, and replay success. A
+future non-disruptive scale-up requires separate profile-distribution work;
+it is not implemented by this batching correction.
+
+### MILP non-disruptive append-only scale-up repaired
+
+Updated: 2026-08-03.
+
+The profile-refresh cause was the global `milp.profile-hash` annotation in all
+MILP StatefulSet Pod templates. Appending profile entries for replica 4/5
+changed that hash and Kubernetes correctly rolled every existing Pod. The
+launcher now removes that global trigger and validates existing runtime-profile
+identity values before ConfigMap application: unchanged existing identities may
+remain running while new profile entries are appended; changed existing
+identities fail explicitly and require a deliberate refresh/redeployment.
+
+The change required a one-time 10x3x5 migration run to remove the old template
+annotation; that expected run rolled the existing five Pods per stage. The
+post-migration 10x3x6 validation used `--skip-build`, printed
+`preserving 5 existing replicas/stage`, waited at five, then created only
+ordinal 5 per stage. The recorded ordinal 0--4 Pod UIDs in every stage were
+identical before and after; the three new ordinal-5 Pods had new UIDs. All
+three StatefulSets ended desired=6/ready=6 with zero container restarts and no
+`milp.profile-hash` annotation. The controller completed proven-optimal:
+
+```text
+MILP-Kernel scale=10x3x6 slot=1 cutoff=60s status=proven-optimal optimal=1 incumbent=1632.138 bound=1632.138 gap=0 routes=10 observations=20 pairs=10 expected-stage=1652.138 planning=20.000 social=1632.138 realized=1625.433 physical-ms=354.567 measured-pair-ms=132.740 raw-ms=487.307 reference=1492.693 sla=0 jain=0.999973 solve=2.468263s traffic=0.129483s total=3.628297s profile=milp-experiment fingerprint=eeaa0dd4a03ba4f0105090ef589c698c link-mode=uniform-objective-constant replay=ok
+```
+
+Focused Phase 5 tests cover hash removal, append-only existing-profile
+validation, explicit profile-drift rejection, and existing-Pod batch targets.
+The full MILP Phase 0--6/parity suite passed 177 tests and 32 unchanged Exact
+runtime/latency/forwarder tests passed before live validation. No image build,
+IBG/Hybrid file, solver/outcome policy, worker, or resource change was needed
+for this repair.

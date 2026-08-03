@@ -1,0 +1,27 @@
+FROM mcr.microsoft.com/azurelinux/base/python:3.12
+
+USER root
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/IBG
+
+WORKDIR /app
+
+# Replica processors, public forwarders, and the flow generator never solve
+# a MILP.  Keep solver-only SciPy/HiGHS and pandas out of their image.
+COPY deploy/milp-kubernetes/requirements-service.txt ./
+RUN python3 -m pip install --no-cache-dir -r requirements-service.txt
+
+COPY IBG ./IBG
+COPY MILP ./MILP
+COPY testbed ./testbed
+# Avoid importing the controller-facing MILP public facade when Python starts
+# an in-cluster service module; service modules import only their own contracts.
+COPY deploy/milp-kubernetes/service_package_init.py /app/MILP/__init__.py
+
+USER 10001:10001
+
+EXPOSE 8080 8081
+
+CMD ["python3", "-m", "uvicorn", "MILP.kernel_flow_generator:app", "--host", "0.0.0.0", "--port", "8080"]

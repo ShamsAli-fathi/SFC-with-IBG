@@ -6,7 +6,6 @@ they live here so future MILP rollout/resource work cannot change IBG-Exact.
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 from .kernel_contracts import MILP_TWO_HOP_ROUTE_CONTRACT_VERSION
@@ -21,6 +20,17 @@ MILP_FORWARDER_APP = "MILP.kernel_route_forwarder:app"
 MILP_PROCESSOR_APP = "testbed.cnf_service:app"
 MILP_PROFILE_CONFIG_MAP = "milp-replica-profiles"
 MILP_PROFILE_PATH = "/etc/milp/profiles.json"
+
+# These are deliberately MILP-owned deployment values.  They describe one
+# replica Pod regardless of the requested number of replicas per stage.
+MILP_PROCESSOR_RESOURCES = {
+    "requests": {"cpu": "50m", "memory": "64Mi"},
+    "limits": {"cpu": "1", "memory": "256Mi"},
+}
+MILP_FORWARDER_RESOURCES = {
+    "requests": {"cpu": "25m", "memory": "128Mi"},
+    "limits": {"cpu": "1", "memory": "256Mi"},
+}
 
 
 def _labels(stage: int) -> dict[str, str]:
@@ -57,7 +67,6 @@ def _stage_stateful_set(
     replicas: int,
     namespace: str,
     image: str,
-    profile_hash: str,
 ) -> dict[str, object]:
     labels = _labels(stage)
     return {
@@ -82,7 +91,6 @@ def _stage_stateful_set(
                 "metadata": {
                     "labels": labels,
                     "annotations": {
-                        "milp.profile-hash": profile_hash,
                         "milp.route-contract-version": MILP_TWO_HOP_ROUTE_CONTRACT_VERSION,
                     },
                 },
@@ -137,10 +145,7 @@ def _stage_stateful_set(
                                 "initialDelaySeconds": 10,
                                 "periodSeconds": 10,
                             },
-                            "resources": {
-                                "requests": {"cpu": "50m", "memory": "128Mi"},
-                                "limits": {"cpu": "1", "memory": "768Mi"},
-                            },
+                            "resources": MILP_PROCESSOR_RESOURCES,
                         },
                         {
                             "name": "forwarder",
@@ -171,10 +176,7 @@ def _stage_stateful_set(
                                 "initialDelaySeconds": 10,
                                 "periodSeconds": 10,
                             },
-                            "resources": {
-                                "requests": {"cpu": "25m", "memory": "128Mi"},
-                                "limits": {"cpu": "1", "memory": "256Mi"},
-                            },
+                            "resources": MILP_FORWARDER_RESOURCES,
                         },
                     ],
                     "volumes": [
@@ -198,7 +200,6 @@ def build_milp_kernel_runtime_resources(
 
     profile_document = milp_runtime_profiles_document(profiles)
     profile_json = json.dumps(profile_document, sort_keys=True, separators=(",", ":"))
-    profile_hash = hashlib.sha256(profile_json.encode("utf-8")).hexdigest()[:16]
     items: list[dict[str, object]] = [
         {
             "apiVersion": "v1",
@@ -215,7 +216,6 @@ def build_milp_kernel_runtime_resources(
                 num_of_replicas,
                 namespace,
                 image,
-                profile_hash,
             )
         )
     return {"apiVersion": "v1", "kind": "List", "items": items}

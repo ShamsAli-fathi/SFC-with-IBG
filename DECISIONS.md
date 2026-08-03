@@ -984,3 +984,83 @@ Updated: 2026-08-03.
 - Retain only algorithm-neutral shared processor/HTTP and frozen Exact
   latency/outcome components where their semantics apply; sharing those does
   not make the deployment settings shared.
+
+### MILP lean service-image decision
+
+Updated: 2026-08-03.
+
+- Split MILP controller and long-running service images without changing
+  worker counts, requests/limits, processor behavior, route execution, or
+  solver semantics. Only the controller may install/use SciPy/HiGHS and
+  pandas.
+- Do not infer a Pod RSS reduction merely from a smaller image. Measure RSS,
+  CPU, Ready time, and rollout behavior at the target replica scale before
+  changing resource specifications.
+
+- Accept the first measured lean-image result at 12x3x6: the forwarder cgroup
+  sample fell from 175.5MiB to 119.7MiB on average without changing its two
+  workers; the processor remained about 40.6MiB. Keep requests/limits and
+  worker counts unchanged until a separate controlled scaling decision.
+
+### MILP processor right-sizing and bounded rollout decision
+
+Updated: 2026-08-03.
+
+- Apply the first MILP-only resource adjustment only to the private processor:
+  retain 50m CPU request and one-CPU limit, lower memory request from 128Mi to
+  64Mi, and lower memory limit from 768Mi to 256Mi. The sampled 40.6MiB
+  processor footprint supports the cap for the tested service image, but a
+  memory limit is a safety boundary rather than a mechanism that forces normal
+  RSS lower.
+- Preserve the public forwarder exactly: two Uvicorn workers, 25m CPU/128Mi
+  request, and 1 CPU/256Mi limit. Its observed approximately 120MiB footprint
+  and prior CPU-throttling evidence do not authorize a reduction.
+- Accept a MILP-launcher-only bounded rollout control. It requires a positive
+  `--rollout-batch-size`, defaults to two replicas per stage, applies the same
+  target to every requested stage, and waits for all stages before a later
+  batch. It must always finish at the user-requested per-stage replica count.
+- This is solely an isolated MILP deployment/scheduling change. It does not
+  change any Exact/Hybrid workload, MILP model/policy, physical or observation
+  jitter, latency/utility/SLA behavior, traffic contract, or reporting.
+- Accept the fresh 6x3x3 `2 -> 3` live gate: all nine replica Pods became
+  Ready with zero restarts and the controller completed one valid MILP slot.
+  Treat this as a small rollout/resource validation, not as a 12x3x6
+  before/after or a larger-capacity guarantee.
+
+### MILP existing-replica batching correction
+
+Updated: 2026-08-03.
+
+- Reject the original behavior that scaled every existing MILP StatefulSet
+  down to the first batch before a scale-up. Batch size controls only newly
+  required replicas when a consistent existing deployment is present.
+- For example, default batch size two and existing three replicas/stage with
+  target six must preserve the existing desired count and use `3 -> 5 -> 6`.
+  A fresh topology still uses `2 -> 4 -> 6`; a lower user-requested target
+  remains an intentional scale-down.
+- Require all requested stages to exist with the same desired count before
+  preserving an existing rollout. A partial or inconsistent MILP StatefulSet
+  set fails explicitly, avoiding an unsafe implicit reconciliation.
+- Do not claim this count correction preserves existing Pod processes. The
+  current changed profile ConfigMap hash deliberately updates the Pod template
+  and rolls existing Pods when dimensions/profile data change. A future
+  non-disruptive profile-distribution design is separate from batching.
+
+### MILP append-only profile scale-up decision
+
+Updated: 2026-08-03.
+
+- Remove the global runtime-profile hash from the MILP StatefulSet Pod
+  template. It caused an unnecessary rolling replacement of every existing
+  Pod whenever a new replica profile was appended.
+- Permit non-disruptive scale-up only when the profiles of existing
+  `(stage, replica)` identities are exactly unchanged. The launcher compares
+  the live ConfigMap with the planned runtime profiles before applying it.
+- Reject an attempted change to an existing identity's profile explicitly.
+  An existing processor reads its profile at process startup, so silently
+  changing the ConfigMap without a refresh would make controller and processor
+  behavior disagree.
+- Accept the one-time legacy-hash migration plus the live 5-to-6 gate: every
+  ordinal 0--4 Pod UID remained unchanged; only ordinal 5 was created per
+  stage. This preserves active Pod processes during append-only scale-up and
+  does not alter workers, resources, traffic, MILP policy, or outcomes.

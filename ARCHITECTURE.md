@@ -1497,3 +1497,101 @@ an ownership separation, not a resource tuning change. Future MILP rollout or
 resource changes therefore cannot alter IBG deployment behavior. The shared
 processor service and frozen Exact latency/outcome helpers remain deliberate
 algorithm-neutral runtime dependencies.
+
+### MILP controller/service image split
+
+Updated: 2026-08-03.
+
+The isolated MILP deployment now uses two images. Replica Pods and the flow
+generator use `milp-testbed:kernel-service-phase5`, which contains only the
+HTTP service dependencies (NumPy, FastAPI, HTTPX, and Uvicorn) and a minimal
+service-package initializer. The controller Job uses
+`milp-testbed:kernel-controller-phase5`, which retains pandas and the
+SciPy/HiGHS solver backend. The route contract, processor, two forwarder
+workers, one processor worker, and Pod resource specifications are unchanged.
+This removes solver-only packages from every long-running service Pod; image
+size and actual resident-memory effects are measured separately.
+
+In a fresh MILP-only 12-flow/3-stage/6-replica rollout, all 18 replica Pods
+became Ready with zero restarts. Matched post-start cgroup samples show the
+two-worker forwarder at a mean 119.7MiB, versus 175.5MiB for the former broad
+image (a 55.8MiB, 31.8% reduction per forwarder). The single-worker processor
+remained about 40.6MiB. This is a service-image footprint result only; it does
+not alter worker count, resource declarations, route behavior, or the MILP
+algorithm.
+
+### MILP bounded replica-rollout and processor memory boundary
+
+Updated: 2026-08-03.
+
+The MILP-owned replica manifest now declares the private processor at a fixed
+50m CPU/64Mi memory request and 1 CPU/256Mi memory limit. These are per-Pod
+declarations; they do not vary with the requested replica count. Its one
+worker, image, command, port 8081, probes, environment, and processor service
+remain unchanged. The two-worker public forwarder remains fixed at its prior
+25m CPU/128Mi memory request and 1 CPU/256Mi memory limit.
+
+`scripts/run_milp_kernel.py` accepts a positive
+`--rollout-batch-size REPLICAS` option (default `2`). It first applies each
+MILP StatefulSet at the first bounded target, then scales every requested
+stage to the next deterministic target and waits for every stage to be Ready
+before advancing. A target of six with the default produces `2 -> 4 -> 6`; a
+target of three produces `2 -> 3`. The final StatefulSet desired count remains
+the requested `--replica` value. This affects only deployment timing and
+resource declarations: profile construction, centralized MILP placement,
+controller invocation, cutoff, route execution, and outcome semantics are
+unchanged.
+
+The fresh MILP-only 6-flow/3-stage/3-replica live validation completed the
+`2 -> 3` sequence. All nine two-container replica Pods became Ready with zero
+restarts, used the lean service image, and ended at three desired/Ready
+replicas per stage before the controller started. Direct post-run cgroup
+samples measured processor use at 40.5--40.6MiB under the 256MiB cap and
+forwarder use at 119.2--120.3MiB under its unchanged 256MiB cap. The earlier
+12x3x6 lean-image sample remains the only broad-image before/after comparison;
+the new 6x3x3 measurement is a smaller-scale resource-limit validation, not a
+node-level or same-scale RSS reduction claim.
+
+### MILP existing-replica rollout correction
+
+Updated: 2026-08-03.
+
+The initial batching implementation incorrectly reapplied the first batch
+target on every launch. That would have scaled an existing three-replica stage
+down to two before a requested scale-up to six. The launcher now reads the
+consistent existing desired count from all MILP StatefulSets before applying
+the replica manifest. A scale-up preserves that desired count and batches only
+the missing replicas: with batch size two, `3 -> 6` becomes `3 -> 5 -> 6`. A
+fresh deployment still begins at `2 -> 4 -> 6`; an explicit lower requested
+target still intentionally scales down. Inconsistent or partial existing
+StatefulSet sets fail explicitly rather than guessing their state.
+
+This corrects replica-count behavior only. The current profile ConfigMap hash
+is part of the StatefulSet Pod template, so changing dimensions/profile data
+also triggers a rolling refresh of already-existing Pods. Live 3-to-5 evidence
+therefore confirms no scale-down to two and only two newly required ordinal
+replicas, but it does not claim that the original three Pod processes remain
+running unchanged. Avoiding that profile-driven refresh is a separate runtime
+profile/rollout design task.
+
+### MILP append-only runtime-profile rollout repair
+
+Updated: 2026-08-03.
+
+That profile-refresh task is now complete for append-only replica scale-up.
+The global `milp.profile-hash` was removed from the StatefulSet Pod template:
+adding entries for new replica ordinals no longer changes the template and
+therefore does not roll existing Pods. Before applying a changed runtime
+ConfigMap, the launcher compares the profiles of every existing
+`(stage, replica)` identity with the planned values. It permits unchanged
+existing identities plus new identities, but fails explicitly if a running
+identity's state/runtime profile would change. That avoids silently using a
+stale processor profile without reintroducing an all-Pod rollout.
+
+Removing the legacy annotation required one migration rollout of the existing
+five-replica topology. The subsequent live 10-flow 5-to-6-per-stage scale-up
+kept every recorded ordinal 0--4 Pod UID unchanged, created only ordinal 5 in
+each stage, reached 6/6 Ready for all three StatefulSets, and completed a
+valid controller slot. A future deliberate profile change for an existing
+replica remains an explicit refresh/redeployment operation, not an implicit
+side effect of scale-up.

@@ -1459,3 +1459,45 @@ The deployment-ownership prerequisite is complete: MILP now has its own
 resource/profile/discovery boundary, with the existing footprint preserved.
 Next, measure only MILP at progressively larger replica counts and evaluate
 MILP-only rollout/resource changes without altering IBG.
+
+The first MILP-only footprint change is complete: use the split service and
+controller images in the next controlled rollout, then compare image loading,
+Ready time, measured service RSS/CPU, and node pressure against the prior
+single-image baseline. Keep worker counts and resource specifications fixed
+for that comparison.
+
+The 12x3x6 service-image gate passed: 18 Pods became Ready with zero restarts,
+and the sampled forwarder cgroup footprint fell by 31.8% while the processor
+footprint remained stable. Next scaling work may test a larger MILP-only
+replica count, still with the same workers and resource declarations.
+
+### MILP rollout/resource optimization: first bounded change complete
+
+Updated: 2026-08-03.
+
+The first MILP-only rollout optimization is complete. The private processor
+now requests 64Mi and is capped at 256Mi while retaining its prior CPU and one
+worker; the public forwarder remains unchanged. The launcher now supports a
+positive `--rollout-batch-size` with default two replicas per stage and waits
+for each all-stage batch before scaling further.
+
+The fresh 6-flow/3-stage/3-replica validation used batch size two, completed
+the `2 -> 3` sequence, reached nine Ready zero-restart replica Pods, then
+completed one solver/traffic slot. The next rollout-scaling work may test a
+larger MILP-only target with these fixed values and collect same-shape rollout
+and cgroup evidence. It must not re-open the paused planning-latency profile
+work or alter worker counts, forwarder resources, or MILP outcome semantics.
+
+The batching control was then corrected before further scaling: an existing
+deployment's desired count is now the starting point for scale-up, rather than
+being reset to the first batch. Live 3-to-5 validation confirmed that count
+behavior but also showed a profile-hash-driven rolling refresh of existing
+Pods. The next larger MILP-only gate should distinguish count preservation from
+Pod-process preservation before making any additional resource or topology
+decision.
+
+The profile-hash cause is now repaired. The live 10x3x5-to-10x3x6 gate proved
+that append-only profile expansion preserves the existing 15 replica-Pod UIDs
+and creates only the three new ordinal-5 Pods. Future rollout-scale gates may
+use this non-disruptive behavior, but a deliberate state/profile change of an
+existing replica remains a separately explicit refresh operation.

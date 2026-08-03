@@ -40,7 +40,11 @@ from MILP.kernel_controller import execute_milp_kernel_controller
 from MILP.kubernetes_api import MILPKubernetesApi
 from MILP.kernel_flow_generator import MILPKernelFlowGenerator
 from MILP.kernel_profiles import build_kernel_problem_input, planning_link_costs_from_document
-from MILP.kernel_resources import build_milp_kernel_runtime_resources
+from MILP.kernel_resources import (
+    MILP_FORWARDER_RESOURCES,
+    MILP_PROCESSOR_RESOURCES,
+    build_milp_kernel_runtime_resources,
+)
 from MILP.kernel_route_forwarder import MILPKernelRouteForwarder
 from MILP.kernel_runner import format_milp_kernel_metrics, run_milp_kernel_slot
 from MILP.model import exact_known_state_expected_utility
@@ -55,7 +59,10 @@ from MILP.phase0_contract import (
     reconstruct_social_welfare,
     required_directed_pairs,
 )
-from MILP.runtime_profiles import MILPRuntimeReplicaProfile
+from MILP.runtime_profiles import (
+    MILPRuntimeReplicaProfile,
+    milp_runtime_profiles_document,
+)
 from testbed.route_forwarder import (
     ForwardHop,
     ForwarderConfig,
@@ -875,7 +882,7 @@ def test_isolated_runtime_owns_milp_resource_shape_and_forwarder():
         num_of_stages=3,
         num_of_replicas=2,
         namespace="milp-testbed",
-        image="milp-testbed:kernel-phase5",
+        image="milp-testbed:kernel-service-phase5",
     )
     statefulsets = [
         item for item in resources["items"] if item["kind"] == "StatefulSet"
@@ -887,15 +894,17 @@ def test_isolated_runtime_owns_milp_resource_shape_and_forwarder():
     assert statefulsets[0]["spec"]["template"]["metadata"]["annotations"][
         "milp.route-contract-version"
     ] == MILP_TWO_HOP_ROUTE_CONTRACT_VERSION
+    assert "milp.profile-hash" not in statefulsets[0]["spec"]["template"]["metadata"]["annotations"]
     pod = statefulsets[0]["spec"]["template"]["spec"]
     processor, forwarder = pod["containers"]
     assert processor["command"][-1] == "8081"
     assert {item["name"]: item.get("value") for item in processor["env"]}["REPLICA_PROFILES_PATH"] == "/etc/milp/profiles.json"
     assert "--workers" not in processor["command"]
     assert processor["resources"] == {
-        "requests": {"cpu": "50m", "memory": "128Mi"},
-        "limits": {"cpu": "1", "memory": "768Mi"},
+        "requests": {"cpu": "50m", "memory": "64Mi"},
+        "limits": {"cpu": "1", "memory": "256Mi"},
     }
+    assert processor["resources"] == MILP_PROCESSOR_RESOURCES
     assert forwarder["command"][-4:] == [
         "--workers",
         "2",
@@ -908,6 +917,7 @@ def test_isolated_runtime_owns_milp_resource_shape_and_forwarder():
         "requests": {"cpu": "25m", "memory": "128Mi"},
         "limits": {"cpu": "1", "memory": "256Mi"},
     }
+    assert forwarder["resources"] == MILP_FORWARDER_RESOURCES
     assert {item["name"]: item.get("value") for item in forwarder["env"]}[
         "FORWARDER_KEEPALIVE_SECONDS"
     ] == "30"
@@ -941,6 +951,8 @@ def test_milp_kernel_launcher_keeps_runtime_dimensions_cutoff_and_verbose_explic
             "12.5",
             "--planning-link-ms",
             "2.75",
+            "--rollout-batch-size",
+            "3",
             "--verbose",
         ]
     )
@@ -959,7 +971,7 @@ def test_milp_kernel_launcher_keeps_runtime_dimensions_cutoff_and_verbose_explic
         "1",
         "--verbose",
     ]
-    assert controller["image"] == "milp-testbed:kernel-phase5"
+    assert controller["image"] == "milp-testbed:kernel-controller-phase5"
     assert job["metadata"]["namespace"] == "milp-testbed"
     preflight = module._preflight_lines(arguments)
     assert preflight[:3] == (
@@ -968,3 +980,239 @@ def test_milp_kernel_launcher_keeps_runtime_dimensions_cutoff_and_verbose_explic
         "solver cutoff=12.5s planning-link=2.75ms slot=1",
     )
     assert "capacity notice" in preflight[-1]
+    assert arguments.rollout_batch_size == 3
+    default_arguments = module.build_parser().parse_args(
+        ["--cutoff", "5", "--planning-link-ms", "2"]
+    )
+    assert default_arguments.rollout_batch_size == 2
+
+
+@pytest.mark.parametrize(
+    ("replicas", "batch_size", "expected"),
+    [
+        (1, 2, (1,)),
+        (2, 2, (2,)),
+        (3, 2, (2, 3)),
+        (6, 2, (2, 4, 6)),
+        (10, 2, (2, 4, 6, 8, 10)),
+        (7, 3, (3, 6, 7)),
+    ],
+)
+def test_milp_kernel_rollout_batch_targets_are_bounded_and_deterministic(
+    replicas, batch_size, expected
+):
+    path = ROOT / "scripts/run_milp_kernel.py"
+    spec = importlib.util.spec_from_file_location("run_milp_kernel_batches", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.rollout_batch_targets(replicas, batch_size) == expected
+
+
+@pytest.mark.parametrize(
+    ("existing", "target", "batch_size", "expected"),
+    [
+        (3, 6, 2, (3, 5, 6)),
+        (2, 6, 2, (2, 4, 6)),
+        (6, 6, 2, (6,)),
+        (6, 3, 2, (3,)),
+        (0, 6, 2, (2, 4, 6)),
+    ],
+)
+def test_milp_kernel_rollout_preserves_existing_replicas_on_scale_up(
+    existing, target, batch_size, expected
+):
+    path = ROOT / "scripts/run_milp_kernel.py"
+    spec = importlib.util.spec_from_file_location("run_milp_kernel_existing_batches", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.rollout_batch_targets(target, batch_size, existing) == expected
+
+
+@pytest.mark.parametrize("batch_size", ["0", "-1", "not-an-integer"])
+def test_milp_kernel_launcher_rejects_invalid_rollout_batch_sizes(batch_size):
+    path = ROOT / "scripts/run_milp_kernel.py"
+    spec = importlib.util.spec_from_file_location("run_milp_kernel_invalid_batches", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with pytest.raises(SystemExit):
+        module.build_parser().parse_args(
+            [
+                "--cutoff",
+                "5",
+                "--planning-link-ms",
+                "2",
+                "--rollout-batch-size",
+                batch_size,
+            ]
+        )
+
+
+def test_milp_kernel_launcher_scales_and_waits_every_batch_before_the_next(monkeypatch):
+    path = ROOT / "scripts/run_milp_kernel.py"
+    spec = importlib.util.spec_from_file_location("run_milp_kernel_rollout", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    args = module.build_parser().parse_args(
+        [
+            "--flow",
+            "1",
+            "--stage",
+            "3",
+            "--replica",
+            "3",
+            "--cutoff",
+            "5",
+            "--planning-link-ms",
+            "2",
+            "--rollout-batch-size",
+            "2",
+        ]
+    )
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append((command, _kwargs))
+        if command[3:5] == ["get", "statefulset/stage-1"]:
+            return SimpleNamespace(stdout="")
+        if command[3:5] == ["get", "statefulset/stage-2"]:
+            return SimpleNamespace(stdout="")
+        if command[3:5] == ["get", "statefulset/stage-3"]:
+            return SimpleNamespace(stdout="")
+        return SimpleNamespace(stdout="NAME READY DESIRED\n")
+
+    monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module, "_announce", lambda _message: None)
+    profile, profiles = module.build_launcher_experiment_profile(args)
+    module._apply_long_running("kind-ibg", args, profile, profiles)
+
+    commands = [command for command, _kwargs in calls]
+    resource_manifest = next(
+        json.loads(kwargs["input_text"])
+        for command, kwargs in calls
+        if command[-1] == "-" and '"kind": "List"' in kwargs.get("input_text", "")
+    )
+    assert {
+        item["spec"]["replicas"]
+        for item in resource_manifest["items"]
+        if item["kind"] == "StatefulSet"
+    } == {2}
+    scale_commands = [command for command in commands if "scale" in command]
+    assert scale_commands == [
+        [
+            "kubectl", "--context", "kind-ibg", "scale", "statefulset/stage-1",
+            "--namespace", "milp-testbed", "--replicas=3",
+        ],
+        [
+            "kubectl", "--context", "kind-ibg", "scale", "statefulset/stage-2",
+            "--namespace", "milp-testbed", "--replicas=3",
+        ],
+        [
+            "kubectl", "--context", "kind-ibg", "scale", "statefulset/stage-3",
+            "--namespace", "milp-testbed", "--replicas=3",
+        ],
+    ]
+    wait_commands = [command for command in commands if "rollout" in command]
+    assert [command[5] for command in wait_commands] == [
+        "statefulset/stage-1",
+        "statefulset/stage-2",
+        "statefulset/stage-3",
+        "statefulset/stage-1",
+        "statefulset/stage-2",
+        "statefulset/stage-3",
+        "deployment/milp-flow-generator",
+    ]
+    scale_indices = [index for index, command in enumerate(commands) if "scale" in command]
+    wait_indices = [index for index, command in enumerate(commands) if "rollout" in command]
+    assert scale_indices[0] > wait_indices[2]
+    assert scale_indices[-1] < wait_indices[3]
+
+
+def test_milp_kernel_launcher_adds_only_missing_replicas_to_an_existing_scale(monkeypatch):
+    path = ROOT / "scripts/run_milp_kernel.py"
+    spec = importlib.util.spec_from_file_location("run_milp_kernel_existing_rollout", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    args = module.build_parser().parse_args(
+        [
+            "--flow", "1", "--stage", "3", "--replica", "6", "--cutoff", "5",
+            "--planning-link-ms", "2", "--rollout-batch-size", "2",
+        ]
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[3] == "get" and command[4].startswith("statefulset/stage-"):
+            return SimpleNamespace(stdout="3")
+        if command[3] == "get" and command[4] == "configmap/milp-replica-profiles":
+            return SimpleNamespace(stdout=json.dumps(milp_runtime_profiles_document(profiles)))
+        return SimpleNamespace(stdout="NAME READY DESIRED\n")
+
+    monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module, "_announce", lambda _message: None)
+    profile, profiles = module.build_launcher_experiment_profile(args)
+    module._apply_long_running("kind-ibg", args, profile, profiles)
+
+    resource_manifest = next(
+        json.loads(kwargs["input_text"])
+        for command, kwargs in calls
+        if command[-1] == "-" and '"kind": "List"' in kwargs.get("input_text", "")
+    )
+    assert {
+        item["spec"]["replicas"]
+        for item in resource_manifest["items"]
+        if item["kind"] == "StatefulSet"
+    } == {3}
+    scale_targets = [
+        command[-1]
+        for command, _kwargs in calls
+        if "scale" in command
+    ]
+    assert scale_targets == [
+        "--replicas=5", "--replicas=5", "--replicas=5",
+        "--replicas=6", "--replicas=6", "--replicas=6",
+    ]
+
+
+def test_milp_kernel_launcher_rejects_existing_runtime_profile_drift(monkeypatch):
+    path = ROOT / "scripts/run_milp_kernel.py"
+    spec = importlib.util.spec_from_file_location("run_milp_kernel_profile_drift", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    args = module.build_parser().parse_args(
+        ["--flow", "1", "--stage", "3", "--replica", "4", "--cutoff", "5", "--planning-link-ms", "2"]
+    )
+    experiment_profile, profiles = module.build_launcher_experiment_profile(args)
+    stale_profiles = dict(profiles)
+    stale_profiles[(1, 1)] = profile(state=1)
+
+    def fake_run(command, **_kwargs):
+        if command[3] == "get" and command[4].startswith("statefulset/stage-"):
+            return SimpleNamespace(stdout="3")
+        if command[3] == "get" and command[4] == "configmap/milp-replica-profiles":
+            return SimpleNamespace(
+                stdout=json.dumps(milp_runtime_profiles_document(stale_profiles))
+            )
+        return SimpleNamespace(stdout="NAME READY DESIRED\n")
+
+    monkeypatch.setattr(module, "_run", fake_run)
+    with pytest.raises(RuntimeError, match="would change the runtime profile"):
+        module._apply_long_running("kind-ibg", args, experiment_profile, profiles)
+
+
+def test_milp_service_image_excludes_controller_solver_dependencies():
+    service = (ROOT / "deploy/milp-kubernetes/Dockerfile.service").read_text(
+        encoding="utf-8"
+    )
+    controller = (ROOT / "deploy/milp-kubernetes/Dockerfile.controller").read_text(
+        encoding="utf-8"
+    )
+    requirements = (
+        ROOT / "deploy/milp-kubernetes/requirements-service.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "requirements-runtime.txt" not in service
+    assert "scipy" not in requirements.lower()
+    assert "pandas" not in requirements.lower()
+    assert "scipy==1.18.0" in controller
+    assert "service_package_init.py" in service

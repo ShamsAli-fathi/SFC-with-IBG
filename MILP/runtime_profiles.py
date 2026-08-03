@@ -40,7 +40,18 @@ class MILPRuntimeReplicaProfile:
 def load_milp_runtime_profiles(
     path: str | Path,
 ) -> dict[tuple[int, int], MILPRuntimeReplicaProfile]:
-    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    return milp_runtime_profiles_from_document(
+        json.loads(Path(path).read_text(encoding="utf-8"))
+    )
+
+
+def milp_runtime_profiles_from_document(
+    document: object,
+) -> dict[tuple[int, int], MILPRuntimeReplicaProfile]:
+    """Parse the JSON-safe runtime-profile document used by replica Pods."""
+
+    if not isinstance(document, dict):
+        raise ValueError("profile document must be an object")
     stages = document.get("stages")
     if not isinstance(stages, dict):
         raise ValueError("profile document must contain a stages mapping")
