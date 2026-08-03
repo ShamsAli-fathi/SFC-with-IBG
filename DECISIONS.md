@@ -953,3 +953,34 @@ Updated: 2026-08-01.
 - Do not alter the frozen state/load physical latency, jitter, utility, SLA,
   cutoff, central MILP formulation, or outcome separation while making this
   input-profile correction.
+
+### MILP replica-rollout scalability investigation
+
+Updated: 2026-08-03.
+
+- Pause the pending latency-aware planning-profile implementation until the
+  user resumes it.
+- Prioritize a scoped investigation of MILP Kernel replica rollout scalability:
+  scheduler fit, node capacity, Pod resources, readiness, startup failures,
+  and actual resource consumption.
+- Treat current per-Pod resources as a baseline, not a proven scaling optimum:
+  processor 50m CPU/128Mi request and 1 CPU/768Mi limit; forwarder 25m
+  CPU/128Mi request and 1 CPU/256Mi limit.
+- Do not change resources merely to force a desired replica count. Any change
+  requires measured evidence and rollout/readiness regression checks. Do not
+  change MILP mathematics, latency, utility, SLA, learning, or Exact/Hybrid.
+
+### MILP deployment ownership separation
+
+Updated: 2026-08-03.
+
+- Separate MILP's deployment-control surface from IBG before any scalability
+  tuning: resource manifests, labels, ConfigMap/path, deterministic runtime
+  profile source, and Kubernetes Ready discovery are MILP-owned.
+- Preserve the current processor/forwarder worker counts and resource values
+  during this separation. A later MILP-only resource or rollout change must
+  not mutate `testbed/kubernetes_resources.py`, the IBG runtime profile, or
+  IBG discovery labels.
+- Retain only algorithm-neutral shared processor/HTTP and frozen Exact
+  latency/outcome components where their semantics apply; sharing those does
+  not make the deployment settings shared.

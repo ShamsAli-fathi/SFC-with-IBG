@@ -8,8 +8,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from testbed.profiles import expand_profiles, load_profiles
-
 from .cli import _positive_finite_cutoff, _positive_integer, _stage_count
 from .contracts import MILPConfiguration
 from .experiment_profile import (
@@ -18,12 +16,16 @@ from .experiment_profile import (
 )
 from .phase0_contract import DEFAULT_MILP_DIMENSIONS
 from .runner import run_milp_slot
+from .runtime_profiles import (
+    expand_milp_runtime_profiles,
+    load_milp_runtime_profiles,
+)
 from .slot_contracts import MILPSlotInput, MILPSlotResult
 from .solver import solve_coupled_milp, solve_scipy_highs
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_RUNTIME_PROFILE_PATH = ROOT / "deploy/kubernetes/profiles.json"
+DEFAULT_RUNTIME_PROFILE_PATH = ROOT / "deploy/milp-kubernetes/profiles.json"
 
 
 @dataclass(frozen=True)
@@ -93,8 +95,8 @@ def build_pure_experiment_profile(arguments) -> MILPExperimentProfile:
         replicas_per_stage=arguments.replica,
         cutoff_seconds=arguments.cutoff,
     )
-    profiles = expand_profiles(
-        load_profiles(DEFAULT_RUNTIME_PROFILE_PATH),
+    profiles = expand_milp_runtime_profiles(
+        load_milp_runtime_profiles(DEFAULT_RUNTIME_PROFILE_PATH),
         arguments.stage,
         arguments.replica,
     )
@@ -103,7 +105,7 @@ def build_pure_experiment_profile(arguments) -> MILPExperimentProfile:
         runtime_profiles=profiles,
         assigned_flow_capacity_per_replica=arguments.assigned_flow_capacity,
         planning_link_document=_planning_document(arguments),
-        source_identity="deploy/kubernetes/profiles.json:state-only-v1",
+        source_identity="deploy/milp-kubernetes/profiles.json:state-only-v1",
     )
 
 

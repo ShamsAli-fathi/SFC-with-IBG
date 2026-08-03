@@ -1465,3 +1465,35 @@ placement. Post-placement measured Kernel pair latency remains separate
 outcome telemetry: it must evaluate the plan and never silently replace its
 planning coefficient. This is a profile/input correction, not a change to the
 MILP formulation, state/load physical latency law, jitter, utility, or SLA.
+
+### MILP Kernel replica-rollout scalability investigation
+
+Updated: 2026-08-03.
+
+The user has paused planning-latency profile work and opened a separate
+infrastructure investigation: determine how the isolated MILP Kernel topology
+can safely roll out more replicas. This concerns Pod/container footprint,
+requests and limits, scheduling, readiness, startup behavior, and cluster
+capacity; it must not change MILP mathematics or outcome policy.
+
+Each replica Pod has a single-worker private processor and two-worker public
+forwarder. Its combined request is 75m CPU and 256Mi memory; combined limit is
+2 CPUs and 1Gi memory. The next work must measure actual rollout/runtime
+resource use before accepting any specification change. More requests can
+improve stability but reduce schedulable replicas; lower requests can pack more
+Pods but risk starvation, failed health checks, or restarts.
+
+### MILP-owned deployment configuration
+
+Updated: 2026-08-03.
+
+MILP no longer projects IBG's Kubernetes resource builder or runtime profile
+file. `MILP/kernel_resources.py`, `MILP/runtime_profiles.py`,
+`MILP/kubernetes_api.py`, and `deploy/milp-kubernetes/profiles.json` now own
+the MILP resource manifest, profile data, labels, ConfigMap/path, and
+Ready-only discovery selector. The initial independent MILP values deliberately
+remain equal to the established two-container/three-worker footprint; this is
+an ownership separation, not a resource tuning change. Future MILP rollout or
+resource changes therefore cannot alter IBG deployment behavior. The shared
+processor service and frozen Exact latency/outcome helpers remain deliberate
+algorithm-neutral runtime dependencies.

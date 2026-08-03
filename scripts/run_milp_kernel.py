@@ -23,7 +23,10 @@ from MILP.experiment_profile import (
     experiment_profile_json,
 )
 from MILP.kernel_resources import build_milp_kernel_runtime_resources
-from testbed.profiles import expand_profiles, load_profiles
+from MILP.runtime_profiles import (
+    expand_milp_runtime_profiles,
+    load_milp_runtime_profiles,
+)
 
 
 IMAGE = "milp-testbed:kernel-phase5"
@@ -83,14 +86,18 @@ def build_launcher_experiment_profile(args):
         replicas_per_stage=args.replica,
         cutoff_seconds=args.cutoff,
     )
-    base_profiles = load_profiles(ROOT / "deploy/kubernetes/profiles.json")
-    runtime_profiles = expand_profiles(base_profiles, args.stage, args.replica)
+    base_profiles = load_milp_runtime_profiles(
+        ROOT / "deploy/milp-kubernetes/profiles.json"
+    )
+    runtime_profiles = expand_milp_runtime_profiles(
+        base_profiles, args.stage, args.replica
+    )
     profile = build_experiment_profile_from_runtime_states(
         configuration,
         runtime_profiles=runtime_profiles,
         assigned_flow_capacity_per_replica=args.assigned_flow_capacity,
         planning_link_document=_planning_link_document(args),
-        source_identity="deploy/kubernetes/profiles.json:state-only-v1",
+        source_identity="deploy/milp-kubernetes/profiles.json:state-only-v1",
     )
     return profile, runtime_profiles
 

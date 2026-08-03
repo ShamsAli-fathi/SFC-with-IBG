@@ -1367,3 +1367,40 @@ pair choice before placement, retain profile/fingerprint provenance, and stay
 strictly separate from the actual post-placement measured-pair outcome. No
 such profile has been implemented yet, and no claim of latency-aware route
 selection should be made for uniform-link runs.
+
+### MILP Kernel rollout-scalability work opened
+
+Updated: 2026-08-03.
+
+The user has paused the planning-latency-profile follow-up and wants to work
+on safely supporting more MILP replicas. No resource or algorithm change is
+authorized yet.
+
+The current replica Pod has two containers: private processor request 50m CPU
+and 128Mi memory (limits 1 CPU and 768Mi); public forwarder request 25m CPU
+and 128Mi memory (limits 1 CPU and 256Mi). A replica Pod therefore requests
+75m CPU/256Mi and can use up to 2 CPUs/1Gi. The next action is to measure node
+and Pod scheduling/resource behavior during controlled rollouts before deciding
+whether resource specifications, topology, or cluster capacity should change.
+
+The persistent kind node containers were configured with Docker restart policy
+`no` and then stopped at the user's request. No Kubernetes resource was
+deleted. A future live investigation must explicitly start `ibg-control-plane`,
+`ibg-worker`, and `ibg-worker2` first.
+
+### MILP deployment ownership separation complete
+
+Updated: 2026-08-03.
+
+MILP now owns its resource manifest, runtime profile file, labels,
+ConfigMap/mount path, and Kubernetes Ready discovery. The baseline resource
+shape and worker counts are unchanged: this prevents future MILP rollout
+changes from modifying IBG, rather than attempting a tuning change now. The
+focused MILP Phase 0--6 and input-parity suite passes (159 tests), compilation
+and `git diff --check` pass, and no IBG/IBG_Hybrid file changed.
+
+An already-running MILP deployment created before this separation uses the old
+IBG-labelled immutable StatefulSet selector. Remove `milp-testbed` before the
+first post-separation MILP deployment, then run once without `--skip-build` to
+build/load the updated isolated MILP image. Later unchanged-image runs may use
+`--skip-build`.

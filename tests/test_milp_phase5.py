@@ -37,6 +37,7 @@ from MILP.kernel_contracts import (
 )
 from MILP.kernel_controller import build_parser as build_kernel_controller_parser
 from MILP.kernel_controller import execute_milp_kernel_controller
+from MILP.kubernetes_api import MILPKubernetesApi
 from MILP.kernel_flow_generator import MILPKernelFlowGenerator
 from MILP.kernel_profiles import build_kernel_problem_input, planning_link_costs_from_document
 from MILP.kernel_resources import build_milp_kernel_runtime_resources
@@ -54,8 +55,7 @@ from MILP.phase0_contract import (
     reconstruct_social_welfare,
     required_directed_pairs,
 )
-from testbed.kubernetes_adapters import KubernetesApi
-from testbed.profiles import ReplicaProfile
+from MILP.runtime_profiles import MILPRuntimeReplicaProfile
 from testbed.route_forwarder import (
     ForwardHop,
     ForwarderConfig,
@@ -69,7 +69,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def profile(state=4, capacity=20, seed=100):
-    return ReplicaProfile(
+    return MILPRuntimeReplicaProfile(
         state=state,
         capacity=capacity,
         delay=25,
@@ -307,7 +307,7 @@ def test_ready_discovery_requires_complete_stable_ordinal_identity_set():
         items = [ready_pod(stage, 1), ready_pod(stage, 0)]
         return Response(200, request=request, json={"items": items})
 
-    api = KubernetesApi(
+    api = MILPKubernetesApi(
         "milp-testbed",
         base_url="http://kubernetes",
         token="token",
@@ -868,7 +868,7 @@ def test_exact_forwarder_still_rejects_noncontiguous_selected_stage():
     asyncio.run(runtime.close())
 
 
-def test_isolated_runtime_reuses_exact_resources_with_milp_forwarder_only():
+def test_isolated_runtime_owns_milp_resource_shape_and_forwarder():
     dimensions = MILPDimensions(flow_count=1, replicas_per_stage=(2, 2, 2))
     resources = build_milp_kernel_runtime_resources(
         profiles_for(dimensions),
@@ -881,9 +881,16 @@ def test_isolated_runtime_reuses_exact_resources_with_milp_forwarder_only():
         item for item in resources["items"] if item["kind"] == "StatefulSet"
     ]
     assert len(statefulsets) == 3
+    config_map = next(item for item in resources["items"] if item["kind"] == "ConfigMap")
+    assert config_map["metadata"]["name"] == "milp-replica-profiles"
+    assert statefulsets[0]["metadata"]["labels"]["app.kubernetes.io/name"] == "milp-replica"
+    assert statefulsets[0]["spec"]["template"]["metadata"]["annotations"][
+        "milp.route-contract-version"
+    ] == MILP_TWO_HOP_ROUTE_CONTRACT_VERSION
     pod = statefulsets[0]["spec"]["template"]["spec"]
     processor, forwarder = pod["containers"]
     assert processor["command"][-1] == "8081"
+    assert {item["name"]: item.get("value") for item in processor["env"]}["REPLICA_PROFILES_PATH"] == "/etc/milp/profiles.json"
     assert "--workers" not in processor["command"]
     assert processor["resources"] == {
         "requests": {"cpu": "50m", "memory": "128Mi"},
@@ -905,6 +912,16 @@ def test_isolated_runtime_reuses_exact_resources_with_milp_forwarder_only():
         "FORWARDER_KEEPALIVE_SECONDS"
     ] == "30"
     assert "initContainers" not in pod
+
+
+def test_milp_resource_and_discovery_boundaries_do_not_import_exact_deployment_helpers():
+    resource_source = (ROOT / "MILP/kernel_resources.py").read_text(encoding="utf-8")
+    discovery_source = (ROOT / "MILP/kubernetes_api.py").read_text(encoding="utf-8")
+    runtime_profile_source = (ROOT / "MILP/runtime_profiles.py").read_text(encoding="utf-8")
+    combined = resource_source + discovery_source + runtime_profile_source
+    assert "testbed.kubernetes_resources" not in combined
+    assert "testbed.kubernetes_adapters" not in combined
+    assert "testbed.profiles" not in combined
 
 
 def test_milp_kernel_launcher_keeps_runtime_dimensions_cutoff_and_verbose_explicit():

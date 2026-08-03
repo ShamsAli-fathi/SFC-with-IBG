@@ -8,8 +8,6 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
-from testbed.profiles import ReplicaProfile
-
 from .cli import _positive_finite_cutoff, _positive_integer, _stage_count
 from .contracts import MILPConfiguration
 from .experiment_profile import MILPExperimentProfile, load_experiment_profile
@@ -20,10 +18,12 @@ from .kernel_adapter import (
     wait_for_milp_flow_generator,
     wait_for_milp_ready_replicas,
 )
+from .kubernetes_api import MILPKubernetesApi
 from .kernel_contracts import MILPKernelSlotInput, MILPKernelSlotResult
 from .kernel_profiles import build_kernel_problem_input
 from .kernel_runner import format_milp_kernel_metrics, run_milp_kernel_slot
 from .phase0_contract import DEFAULT_MILP_DIMENSIONS
+from .runtime_profiles import MILPRuntimeReplicaProfile
 from .replay import replay_milp_trace
 from .solver import solve_coupled_milp, solve_scipy_highs
 from .trace_contracts import build_milp_trace
@@ -94,7 +94,7 @@ def execute_milp_kernel_controller(
     *,
     slot_id: int,
     experiment_profile: MILPExperimentProfile | None = None,
-    profiles: Mapping[tuple[int, int], ReplicaProfile] | None = None,
+    profiles: Mapping[tuple[int, int], MILPRuntimeReplicaProfile] | None = None,
     planning_link_document: object | None = None,
     assigned_flow_capacity_per_replica: int | None = None,
     discovery: MILPKernelDiscovery,
@@ -151,8 +151,6 @@ def execute_milp_kernel_experiment(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    from testbed.kubernetes_adapters import KubernetesApi
-
     arguments = build_parser().parse_args(argv)
     configuration = MILPConfiguration.uniform(
         flow_count=arguments.flow,
@@ -165,7 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError(
             "controller dimensions/cutoff do not match the mounted MILP experiment profile"
         )
-    api = KubernetesApi(arguments.namespace)
+    api = MILPKubernetesApi(arguments.namespace)
     discovery = MILPKubernetesReplicaDiscovery(api, arguments.namespace)
     wait_for_milp_flow_generator(arguments.flow_generator_url)
     endpoints = wait_for_milp_ready_replicas(

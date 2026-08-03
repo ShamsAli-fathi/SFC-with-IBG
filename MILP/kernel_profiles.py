@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import Mapping
 
-from testbed.profiles import ReplicaProfile
-
 from .contracts import MILPConfiguration, MILPProblemInput
 from .experiment_profile import (
     MILPExperimentProfile,
@@ -18,6 +16,7 @@ from .kernel_contracts import (
     MILPKernelReplicaEndpoint,
 )
 from .phase0_contract import MILPContractError, ReplicaKey
+from .runtime_profiles import MILPRuntimeReplicaProfile
 
 
 def planning_link_costs_from_document(
@@ -39,7 +38,7 @@ def build_kernel_problem_input(
     *,
     endpoints: tuple[MILPKernelReplicaEndpoint, ...],
     experiment_profile: MILPExperimentProfile | None = None,
-    profiles: Mapping[tuple[int, int], ReplicaProfile] | None = None,
+    profiles: Mapping[tuple[int, int], MILPRuntimeReplicaProfile] | None = None,
     planning_link_document: object | None = None,
     assigned_flow_capacity_per_replica: int | None = None,
 ) -> MILPProblemInput:

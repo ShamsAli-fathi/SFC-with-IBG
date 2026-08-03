@@ -1443,3 +1443,19 @@ pure and Kernel paths. Demonstrate that it changes pair selection where
 appropriate, preserve its provenance/fingerprint, and retain actual Kernel
 pair latency only as post-placement outcome telemetry. This is a bounded input
 profile correction, not a new formulation/solver/Kubernetes phase.
+
+### Immediate MILP follow-up: Kernel replica-rollout scalability
+
+Status: pending investigation; planning-latency profile work is paused.
+
+Measure the resource and scheduling envelope of the two-container MILP replica
+Pod, identify why larger StatefulSets do or do not become Ready, and determine
+safe resource/topology changes that permit more replicas. Begin with read-only
+node/Pod evidence and controlled small rollouts. Do not change requests,
+limits, worker counts, or topology until the bottleneck is established and a
+specific change is accepted.
+
+The deployment-ownership prerequisite is complete: MILP now has its own
+resource/profile/discovery boundary, with the existing footprint preserved.
+Next, measure only MILP at progressively larger replica counts and evaluate
+MILP-only rollout/resource changes without altering IBG.

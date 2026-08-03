@@ -25,6 +25,7 @@ from .kernel_contracts import (
     MILPKernelSlotInput,
     MILPKernelTrafficResult,
 )
+from .kubernetes_api import milp_pod_is_ready
 from .phase0_contract import MILPContractError, MILPDimensions, ReplicaKey
 
 
@@ -52,16 +53,11 @@ class MILPKubernetesReplicaDiscovery:
         self,
         dimensions: MILPDimensions,
     ) -> tuple[MILPKernelReplicaEndpoint, ...]:
-        # The frozen Exact adapter still uses legacy flat imports.  Load its
-        # readiness predicate only when discovery actually runs so importing
-        # the MILP package remains safe with an ordinary repository PYTHONPATH.
-        from testbed.kubernetes_adapters import _pod_is_ready
-
         discovered: dict[ReplicaKey, MILPKernelReplicaEndpoint] = {}
         for stage in dimensions.stage_ids:
             maximum = dimensions.replicas_per_stage[stage - 1]
             for pod in self.api.list_stage_pods(stage):
-                if not _pod_is_ready(pod):
+                if not milp_pod_is_ready(pod):
                     continue
                 metadata = pod.get("metadata", {})
                 pod_name = metadata.get("name", "")

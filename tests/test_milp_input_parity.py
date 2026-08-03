@@ -20,8 +20,8 @@ from MILP.experiment_profile import (
 from MILP.kernel_contracts import MILPKernelReplicaEndpoint
 from MILP.kernel_profiles import build_kernel_problem_input
 from MILP.phase0_contract import ReplicaKey, required_directed_pairs
+from MILP.runtime_profiles import MILPRuntimeReplicaProfile
 from MILP.solver import solve_coupled_milp
-from testbed.profiles import ReplicaProfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,7 +51,7 @@ def _common_argv(*, flow=2, stage=3, replica=2, cutoff=5, planning=2):
 
 
 def _runtime_profile(state, capacity):
-    return ReplicaProfile(
+    return MILPRuntimeReplicaProfile(
         state=state,
         capacity=capacity,
         delay=25,
