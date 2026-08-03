@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import blake2b
 from math import isclose, isfinite
 from numbers import Integral
@@ -16,6 +16,13 @@ from .contracts import (
     MILPProblemInput,
     MILPSolverResult,
     build_problem_input,
+)
+from .experiment_profile import (
+    MILP_EXPLICIT_PLANNING_LINK_MODE,
+    MILP_PLANNING_LINK_PROFILE_VERSION,
+    MILPExperimentPlanningLink,
+    MILPExperimentProfile,
+    MILPExperimentReplica,
 )
 from .model import exact_known_state_expected_utility
 from .oracle import solve_tiny_exhaustive
@@ -34,6 +41,7 @@ from .slot_contracts import (
     MILPSlotResult,
     MeasuredPairLatencyProfile,
 )
+from .runtime_profiles import MILPRuntimeReplicaProfile
 from .solver import solve_coupled_milp
 
 
@@ -41,6 +49,7 @@ MILP_PHASE4_SCALE_CONTRACT_VERSION = "milp-coupled-phase4-scale-v1"
 MILP_PHASE4_SYNTHETIC_PROFILE_VERSION = "milp-scale-synthetic-profile-v1"
 MILP_PHASE4_MEMORY_SCOPE = "current-process-ru_maxrss-high-water-mark-v1"
 MILP_PHASE4_BACKEND_PARITY = "not-applicable-single-available-backend"
+MILP_SYNTHETIC_SCALE_EXPERIMENT_IDENTITY = "phase4-synthetic-scale"
 
 # Increasing development cases terminating at the initial paper-scale shape.
 MILP_SCALE_LADDER = (
@@ -315,6 +324,72 @@ def build_scale_slot_input(case: MILPScaleCase) -> MILPSlotInput:
         slot_id=case.slot_id,
         measured_pair_profiles=measured_profiles,
     )
+
+
+def build_synthetic_scale_experiment_profile(
+    case: MILPScaleCase,
+) -> MILPExperimentProfile:
+    """Expose the Phase 4 synthetic planner input through the common profile.
+
+    This is an explicit comparison mode, not a replacement for the deployed
+    runtime-state profile or an assertion that the synthetic coefficients are
+    measured network latency.
+    """
+
+    slot_input = build_scale_slot_input(case)
+    problem = slot_input.problem
+    return MILPExperimentProfile(
+        configuration=case.configuration,
+        replicas=tuple(
+            MILPExperimentReplica(
+                key=item.key,
+                true_state=item.true_state,
+                ready=item.admission.ready,
+                assigned_flow_capacity=item.admission.assigned_flow_capacity,
+            )
+            for item in problem.replicas
+        ),
+        planning_links=tuple(
+            MILPExperimentPlanningLink(item.source, item.target, item.cost_ms)
+            for item in problem.planning_links
+        ),
+        measured_pair_profiles=slot_input.measured_pair_profiles,
+        source_identity=(
+            f"{MILP_SYNTHETIC_SCALE_EXPERIMENT_IDENTITY}:"
+            f"version={case.profile_version}:profile-seed={case.profile_seed}"
+        ),
+        planning_link_mode=MILP_EXPLICIT_PLANNING_LINK_MODE,
+        planning_link_source=(
+            f"{MILP_PHASE4_SYNTHETIC_PROFILE_VERSION}:"
+            f"profile-seed={case.profile_seed}"
+        ),
+        planning_link_contract_version=MILP_PLANNING_LINK_PROFILE_VERSION,
+    )
+
+
+def synthetic_scale_runtime_profiles(
+    case: MILPScaleCase,
+    base_profiles: dict[tuple[int, int], MILPRuntimeReplicaProfile],
+) -> dict[tuple[int, int], MILPRuntimeReplicaProfile]:
+    """Return Pod profiles whose hidden states match a synthetic scale case.
+
+    Only the state is replaced.  Legacy processor metadata remains service
+    configuration and is not repurposed as MILP admission capacity.
+    """
+
+    profile = build_synthetic_scale_experiment_profile(case)
+    expected = {(item.key.stage, item.key.replica) for item in profile.replicas}
+    if set(base_profiles) != expected:
+        raise MILPContractError(
+            "synthetic-scale runtime profiles must cover every configured replica"
+        )
+    return {
+        (item.key.stage, item.key.replica): replace(
+            base_profiles[(item.key.stage, item.key.replica)],
+            state=item.true_state,
+        )
+        for item in profile.replicas
+    }
 
 
 def _peak_process_rss_bytes() -> int:

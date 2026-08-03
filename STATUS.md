@@ -1585,3 +1585,38 @@ from post-placement physical/observation/flow-order randomness. Current active
 IBG Kernel and MILP instead load fixed state values from their runtime profile
 files, so a state-seed implementation will require deliberate pure/Kernel
 parity and safe Pod state-profile refresh work when reopened.
+
+### MILP temporary synthetic-scale comparison mode
+
+Updated: 2026-08-03. Code/test gate complete; no live run performed.
+
+The user observed a Phase 4 benchmark consuming its cutoff while a
+same-dimension Kernel run with a deterministic example link file solved in
+about 0.1 seconds. Dimensions alone do not identify one MILP instance: the
+benchmark owns its complete synthetic state/capacity/link table, while normal
+Kernel mode uses deployed runtime states plus separately supplied links.
+
+`--planner-profile synthetic-scale --profile-seed 20260801` now constructs the
+benchmark table verbatim for pure and Kernel paths and prepares matching Pod
+states. Focused tests prove pure/Kernel profile equality, benchmark problem and
+measured-pair equality, matching runtime states, and rejection of mixed
+synthetic/link flags. Normal runtime mode is unchanged. A live comparison is
+pending user execution; no solver-runtime conclusion is claimed yet.
+
+### MILP profile-difficulty finding
+
+Updated: 2026-08-03.
+
+User validation of the opt-in synthetic-scale Kernel run now matches the
+benchmark's expected long-running solve behavior. The normal runtime profile
+was confirmed materially different: at 3x10 it repeats a five-replica state
+pattern and has abundant state-4 replicas, while the Phase 4 synthetic profile
+at seed 20260801 has only four state-4 replicas, none at stage 2, plus 292
+distinct directed link values across 300 links. Assigned-flow capacity remains
+the flow-count default in both cases. This supports the profile/input
+explanation, not a claim that Kubernetes improves solver speed.
+
+The available temporary remedy is `--planner-profile synthetic-scale` with a
+matching `--profile-seed`, which gives pure and Kernel paths the benchmark's
+complete planner table and matching Pod states. Normal mode remains untouched;
+the generated/deterministic tables are not calibrated real network latency.

@@ -23,6 +23,7 @@ from MILP.kernel_profiles import build_kernel_problem_input
 from MILP.phase0_contract import ReplicaKey, required_directed_pairs
 from MILP.runtime_profiles import MILPRuntimeReplicaProfile
 from MILP.solver import solve_coupled_milp
+from MILP.scaling import build_scale_slot_input, make_scale_case
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -149,6 +150,48 @@ def test_large_construction_only_parity_does_not_solve_or_contact_kubernetes():
     assert pure.fingerprint == kernel.fingerprint
     assert len(pure.replicas) == 21
     assert len(pure.planning_links) == 147
+
+
+def test_synthetic_scale_mode_reuses_the_benchmark_input_for_pure_and_kernel():
+    launcher = _launcher_module()
+    argv = [
+        "--flow", "2", "--stage", "3", "--replica", "2", "--cutoff", "5",
+        "--planner-profile", "synthetic-scale", "--profile-seed", "55",
+    ]
+    pure = build_pure_experiment_profile(build_pure_parser().parse_args(argv))
+    kernel, runtime_profiles = launcher.build_launcher_experiment_profile(
+        launcher.build_parser().parse_args(argv)
+    )
+    benchmark_slot = build_scale_slot_input(
+        make_scale_case(
+            flow_count=2,
+            stage_count=3,
+            replicas_per_stage=2,
+            cutoff_seconds=5,
+            profile_seed=55,
+        )
+    )
+
+    assert pure == kernel
+    assert pure.problem_input() == benchmark_slot.problem
+    assert pure.measured_pair_profiles == benchmark_slot.measured_pair_profiles
+    assert pure.fingerprint == kernel.fingerprint
+    assert pure.source_identity.startswith("phase4-synthetic-scale:")
+    assert {
+        key: runtime_profiles[(key.stage, key.replica)].state
+        for key in pure.configuration.dimensions.replica_keys
+    } == benchmark_slot.problem.true_state_by_replica()
+
+
+def test_synthetic_scale_mode_rejects_an_extra_planning_link_input():
+    arguments = build_pure_parser().parse_args(
+        [
+            "--flow", "2", "--stage", "3", "--replica", "2", "--cutoff", "5",
+            "--planner-profile", "synthetic-scale", "--planning-link-ms", "2",
+        ]
+    )
+    with pytest.raises(ValueError, match="already supplies"):
+        build_pure_experiment_profile(arguments)
 
 
 def test_legacy_runtime_capacity_is_never_mapped_to_milp_admission():

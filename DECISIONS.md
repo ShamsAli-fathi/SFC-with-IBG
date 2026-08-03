@@ -1105,3 +1105,30 @@ Requested: 2026-08-03. Deferred; no current behavior changes.
 - Implement only when explicitly reopened, with pure/Kernel parity and
   controlled profile-refresh behavior where running Pods must receive new
   state configuration.
+
+### MILP temporary synthetic-scale profile decision
+
+Updated: 2026-08-03.
+
+- Accept `--planner-profile synthetic-scale` only as an opt-in diagnostic. It
+  reuses the Phase 4 benchmark's complete state/capacity/link input for the
+  requested dimensions and `--profile-seed`; it is not a default, calibration,
+  or measured-network model.
+- Require pure and Kernel builders to have the same canonical fingerprint, and
+  require matching runtime Pod states before traffic.
+- Keep normal `runtime` mode unchanged. Synthetic mode supplies its own links
+  and rejects the two planning-link flags rather than mixing input sources.
+
+### MILP profile-difficulty finding and temporary remedy
+
+Updated: 2026-08-03.
+
+- Accept the profile mismatch as the confirmed explanation for why a normal
+  Kernel run and `MILP.benchmark` with equal dimensions may have radically
+  different solver times. It is not evidence that Kubernetes accelerates the
+  same MILP.
+- The old runtime profile's repeated state pattern and smooth demo-link formula
+  differ from the benchmark's hash-derived state/link tables. Do not attribute
+  the effect to one coefficient without a separate ablation experiment.
+- Use synthetic-scale only for a controlled same-input comparison. Keep normal
+  runtime mode and future evidence-backed planning-latency calibration separate.

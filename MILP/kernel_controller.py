@@ -181,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "MILP Kernel starting: "
             f"scale={arguments.flow}x{arguments.stage}x{arguments.replica} "
-            f"cutoff={arguments.cutoff:g}s profile={profile.source} "
+            f"cutoff={arguments.cutoff:g}s profile={profile.source_identity} "
             f"fingerprint={profile.fingerprint} "
             f"profile-contract={profile.contract_version} "
             f"link-contract={profile.planning_link_contract_version} "
@@ -199,7 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     result = execution.slot_result
     print(
-        f"{format_milp_kernel_metrics(result)} profile={profile.source} "
+        f"{format_milp_kernel_metrics(result)} profile={profile.source_identity} "
         f"fingerprint={profile.fingerprint} "
         f"profile-contract={profile.contract_version} "
         f"link-contract={profile.planning_link_contract_version} "

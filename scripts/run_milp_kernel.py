@@ -31,12 +31,19 @@ from MILP.runtime_profiles import (
     load_milp_runtime_profiles,
     milp_runtime_profiles_from_document,
 )
+from MILP.scaling import (
+    build_synthetic_scale_experiment_profile,
+    make_scale_case,
+    synthetic_scale_runtime_profiles,
+)
 
 
 SERVICE_IMAGE = "milp-testbed:kernel-service-phase5"
 CONTROLLER_IMAGE = "milp-testbed:kernel-controller-phase5"
 NAMESPACE = "milp-testbed"
 FORWARDER_WORKERS_PER_REPLICA = 2
+RUNTIME_PLANNER_PROFILE = "runtime"
+SYNTHETIC_SCALE_PLANNER_PROFILE = "synthetic-scale"
 
 
 def _announce(message):
@@ -46,11 +53,17 @@ def _announce(message):
 def _preflight_lines(args):
     replica_pods = args.stage * args.replica
     serving_processes = replica_pods * (1 + FORWARDER_WORKERS_PER_REPLICA)
-    planning_description = (
-        f"planning-link={args.planning_link_ms:g}ms"
-        if args.planning_link_ms is not None
-        else f"planning-links={args.planning_links}"
-    )
+    if args.planner_profile == SYNTHETIC_SCALE_PLANNER_PROFILE:
+        planning_description = (
+            "planner-profile=synthetic-scale "
+            f"profile-seed={args.profile_seed} (benchmark coefficients)"
+        )
+    else:
+        planning_description = (
+            f"planning-link={args.planning_link_ms:g}ms"
+            if args.planning_link_ms is not None
+            else f"planning-links={args.planning_links}"
+        )
     lines = [
         (
             f"requested scale={args.flow} flows x {args.stage} stages x "
@@ -83,6 +96,34 @@ def _planning_link_document(args):
         "source": "cli-uniform",
         "uniform_cost_ms": args.planning_link_ms,
     }
+
+
+def _nonnegative_integer(text):
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer") from exc
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return value
+
+
+def _validate_profile_arguments(args):
+    has_planning_input = (
+        args.planning_link_ms is not None or args.planning_links is not None
+    )
+    if args.planner_profile == RUNTIME_PLANNER_PROFILE:
+        if not has_planning_input:
+            raise ValueError(
+                "runtime planner profile requires exactly one of "
+                "--planning-link-ms or --planning-links"
+            )
+        return
+    if has_planning_input:
+        raise ValueError(
+            "synthetic-scale planner profile already supplies its complete "
+            "planning-link table; do not pass --planning-link-ms or --planning-links"
+        )
 
 
 def rollout_batch_targets(replica_target, batch_size, existing_replicas=None):
@@ -131,6 +172,18 @@ def build_launcher_experiment_profile(args):
     runtime_profiles = expand_milp_runtime_profiles(
         base_profiles, args.stage, args.replica
     )
+    if args.planner_profile == SYNTHETIC_SCALE_PLANNER_PROFILE:
+        case = make_scale_case(
+            flow_count=args.flow,
+            stage_count=args.stage,
+            replicas_per_stage=args.replica,
+            cutoff_seconds=args.cutoff,
+            profile_seed=args.profile_seed,
+        )
+        return (
+            build_synthetic_scale_experiment_profile(case),
+            synthetic_scale_runtime_profiles(case, runtime_profiles),
+        )
     profile = build_experiment_profile_from_runtime_states(
         configuration,
         runtime_profiles=runtime_profiles,
@@ -166,7 +219,23 @@ def build_parser():
     parser.add_argument("--stage", type=_stage_count, default=3)
     parser.add_argument("--replica", type=_positive_integer, default=10)
     parser.add_argument("--cutoff", type=_positive_finite_cutoff, required=True)
-    planning = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument(
+        "--planner-profile",
+        choices=(RUNTIME_PLANNER_PROFILE, SYNTHETIC_SCALE_PLANNER_PROFILE),
+        default=RUNTIME_PLANNER_PROFILE,
+        help=(
+            "runtime uses deployed replica states plus a supplied planning-link "
+            "input; synthetic-scale temporarily reuses the Phase 4 benchmark's "
+            "complete planner input"
+        ),
+    )
+    parser.add_argument(
+        "--profile-seed",
+        type=_nonnegative_integer,
+        default=20260801,
+        help="Phase 4 synthetic-scale profile seed (default: 20260801)",
+    )
+    planning = parser.add_mutually_exclusive_group(required=False)
     planning.add_argument(
         "--planning-link-ms",
         type=float,
@@ -576,6 +645,7 @@ def _controller_job(args, name):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    _validate_profile_arguments(args)
     if args.planning_link_ms is not None and (
         not isfinite(args.planning_link_ms) or args.planning_link_ms < 0.0
     ):
@@ -585,7 +655,7 @@ def main(argv=None):
     for line in _preflight_lines(args):
         _announce(line)
     _announce(
-        f"profile={experiment_profile.source} "
+        f"profile={experiment_profile.source_identity} "
         f"fingerprint={experiment_profile.fingerprint} "
         f"profile-contract={experiment_profile.contract_version} "
         f"link-contract={experiment_profile.planning_link_contract_version} "

@@ -1539,3 +1539,21 @@ future baselines to run against the same map. This is distinct from
 post-placement outcome RNG streams. Acceptance requires pure/Kernel parity,
 same-seed reproducibility, different-seed state-map variation, no global-RNG
 mutation, and explicit safe refresh behavior for existing Kernel Pods.
+
+### MILP temporary benchmark-input parity check
+
+Status: ready for user-run validation.
+
+Use `--planner-profile synthetic-scale --profile-seed 20260801` in pure and
+Kernel MILP entry points to construct the existing Phase 4 benchmark input,
+including state/capacity/link tables. Confirm equal fingerprints and compare
+solver status/bound/gap/solve time before interpreting Kernel traffic. This is
+an opt-in diagnostic check only; ordinary runtime mode remains unchanged.
+
+### MILP future profile-difficulty ablation
+
+Deferred until requested. To identify whether replica states or planning-link
+coefficients dominate the observed solver-time difference, compare benchmark
+states with runtime links, runtime states with benchmark links, and the full
+benchmark profile at equal dimensions/cutoff. Do not treat this diagnostic as
+latency calibration or alter the normal runtime profile by default.

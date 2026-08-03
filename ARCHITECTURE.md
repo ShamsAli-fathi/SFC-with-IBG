@@ -1635,3 +1635,43 @@ hold it fixed across every slot/iteration of that experiment. The same
 state-profile seed/map must be usable by all compared algorithms. It is
 separate from seeds used for physical, observation, flow-order, or other
 post-placement stochastic streams.
+
+### MILP temporary synthetic-scale planner-profile parity mode
+
+Updated: 2026-08-03.
+
+The opt-in `--planner-profile synthetic-scale --profile-seed SEED` mode adapts
+the existing Phase 4 benchmark generator into the canonical
+`MILPExperimentProfile` boundary. It supplies the same true-state,
+Ready/admission-capacity, directed planning-link, and pure measured-pair tables
+as `MILP.benchmark` for equal dimensions, cutoff, and profile seed. The Kernel
+launcher also rewrites only MILP-owned runtime Pod state values to match that
+planner table before rollout. It is a controlled same-input solver comparison,
+not a measured-latency calibration or a changed default.
+
+Ordinary `runtime` mode remains unchanged and requires one planning-link input.
+`synthetic-scale` supplies its own complete table and rejects both planning-link
+flags. Existing Pods with different state profiles are rejected by the existing
+append-only guard and must be deliberately refreshed for this comparison.
+
+### MILP solver-difficulty profile finding
+
+Updated: 2026-08-03.
+
+The observed fast normal-Kernel solve and cutoff-bounded Phase 4 benchmark do
+not represent the same MILP instance merely because dimensions match. The old
+normal 3x10 runtime state profile repeats its five-replica pattern at replicas
+6--10 and contains ten state-4 replicas across three stages; its explicit demo
+link generator follows a smooth stage-span/replica-distance formula. In
+contrast, the Phase 4 synthetic profile at seed 20260801 has only four
+state-4 replicas, no state-4 replica at stage 2, and 292 distinct values among
+its 300 directed planning links (0.566--5.482 ms). Both retain the same
+dimension-aware assigned-flow capacity. These materially different known-state
+and planning-coefficient tables can cause HiGHS to explore very different
+search trees.
+
+The opt-in synthetic-scale mode is the accepted temporary test/fix: it makes
+pure and Kernel planners use the benchmark's complete table and matching Pod
+states. It does not establish that any one state or link is solely responsible,
+does not make generated values real network latency, and does not replace the
+separate future latency-calibration work.

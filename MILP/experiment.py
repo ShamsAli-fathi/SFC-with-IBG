@@ -20,12 +20,18 @@ from .runtime_profiles import (
     expand_milp_runtime_profiles,
     load_milp_runtime_profiles,
 )
+from .scaling import (
+    build_synthetic_scale_experiment_profile,
+    make_scale_case,
+)
 from .slot_contracts import MILPSlotInput, MILPSlotResult
 from .solver import solve_coupled_milp, solve_scipy_highs
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME_PROFILE_PATH = ROOT / "deploy/milp-kubernetes/profiles.json"
+RUNTIME_PLANNER_PROFILE = "runtime"
+SYNTHETIC_SCALE_PLANNER_PROFILE = "synthetic-scale"
 
 
 @dataclass(frozen=True)
@@ -52,7 +58,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stage", type=_stage_count, default=DEFAULT_MILP_DIMENSIONS.stage_count)
     parser.add_argument("--replica", type=_positive_integer, default=DEFAULT_MILP_DIMENSIONS.replicas_per_stage[0])
     parser.add_argument("--cutoff", type=_positive_finite_cutoff, required=True, metavar="SECONDS")
-    planning = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument(
+        "--planner-profile",
+        choices=(RUNTIME_PLANNER_PROFILE, SYNTHETIC_SCALE_PLANNER_PROFILE),
+        default=RUNTIME_PLANNER_PROFILE,
+        help=(
+            "runtime uses deployed replica states plus a supplied planning-link "
+            "input; synthetic-scale temporarily reuses the Phase 4 benchmark's "
+            "complete planner input"
+        ),
+    )
+    parser.add_argument(
+        "--profile-seed",
+        type=_nonnegative_integer,
+        default=20260801,
+        help="Phase 4 synthetic-scale profile seed (default: 20260801)",
+    )
+    planning = parser.add_mutually_exclusive_group(required=False)
     planning.add_argument(
         "--planning-link-ms",
         type=float,
@@ -79,6 +101,34 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _nonnegative_integer(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer") from exc
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return value
+
+
+def _validate_profile_arguments(arguments) -> None:
+    has_planning_input = (
+        arguments.planning_link_ms is not None or arguments.planning_links is not None
+    )
+    if arguments.planner_profile == RUNTIME_PLANNER_PROFILE:
+        if not has_planning_input:
+            raise ValueError(
+                "runtime planner profile requires exactly one of "
+                "--planning-link-ms or --planning-links"
+            )
+        return
+    if has_planning_input:
+        raise ValueError(
+            "synthetic-scale planner profile already supplies its complete "
+            "planning-link table; do not pass --planning-link-ms or --planning-links"
+        )
+
+
 def _planning_document(arguments) -> object:
     if arguments.planning_links is not None:
         return json.loads(arguments.planning_links.read_text(encoding="utf-8"))
@@ -90,12 +140,25 @@ def _planning_document(arguments) -> object:
 
 
 def build_pure_experiment_profile(arguments) -> MILPExperimentProfile:
+    _validate_profile_arguments(arguments)
     configuration = MILPConfiguration.uniform(
         flow_count=arguments.flow,
         stage_count=arguments.stage,
         replicas_per_stage=arguments.replica,
         cutoff_seconds=arguments.cutoff,
     )
+    if arguments.planner_profile == SYNTHETIC_SCALE_PLANNER_PROFILE:
+        return build_synthetic_scale_experiment_profile(
+            make_scale_case(
+                flow_count=arguments.flow,
+                stage_count=arguments.stage,
+                replicas_per_stage=arguments.replica,
+                cutoff_seconds=arguments.cutoff,
+                profile_seed=arguments.profile_seed,
+                root_seed=arguments.root_seed,
+                slot_id=arguments.slot_id,
+            )
+        )
     profiles = expand_milp_runtime_profiles(
         load_milp_runtime_profiles(DEFAULT_RUNTIME_PROFILE_PATH),
         arguments.stage,
@@ -164,7 +227,7 @@ def format_experiment_result(result: MILPExperimentRunResult) -> str:
         f"sla={metrics.physical_only_sla_violations} "
         f"jain={metrics.jain_fairness:.6f} "
         f"solve={metrics.solver_seconds:.6f}s total={metrics.total_slot_seconds:.6f}s "
-        f"profile={profile.source} fingerprint={profile.fingerprint} "
+        f"profile={profile.source_identity} fingerprint={profile.fingerprint} "
         f"profile-contract={profile.contract_version} "
         f"link-contract={profile.planning_link_contract_version} "
         f"link-source={profile.planning_link_source} "
@@ -181,7 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "MILP pure starting: "
             f"scale={arguments.flow}x{arguments.stage}x{arguments.replica} "
-            f"cutoff={arguments.cutoff:g}s profile={profile.source} "
+            f"cutoff={arguments.cutoff:g}s profile={profile.source_identity} "
             f"fingerprint={profile.fingerprint} "
             f"profile-contract={profile.contract_version} "
             f"link-contract={profile.planning_link_contract_version} "
