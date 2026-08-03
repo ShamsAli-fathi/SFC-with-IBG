@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: milp-flow-generator
+  namespace: milp-testbed
+spec:
+  selector:
+    app.kubernetes.io/name: milp-flow-generator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milp-flow-generator
+  namespace: milp-testbed
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milp-flow-generator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: milp-flow-generator
+        app.kubernetes.io/part-of: milp-testbed
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: flow-generator
+          image: milp-testbed:kernel-phase5
+          imagePullPolicy: Never
+          command:
+            - python3
+            - -m
+            - uvicorn
+            - MILP.kernel_flow_generator:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+          env:
+            - name: DATAPATH_MODE
+              value: kernel
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
