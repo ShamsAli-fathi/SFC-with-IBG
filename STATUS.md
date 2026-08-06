@@ -1721,3 +1721,24 @@ No work occurred under `IBG/` or `MILP/`, and no Kubernetes, container, image,
 node, rollout, traffic, learning, latency, utility, SLA, diagnostics, replay,
 netem, or reporting behavior changed. Hybrid infrastructure optimizations,
 automatic MC activation, and parallel MC remain deferred.
+
+## IBG-Hybrid explicit full-slot MC and bounded parallel rollout status
+
+Updated: 2026-08-06.
+
+The MC selector is now reachable through the pure iteration launcher only when
+the user supplies `--policy mc`; normal invocations still use lookahead. The
+mode runs a complete slot (all real focal placements, then unchanged
+simulation/learning/metrics) and emits one compact line after each completed
+slot. MC root rollout groups can run through `--mc-workers N`; the current
+default is three workers on the four-CPU host. Fixed seeds and input-order
+collection preserve the sequential selector's result while reducing wall-clock
+work. A default-scale single MC decision completed in 5.470199 seconds with
+three workers (75 accounted roots, five sampled, S=50); full-slot time remains
+local hardware evidence and must be measured separately. IBG, MILP, all Hybrid
+Kubernetes/node work, automatic MC activation, and algorithm semantics remain
+unchanged.
+
+The user has confirmed manual MC runs work. MC remains manually activated only
+with `--policy mc`; automatic activation is not planned in the current Hybrid
+scope.

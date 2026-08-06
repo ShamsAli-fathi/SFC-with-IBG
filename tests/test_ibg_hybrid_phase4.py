@@ -561,6 +561,63 @@ def test_seed_derivation_is_fixed_reproducible_local_and_isolated():
     )
 
 
+def test_parallel_root_rollouts_match_sequential_fixed_seed_without_global_rng_use():
+    configuration = HybridConfiguration(num_flows=4, num_replicas=2)
+    policy = IBGHybridPolicy(
+        configuration,
+        HybridPolicyParameters(
+            monte_carlo_noisy_future_flows=2,
+            monte_carlo_samples=3,
+            rollout_epsilon=0.10,
+        ),
+    )
+    random.seed(413)
+    global_state_before = random.getstate()
+
+    sequential = policy.select_monte_carlo(
+        state=GlobalLoadState.empty(configuration),
+        admission=full_admission(configuration),
+        beliefs=uniform_beliefs(configuration),
+        known_pair_link_costs=full_link_costs(configuration),
+        root_seed=2050,
+        slot_id=1,
+        decision_position=1,
+        flow_id=1,
+        rollout_workers=1,
+    )
+    parallel = policy.select_monte_carlo(
+        state=GlobalLoadState.empty(configuration),
+        admission=full_admission(configuration),
+        beliefs=uniform_beliefs(configuration),
+        known_pair_link_costs=full_link_costs(configuration),
+        root_seed=2050,
+        slot_id=1,
+        decision_position=1,
+        flow_id=1,
+        rollout_workers=3,
+    )
+
+    assert parallel == sequential
+    assert random.getstate() == global_state_before
+
+
+@pytest.mark.parametrize("workers", (0, -1, True, 1.5))
+def test_parallel_worker_limit_is_validated(workers):
+    configuration = HybridConfiguration(num_flows=1, num_replicas=1)
+    with pytest.raises((TypeError, ValueError), match="rollout_workers"):
+        IBGHybridPolicy(configuration).select_monte_carlo(
+            state=GlobalLoadState.empty(configuration),
+            admission=full_admission(configuration),
+            beliefs=uniform_beliefs(configuration),
+            known_pair_link_costs=full_link_costs(configuration),
+            root_seed=2050,
+            slot_id=1,
+            decision_position=1,
+            flow_id=1,
+            rollout_workers=workers,
+        )
+
+
 def test_all_dead_end_samples_reject_every_shortlisted_candidate():
     configuration = HybridConfiguration(num_flows=2, num_replicas=1)
     policy = IBGHybridPolicy(

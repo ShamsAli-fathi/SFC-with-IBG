@@ -65,6 +65,34 @@ EXACT_BELIEF_RETENTION = 0.8
 EXACT_EQUILIBRIUM_THRESHOLD = 0.033
 
 
+# These names intentionally describe orchestration only.  They do not select
+# or alter an internal policy automatically: ``mc`` is reachable solely when
+# the caller explicitly requests it.
+HYBRID_SLOT_POLICY_LOOKAHEAD = "lookahead"
+HYBRID_SLOT_POLICY_MC = "mc"
+DEFAULT_HYBRID_MC_WORKERS = 3
+_HYBRID_SLOT_POLICIES = frozenset(
+    (HYBRID_SLOT_POLICY_LOOKAHEAD, HYBRID_SLOT_POLICY_MC)
+)
+
+
+def _require_slot_policy(policy_mode: str) -> str:
+    if not isinstance(policy_mode, str):
+        raise TypeError("policy_mode must be a string")
+    if policy_mode not in _HYBRID_SLOT_POLICIES:
+        supported = ", ".join(sorted(_HYBRID_SLOT_POLICIES))
+        raise ValueError(f"policy_mode must be one of: {supported}")
+    return policy_mode
+
+
+def _require_mc_workers(mc_workers: int) -> int:
+    if isinstance(mc_workers, bool) or not isinstance(mc_workers, int):
+        raise TypeError("mc_workers must be an integer")
+    if mc_workers < 1:
+        raise ValueError("mc_workers must be positive")
+    return mc_workers
+
+
 def _load_exact_header():
     """Load the frozen Exact module only while a slot actually runs.
 
@@ -374,11 +402,20 @@ def run_hybrid_slot(
     *,
     policy: IBGHybridPolicy | None = None,
     simulation_adapter: HybridSlotSimulationAdapter | None = None,
+    policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
+    mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
 ) -> HybridSlotResult:
-    """Place all flows, then simulate, learn, and report one Hybrid slot."""
+    """Place all flows, then simulate, learn, and report one Hybrid slot.
+
+    ``lookahead`` is the unchanged normal Hybrid mode.  ``mc`` is an explicit
+    full-slot execution mode for the completed v5 production Monte Carlo
+    selector; it is never selected by activation inputs.
+    """
 
     if not isinstance(slot_input, HybridSlotInput):
         raise TypeError("slot_input must be HybridSlotInput")
+    policy_mode = _require_slot_policy(policy_mode)
+    mc_workers = _require_mc_workers(mc_workers)
     policy = policy or IBGHybridPolicy(
         slot_input.configuration,
         slot_input.parameters,
@@ -420,17 +457,41 @@ def run_hybrid_slot(
             admission=admission,
             high_priority=flow.high_priority,
         )
-        path = select_pipeline_path(activation, slot_input.parameters)
-        if path is not PipelinePath.LOOKAHEAD:
+        automatic_path = select_pipeline_path(
+            activation,
+            slot_input.parameters,
+        )
+        if automatic_path is not PipelinePath.LOOKAHEAD:
             raise RuntimeError(
                 "automatic core Hybrid orchestration selected a non-lookahead path"
             )
-        detail = policy.select_lookahead(
-            state=state_before,
-            admission=admission,
-            beliefs=beliefs,
-            known_pair_link_costs=planning_links,
-        )
+        if policy_mode == HYBRID_SLOT_POLICY_LOOKAHEAD:
+            path = automatic_path
+            activation_reason = _activation_reason(
+                path,
+                activation,
+                slot_input.parameters,
+            )
+            detail = policy.select_lookahead(
+                state=state_before,
+                admission=admission,
+                beliefs=beliefs,
+                known_pair_link_costs=planning_links,
+            )
+        else:
+            path = PipelinePath.MONTE_CARLO
+            activation_reason = "explicit-production-monte-carlo-v5"
+            detail = policy.select_monte_carlo(
+                state=state_before,
+                admission=admission,
+                beliefs=beliefs,
+                known_pair_link_costs=planning_links,
+                root_seed=slot_input.root_seed,
+                slot_id=slot_input.slot_id,
+                decision_position=decision_position,
+                flow_id=flow_id,
+                rollout_workers=mc_workers,
+            )
 
         state = detail.result.state_after
         expected_state = state_before.apply(
@@ -447,11 +508,7 @@ def run_hybrid_slot(
                 flow=flow,
                 activation=activation,
                 path=path,
-                activation_reason=_activation_reason(
-                    path,
-                    activation,
-                    slot_input.parameters,
-                ),
+                activation_reason=activation_reason,
                 action=detail.result.action,
                 skipped_stage=detail.result.action.skipped_stage(
                     slot_input.configuration
@@ -549,11 +606,15 @@ def run_and_print_hybrid_slot(
     *,
     policy: IBGHybridPolicy | None = None,
     simulation_adapter: HybridSlotSimulationAdapter | None = None,
+    policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
+    mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
 ) -> HybridSlotResult:
     result = run_hybrid_slot(
         slot_input,
         policy=policy,
         simulation_adapter=simulation_adapter,
+        policy_mode=policy_mode,
+        mc_workers=mc_workers,
     )
     print(format_hybrid_slot_metrics(result))
     return result

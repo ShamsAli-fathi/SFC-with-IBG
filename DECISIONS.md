@@ -1251,3 +1251,30 @@ Updated: 2026-08-06.
 - Keep automatic slot orchestration on deterministic lookahead. MC activation,
   parallelism, Kubernetes/node rollout work, and all infrastructure changes
   remain deferred and require separate authorization.
+
+## IBG-Hybrid explicit MC execution and worker decision
+
+Updated: 2026-08-06.
+
+- Accept `--policy mc` as the only full-slot route to production MC; automatic
+  activation remains unavailable. Omitting the option continues to select
+  deterministic lookahead for every real focal flow.
+- Accept bounded process parallelism only across independent shortlisted-root
+  rollout groups. Keep real focal flows sequential because each sees the real
+  committed load state from its predecessors.
+- Set the explicit MC CLI default to three workers on the current four-CPU
+  host, leaving one CPU available to the operating system. `--mc-workers N`
+  remains a positive user override.
+- Preserve seed-derived rollout behavior and canonical input-order collection;
+  parallel completion timing must never affect placement or MC results.
+- This is an execution-speed decision only. It does not revise v5 root
+  selection, `C=5`, `S=50`, `D_MC=10`, the pure-greedy tail, focal objective,
+  learning, or any outcome contract.
+
+### Manual-MC boundary retained
+
+Updated: 2026-08-06.
+
+Keep Monte Carlo manually selected only through `--policy mc`. Do not add
+automatic MC activation from entropy, contention, priority, uncertainty-event,
+or any other runtime input unless the user explicitly reopens that scope.

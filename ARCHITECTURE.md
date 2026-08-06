@@ -1801,3 +1801,25 @@ The ordinary slot runner remains unchanged: every automatic placement still
 uses deterministic lookahead, so production MC is reachable only through an
 explicit policy call. No Hybrid Kubernetes, node, rollout, image, traffic,
 learning, latency, utility, or SLA boundary changed.
+
+## IBG-Hybrid explicit MC execution and bounded parallel rollouts
+
+Updated: 2026-08-06.
+
+`scripts/run_hybrid_iterations.py` now accepts `--policy lookahead|mc`.
+`lookahead` remains the default and retains the established automatic
+deterministic path. `mc` is explicit-only: every real focal flow invokes the
+v5 production top-five MC selector, commits only its selected focal route, and
+then the unchanged runner performs the complete simulation, selected-only
+learning, metrics, and equilibrium step after all flows have been placed.
+
+Explicit MC also accepts `--mc-workers N`, defaulting to three local process
+workers on this four-CPU development host. Only the independent shortlisted
+root rollout groups inside one focal MC decision run concurrently. Real flows,
+root ranking, the fifty seeded samples per root, canonical result collection,
+focal selection, and all state commits remain deterministic and sequential at
+their required boundaries. Worker count is execution scheduling only; it does
+not change the v5 algorithm, seeds, utility, learning, latency, or outcomes.
+
+MC remains a manual-only execution mode. No automatic entropy, contention,
+priority, or uncertainty-event trigger is part of the active runner.

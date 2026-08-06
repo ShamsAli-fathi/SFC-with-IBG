@@ -1691,3 +1691,22 @@ Next work is not implicitly authorized. MC automatic activation and
 parallelism remain deferred. All previously evaluated Hybrid Kubernetes,
 node, image, resource, rollout, append-only-profile, and live-traffic phases
 remain postponed until explicitly reopened one phase at a time.
+
+## IBG-Hybrid explicit full-slot MC execution and bounded parallelism
+
+Completed: 2026-08-06.
+
+The pure runner now exposes explicit `--policy mc` full-slot/multi-slot
+execution while retaining `lookahead` as the unchanged default. MC processes
+all real flows in the established slot-wide order, commits only focal actions,
+and then reuses the existing simulation, observation, learning, metric, and
+equilibrium path. It prints one compact line per completed slot.
+
+Independent shortlisted-root rollout groups may use `--mc-workers N`; the
+current default is three process workers. Acceptance requires and includes
+fixed-seed sequential/parallel equality, no global-RNG consumption, retained
+canonical ordering, and no real branch-state leakage. Automatic MC activation,
+Kubernetes/node work, and any broader parallelization remain deferred.
+
+Automatic MC activation remains explicitly out of scope. Production MC is a
+manual experiment mode through `--policy mc` until separately authorized.

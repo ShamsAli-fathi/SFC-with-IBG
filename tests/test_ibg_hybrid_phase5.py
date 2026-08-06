@@ -17,6 +17,7 @@ from IBG_Hybrid import (
     GlobalLoadState,
     HybridConfiguration,
     HybridFlow,
+    HybridMonteCarloDecision,
     HybridPairValue,
     HybridPolicyParameters,
     HybridReplica,
@@ -29,6 +30,7 @@ from IBG_Hybrid import (
     run_and_print_hybrid_slot,
     run_hybrid_slot,
 )
+from IBG_Hybrid.policy import MonteCarloRootMode
 from IBG_Hybrid.phase0_contract import (
     HYBRID_FLOW_ORDER_SEED_SCHEME,
     derive_flow_order_seed,
@@ -221,6 +223,97 @@ def test_priority_and_ordinary_flows_both_use_core_lookahead():
         priority.placements[0].activation_reason,
         ordinary.placements[0].activation_reason,
     } == {"default-pruned-lookahead-d2"}
+
+
+def test_explicit_mc_runs_a_complete_slot_with_only_focal_commits():
+    parameters = HybridPolicyParameters(
+        candidates_per_stage=2,
+        lookahead_future_flows=2,
+        monte_carlo_noisy_future_flows=1,
+        monte_carlo_samples=1,
+        rollout_epsilon=0.10,
+    )
+    result = run_hybrid_slot(
+        make_input(flows=4, replicas=2, parameters=parameters),
+        policy_mode="mc",
+    )
+
+    assert len(result.placements) == 4
+    assert result.final_loads.total_assignments == 8
+    assert len(result.observations) == 8
+    assert len(result.measured_pairs) == 4
+    for position, placement in enumerate(result.placements, start=1):
+        assert placement.path is PipelinePath.MONTE_CARLO
+        assert placement.activation_reason == "explicit-production-monte-carlo-v5"
+        assert isinstance(placement.policy_detail, HybridMonteCarloDecision)
+        assert placement.policy_detail.root_mode is MonteCarloRootMode.PRODUCTION_TOP_FIVE
+        assert placement.policy_detail.decision_position == position
+        assert placement.policy_detail.flow_id == placement.flow.flow_id
+        assert placement.state_after == placement.state_before.apply(
+            placement.action,
+            result.configuration,
+        )
+        assert placement.state_after.total_assignments == 2 * position
+
+
+def test_explicit_mc_carries_beliefs_across_slots():
+    parameters = HybridPolicyParameters(
+        candidates_per_stage=2,
+        monte_carlo_noisy_future_flows=1,
+        monte_carlo_samples=1,
+    )
+    first_input = make_input(
+        flows=3,
+        replicas=2,
+        parameters=parameters,
+        root_seed=9876,
+    )
+    first = run_hybrid_slot(first_input, policy_mode="mc")
+    second = run_hybrid_slot(
+        first_input.with_beliefs(first.beliefs_after_mapping),
+        policy_mode="mc",
+    )
+
+    assert second.beliefs_before == first.beliefs_after
+    assert second.slot_id == first.slot_id + 1
+    assert all(
+        placement.path is PipelinePath.MONTE_CARLO
+        for placement in second.placements
+    )
+
+
+def test_full_slot_parallel_mc_matches_one_worker_fixed_seed():
+    parameters = HybridPolicyParameters(
+        candidates_per_stage=2,
+        monte_carlo_noisy_future_flows=1,
+        monte_carlo_samples=2,
+    )
+    slot_input = make_input(
+        flows=3,
+        replicas=2,
+        parameters=parameters,
+        root_seed=2468,
+    )
+
+    sequential = run_hybrid_slot(
+        slot_input,
+        policy_mode="mc",
+        mc_workers=1,
+    )
+    parallel = run_hybrid_slot(
+        slot_input,
+        policy_mode="mc",
+        mc_workers=3,
+    )
+
+    assert deterministic_projection(parallel) == deterministic_projection(
+        sequential
+    )
+
+
+def test_unknown_explicit_slot_policy_is_rejected():
+    with pytest.raises(ValueError, match="policy_mode"):
+        run_hybrid_slot(make_input(flows=1), policy_mode="automatic-mc")
 
 
 def test_authoritative_contention_threshold_activates_lookahead():

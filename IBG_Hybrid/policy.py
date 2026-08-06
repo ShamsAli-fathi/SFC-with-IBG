@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from itertools import combinations, product
@@ -848,6 +849,196 @@ class NoFeasibleMonteCarloAction(RuntimeError):
         self.rejected_candidates = rejected_candidates
 
 
+def _require_rollout_workers(rollout_workers: int) -> int:
+    """Validate an execution-only MC worker limit.
+
+    This is deliberately separate from the v5 policy parameters: worker
+    count changes scheduling only, never root ranking, seeds, rollout actions,
+    or focal-value semantics.
+    """
+
+    if isinstance(rollout_workers, bool) or not isinstance(
+        rollout_workers,
+        Integral,
+    ):
+        raise TypeError("rollout_workers must be an integer")
+    if rollout_workers < 1:
+        raise ValueError("rollout_workers must be positive")
+    return int(rollout_workers)
+
+
+@dataclass(frozen=True)
+class _MonteCarloRootTask:
+    """One independent sampled root, safe to execute in another process."""
+
+    configuration: HybridConfiguration
+    parameters: HybridPolicyParameters
+    focal_action: TwoStageAction
+    state_after_focal: GlobalLoadState
+    admission: Mapping[ReplicaChoice, ReplicaAdmission]
+    beliefs: Mapping[ReplicaChoice, Sequence[float]]
+    known_pair_link_costs: Mapping[tuple[ReplicaChoice, ReplicaChoice], float]
+    root_seed: int
+    slot_id: int
+    decision_position: int
+    flow_id: int
+    requested_samples: int
+    requested_mc_depth: int
+    effective_mc_depth: int
+    tail_length: int
+    epsilon: float
+
+
+def _evaluate_monte_carlo_root(
+    task: _MonteCarloRootTask,
+) -> HybridMonteCarloEvaluation | HybridMonteCarloRejectedCandidate:
+    """Evaluate one root's seeded rollouts without touching caller state.
+
+    The function is module-level so it can be sent to a process worker.  Each
+    worker creates its own pure policy/cache; all branch state and RNG state
+    remain local to the task.
+    """
+
+    policy = IBGHybridPolicy(task.configuration, task.parameters)
+    completed_samples = []
+    failed_samples = []
+    total_projected_steps = task.effective_mc_depth + task.tail_length
+    for sample_index in range(task.requested_samples):
+        seed_key = RolloutSeedKey(
+            root_seed=task.root_seed,
+            slot_id=task.slot_id,
+            decision_position=task.decision_position,
+            flow_id=task.flow_id,
+            action=task.focal_action,
+            sample_index=sample_index,
+        )
+        derived_seed = derive_rollout_seed(seed_key)
+        generator = Random(derived_seed)
+        branch_state = task.state_after_focal
+        continuation_steps = []
+        failed_accounting = None
+
+        for future_index in range(total_projected_steps):
+            try:
+                continuation = policy.select_greedy(
+                    state=branch_state,
+                    admission=task.admission,
+                    beliefs=task.beliefs,
+                    known_pair_link_costs=task.known_pair_link_costs,
+                )
+            except NoFeasiblePrunedAction as error:
+                failed_accounting = error.accounting
+                break
+
+            feasible_actions = tuple(
+                scored.action for scored in continuation.scored_actions
+            )
+            if future_index >= task.effective_mc_depth:
+                rollout_phase = RolloutPhase.PURE_GREEDY_TAIL
+                choice_mode = RolloutChoiceMode.GREEDY
+                chosen_action = continuation.result.action
+            else:
+                rollout_phase = RolloutPhase.NOISY_WINDOW
+                if task.epsilon <= 0.0:
+                    choice_mode = RolloutChoiceMode.GREEDY
+                    chosen_action = continuation.result.action
+                elif task.epsilon >= 1.0:
+                    choice_mode = RolloutChoiceMode.EXPLORATION
+                    chosen_action = feasible_actions[
+                        generator.randrange(len(feasible_actions))
+                    ]
+                elif generator.random() < task.epsilon:
+                    choice_mode = RolloutChoiceMode.EXPLORATION
+                    chosen_action = feasible_actions[
+                        generator.randrange(len(feasible_actions))
+                    ]
+                else:
+                    choice_mode = RolloutChoiceMode.GREEDY
+                    chosen_action = continuation.result.action
+
+            state_after_step = branch_state.apply(
+                chosen_action,
+                task.configuration,
+            )
+            continuation_steps.append(
+                HybridMonteCarloStep(
+                    state_before=branch_state,
+                    chosen_action=chosen_action,
+                    greedy_action=continuation.result.action,
+                    rollout_phase=rollout_phase,
+                    choice_mode=choice_mode,
+                    feasible_actions=feasible_actions,
+                    accounting=continuation.accounting,
+                    state_after=state_after_step,
+                )
+            )
+            branch_state = state_after_step
+
+        if failed_accounting is not None:
+            failed_samples.append(
+                HybridMonteCarloSampleFailure(
+                    seed_key=seed_key,
+                    derived_seed=derived_seed,
+                    state_after_focal=task.state_after_focal,
+                    completed_steps=tuple(continuation_steps),
+                    failing_state=branch_state,
+                    failure_accounting=failed_accounting,
+                    requested_mc_depth=task.requested_mc_depth,
+                    effective_mc_depth=task.effective_mc_depth,
+                    tail_length=task.tail_length,
+                )
+            )
+            continue
+
+        focal_value = focal_utility_at_projected_loads(
+            task.focal_action,
+            branch_state,
+            task.configuration,
+            lambda choice, load: policy._expected_stage_utility(
+                task.beliefs[choice],
+                load,
+            ),
+            lambda source, target: task.known_pair_link_costs[(source, target)],
+            link_weight=HYBRID_LINK_WEIGHT_UTILITY_PER_MS,
+        )
+        completed_samples.append(
+            HybridMonteCarloSample(
+                seed_key=seed_key,
+                derived_seed=derived_seed,
+                state_after_focal=task.state_after_focal,
+                projected_final_state=branch_state,
+                continuation_steps=tuple(continuation_steps),
+                focal_value=focal_value,
+                requested_mc_depth=task.requested_mc_depth,
+                effective_mc_depth=task.effective_mc_depth,
+                tail_length=task.tail_length,
+            )
+        )
+
+    if not completed_samples:
+        return HybridMonteCarloRejectedCandidate(
+            focal_action=task.focal_action,
+            failed_samples=tuple(failed_samples),
+            requested_samples=task.requested_samples,
+            requested_mc_depth=task.requested_mc_depth,
+            effective_mc_depth=task.effective_mc_depth,
+            tail_length=task.tail_length,
+        )
+    return HybridMonteCarloEvaluation(
+        focal_action=task.focal_action,
+        samples=tuple(completed_samples),
+        failed_samples=tuple(failed_samples),
+        mean_focal_value=(
+            fsum(sample.focal_value for sample in completed_samples)
+            / len(completed_samples)
+        ),
+        requested_samples=task.requested_samples,
+        requested_mc_depth=task.requested_mc_depth,
+        effective_mc_depth=task.effective_mc_depth,
+        tail_length=task.tail_length,
+    )
+
+
 def _all_configured_actions(
     configuration: HybridConfiguration,
 ) -> Iterator[TwoStageAction]:
@@ -1325,8 +1516,15 @@ class IBGHybridPolicy:
         slot_id: int,
         decision_position: int,
         flow_id: int,
+        rollout_workers: int = 1,
     ) -> HybridMonteCarloDecision:
-        """Run the professor-baseline top-five production MC policy."""
+        """Run the professor-baseline top-five production MC policy.
+
+        ``rollout_workers`` changes only how independent shortlisted-root
+        rollouts are scheduled.  The default remains one worker for backwards
+        compatible direct-policy use; the explicit full-slot CLI supplies its
+        own bounded default.
+        """
 
         return self._select_monte_carlo(
             state=state,
@@ -1338,6 +1536,7 @@ class IBGHybridPolicy:
             decision_position=decision_position,
             flow_id=flow_id,
             root_mode=MonteCarloRootMode.PRODUCTION_TOP_FIVE,
+            rollout_workers=rollout_workers,
         )
 
     def select_monte_carlo_all_roots_reference(
@@ -1373,6 +1572,7 @@ class IBGHybridPolicy:
             decision_position=decision_position,
             flow_id=flow_id,
             root_mode=MonteCarloRootMode.HISTORICAL_ALL_FEASIBLE,
+            rollout_workers=1,
         )
 
     def _select_monte_carlo(
@@ -1390,7 +1590,9 @@ class IBGHybridPolicy:
         decision_position: int,
         flow_id: int,
         root_mode: MonteCarloRootMode,
+        rollout_workers: int,
     ) -> HybridMonteCarloDecision:
+        rollout_workers = _require_rollout_workers(rollout_workers)
         configuration = self.configuration
         state.validate_for(configuration)
         committed_flows = (
@@ -1442,153 +1644,54 @@ class IBGHybridPolicy:
             sampled_roots = focal_decision.scored_actions
             excluded_roots = ()
 
-        evaluations = []
-        rejected_candidates = []
-        total_projected_steps = effective_mc_depth + tail_length
-        for scored_focal in sampled_roots:
-            focal_action = scored_focal.action
-            state_after_focal = state.apply(focal_action, configuration)
-            completed_samples = []
-            failed_samples = []
-            for sample_index in range(requested_samples):
-                seed_key = RolloutSeedKey(
-                    root_seed=root_seed,
-                    slot_id=slot_id,
-                    decision_position=decision_position,
-                    flow_id=flow_id,
-                    action=focal_action,
-                    sample_index=sample_index,
-                )
-                derived_seed = derive_rollout_seed(seed_key)
-                generator = Random(derived_seed)
-                branch_state = state_after_focal
-                continuation_steps = []
-                failed_accounting = None
-
-                for future_index in range(total_projected_steps):
-                    try:
-                        continuation = self.select_greedy(
-                            state=branch_state,
-                            admission=admission,
-                            beliefs=beliefs,
-                            known_pair_link_costs=known_pair_link_costs,
-                        )
-                    except NoFeasiblePrunedAction as error:
-                        failed_accounting = error.accounting
-                        break
-
-                    feasible_actions = tuple(
-                        scored.action for scored in continuation.scored_actions
-                    )
-                    if future_index >= effective_mc_depth:
-                        rollout_phase = RolloutPhase.PURE_GREEDY_TAIL
-                        choice_mode = RolloutChoiceMode.GREEDY
-                        chosen_action = continuation.result.action
-                    else:
-                        rollout_phase = RolloutPhase.NOISY_WINDOW
-                        if epsilon <= 0.0:
-                            choice_mode = RolloutChoiceMode.GREEDY
-                            chosen_action = continuation.result.action
-                        elif epsilon >= 1.0:
-                            choice_mode = RolloutChoiceMode.EXPLORATION
-                            chosen_action = feasible_actions[
-                                generator.randrange(len(feasible_actions))
-                            ]
-                        elif generator.random() < epsilon:
-                            choice_mode = RolloutChoiceMode.EXPLORATION
-                            chosen_action = feasible_actions[
-                                generator.randrange(len(feasible_actions))
-                            ]
-                        else:
-                            choice_mode = RolloutChoiceMode.GREEDY
-                            chosen_action = continuation.result.action
-
-                    state_after_step = branch_state.apply(
-                        chosen_action,
-                        configuration,
-                    )
-                    continuation_steps.append(
-                        HybridMonteCarloStep(
-                            state_before=branch_state,
-                            chosen_action=chosen_action,
-                            greedy_action=continuation.result.action,
-                            rollout_phase=rollout_phase,
-                            choice_mode=choice_mode,
-                            feasible_actions=feasible_actions,
-                            accounting=continuation.accounting,
-                            state_after=state_after_step,
-                        )
-                    )
-                    branch_state = state_after_step
-
-                if failed_accounting is not None:
-                    failed_samples.append(
-                        HybridMonteCarloSampleFailure(
-                            seed_key=seed_key,
-                            derived_seed=derived_seed,
-                            state_after_focal=state_after_focal,
-                            completed_steps=tuple(continuation_steps),
-                            failing_state=branch_state,
-                            failure_accounting=failed_accounting,
-                            requested_mc_depth=requested_mc_depth,
-                            effective_mc_depth=effective_mc_depth,
-                            tail_length=tail_length,
-                        )
-                    )
-                    continue
-
-                focal_value = focal_utility_at_projected_loads(
-                    focal_action,
-                    branch_state,
+        root_tasks = tuple(
+            _MonteCarloRootTask(
+                configuration=configuration,
+                parameters=self.parameters,
+                focal_action=scored_focal.action,
+                state_after_focal=state.apply(
+                    scored_focal.action,
                     configuration,
-                    lambda choice, load: expected_stage_utility_from_belief(
-                        beliefs[choice], load
-                    ),
-                    lambda source, target: known_pair_link_costs[(source, target)],
-                    link_weight=HYBRID_LINK_WEIGHT_UTILITY_PER_MS,
-                )
-                completed_samples.append(
-                    HybridMonteCarloSample(
-                        seed_key=seed_key,
-                        derived_seed=derived_seed,
-                        state_after_focal=state_after_focal,
-                        projected_final_state=branch_state,
-                        continuation_steps=tuple(continuation_steps),
-                        focal_value=focal_value,
-                        requested_mc_depth=requested_mc_depth,
-                        effective_mc_depth=effective_mc_depth,
-                        tail_length=tail_length,
-                    )
-                )
-
-            if not completed_samples:
-                rejected_candidates.append(
-                    HybridMonteCarloRejectedCandidate(
-                        focal_action=focal_action,
-                        failed_samples=tuple(failed_samples),
-                        requested_samples=requested_samples,
-                        requested_mc_depth=requested_mc_depth,
-                        effective_mc_depth=effective_mc_depth,
-                        tail_length=tail_length,
-                    )
-                )
-                continue
-
-            mean_focal_value = fsum(
-                sample.focal_value for sample in completed_samples
-            ) / len(completed_samples)
-            evaluations.append(
-                HybridMonteCarloEvaluation(
-                    focal_action=focal_action,
-                    samples=tuple(completed_samples),
-                    failed_samples=tuple(failed_samples),
-                    mean_focal_value=mean_focal_value,
-                    requested_samples=requested_samples,
-                    requested_mc_depth=requested_mc_depth,
-                    effective_mc_depth=effective_mc_depth,
-                    tail_length=tail_length,
-                )
+                ),
+                admission=admission,
+                beliefs=beliefs,
+                known_pair_link_costs=known_pair_link_costs,
+                root_seed=root_seed,
+                slot_id=slot_id,
+                decision_position=decision_position,
+                flow_id=flow_id,
+                requested_samples=requested_samples,
+                requested_mc_depth=requested_mc_depth,
+                effective_mc_depth=effective_mc_depth,
+                tail_length=tail_length,
+                epsilon=epsilon,
             )
+            for scored_focal in sampled_roots
+        )
+        if rollout_workers == 1 or len(root_tasks) == 1:
+            root_outcomes = tuple(
+                _evaluate_monte_carlo_root(task)
+                for task in root_tasks
+            )
+        else:
+            # ``map`` retains input order, so process completion order cannot
+            # alter canonical root/evaluation ordering or fixed-seed results.
+            with ProcessPoolExecutor(
+                max_workers=min(rollout_workers, len(root_tasks))
+            ) as executor:
+                root_outcomes = tuple(
+                    executor.map(_evaluate_monte_carlo_root, root_tasks)
+                )
+        evaluations = [
+            outcome
+            for outcome in root_outcomes
+            if isinstance(outcome, HybridMonteCarloEvaluation)
+        ]
+        rejected_candidates = [
+            outcome
+            for outcome in root_outcomes
+            if isinstance(outcome, HybridMonteCarloRejectedCandidate)
+        ]
 
         if not evaluations:
             raise NoFeasibleMonteCarloAction(

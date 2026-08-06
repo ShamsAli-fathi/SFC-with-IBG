@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from IBG_Hybrid import (  # noqa: E402
+    DEFAULT_HYBRID_MC_WORKERS,
     format_hybrid_slot_metrics,
     make_default_hybrid_slot_input,
     run_hybrid_slot,
@@ -24,6 +25,24 @@ def parse_args() -> argparse.Namespace:
             "Run the default 20x3x10 pure IBG-Hybrid simulation until "
             "equilibrium or a slot limit."
         )
+    )
+    parser.add_argument(
+        "--mc-workers",
+        type=int,
+        default=DEFAULT_HYBRID_MC_WORKERS,
+        help=(
+            "bounded process workers for explicit --policy mc "
+            f"(default: {DEFAULT_HYBRID_MC_WORKERS})"
+        ),
+    )
+    parser.add_argument(
+        "--policy",
+        choices=("lookahead", "mc"),
+        default="lookahead",
+        help=(
+            "explicit full-slot policy mode (default: lookahead); "
+            "mc is never selected automatically"
+        ),
     )
     parser.add_argument(
         "--max-slots",
@@ -50,6 +69,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--root-seed must not be negative")
     if args.slot_id < 1:
         parser.error("--slot-id must be positive")
+    if args.mc_workers < 1:
+        parser.error("--mc-workers must be positive")
     return args
 
 
@@ -61,9 +82,19 @@ def main() -> int:
     )
 
     for iteration in range(1, args.max_slots + 1):
-        result = run_hybrid_slot(slot_input)
+        result = run_hybrid_slot(
+            slot_input,
+            policy_mode=args.policy,
+            mc_workers=args.mc_workers,
+        )
+        policy_label = (
+            ""
+            if args.policy == "lookahead"
+            else f"policy=mc mc-workers={args.mc_workers} "
+        )
         print(
-            f"iteration={iteration} {format_hybrid_slot_metrics(result)}",
+            f"iteration={iteration} {policy_label}"
+            f"{format_hybrid_slot_metrics(result)}",
             flush=True,
         )
         if result.metrics.equilibrium:

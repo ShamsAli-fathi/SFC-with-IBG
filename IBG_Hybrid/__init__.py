@@ -41,6 +41,9 @@ from .policy import (
     ScoredHybridAction,
 )
 from .runner import (
+    DEFAULT_HYBRID_MC_WORKERS,
+    HYBRID_SLOT_POLICY_LOOKAHEAD,
+    HYBRID_SLOT_POLICY_MC,
     format_hybrid_slot_metrics,
     make_default_hybrid_slot_input,
     run_and_print_hybrid_slot,
@@ -114,6 +117,9 @@ __all__ = [
     "DEFAULT_HYBRID_POLICY_PARAMETERS",
     "HYBRID_OBSERVATION_SEED_SCHEME",
     "HYBRID_PHYSICAL_SEED_SCHEME",
+    "DEFAULT_HYBRID_MC_WORKERS",
+    "HYBRID_SLOT_POLICY_LOOKAHEAD",
+    "HYBRID_SLOT_POLICY_MC",
     "format_hybrid_slot_metrics",
     "make_default_hybrid_slot_input",
     "require_hybrid_stage_budget",
