@@ -22,7 +22,7 @@ from .contracts import (
 )
 
 
-HYBRID_POLICY_CONTRACT_VERSION = "ibg-hybrid-policy-contract-v4"
+HYBRID_POLICY_CONTRACT_VERSION = "ibg-hybrid-policy-contract-v5"
 HYBRID_BUDGET_MODE = "exact-stage-cardinality-v1"
 HYBRID_REPLICA_CAPACITY_UNIT = "assigned-flows-per-slot"
 HYBRID_NODE_RESOURCE_MODE = "deferred-versioned-per-flow-demands"
@@ -33,8 +33,17 @@ HYBRID_ROLLOUT_SEED_SCHEME = "blake2b-hybrid-rollout-v1"
 HYBRID_PRUNING_SCORE_MODE = "belief-load-aware-stage-utility-v1"
 HYBRID_COMPLETE_ACTION_MODE = "enumerate-all-pruned-l2-actions-v1"
 HYBRID_LOOKAHEAD_VALUE_MODE = "focal-final-load-once-v1"
-HYBRID_ROLLOUT_KERNEL = "epsilon-greedy-pruned-joint-v1"
+HYBRID_ROLLOUT_KERNEL = "epsilon-greedy-window-pure-greedy-tail-v2"
 HYBRID_PAIR_LINK_MODE = "known-directed-selected-pair-v1"
+HYBRID_MC_ROOT_MODE = "top-five-immediate-complete-routes-v1"
+HYBRID_MC_TAIL_MODE = "updated-state-pure-greedy-to-slot-end-v1"
+
+# The two depths intentionally describe different algorithms.  Keep their
+# paper-style names explicit so MC cannot silently inherit normal lookahead's
+# horizon again.
+D_LOOKAHEAD = 2
+D_MC = 10
+HYBRID_MC_ROOT_SHORTLIST_SIZE = 5
 
 
 class PipelinePath(str, Enum):
@@ -50,7 +59,8 @@ class HybridPolicyParameters:
     """Paper-derived defaults with project-defined activation thresholds."""
 
     candidates_per_stage: int = 5
-    lookahead_future_flows: int = 2
+    lookahead_future_flows: int = D_LOOKAHEAD
+    monte_carlo_noisy_future_flows: int = D_MC
     monte_carlo_samples: int = 50
     rollout_epsilon: float = 0.10
     lookahead_contention_threshold: float = 0.70
@@ -60,6 +70,7 @@ class HybridPolicyParameters:
         for name in (
             "candidates_per_stage",
             "lookahead_future_flows",
+            "monte_carlo_noisy_future_flows",
             "monte_carlo_samples",
         ):
             value = getattr(self, name)
@@ -69,6 +80,10 @@ class HybridPolicyParameters:
             raise ValueError("candidates_per_stage must be positive")
         if self.lookahead_future_flows < 0:
             raise ValueError("lookahead_future_flows must not be negative")
+        if self.monte_carlo_noisy_future_flows < 0:
+            raise ValueError(
+                "monte_carlo_noisy_future_flows must not be negative"
+            )
         if self.monte_carlo_samples < 1:
             raise ValueError("monte_carlo_samples must be positive")
         for name in (
@@ -170,11 +185,11 @@ def prune_stage_candidates(
     )
 
 
-def future_flows_to_simulate(
+def lookahead_flows_to_simulate(
     remaining_flows_after_focal: int,
     parameters: HybridPolicyParameters = DEFAULT_HYBRID_POLICY_PARAMETERS,
 ) -> int:
-    """Clamp ``D`` to the number of later flows still present in the slot."""
+    """Clamp ``D_LOOKAHEAD`` to later flows still present in the slot."""
 
     if (
         isinstance(remaining_flows_after_focal, bool)
@@ -187,6 +202,31 @@ def future_flows_to_simulate(
         remaining_flows_after_focal,
         parameters.lookahead_future_flows,
     )
+
+
+def monte_carlo_continuation_lengths(
+    remaining_flows_after_focal: int,
+    parameters: HybridPolicyParameters = DEFAULT_HYBRID_POLICY_PARAMETERS,
+) -> tuple[int, int]:
+    """Return effective noisy-window and pure-greedy-tail lengths.
+
+    ``D_MC`` bounds only the epsilon-greedy portion.  The projected branch
+    then continues through every remaining hypothetical arrival with pure
+    Phase 2 greedy choices.
+    """
+
+    if (
+        isinstance(remaining_flows_after_focal, bool)
+        or not isinstance(remaining_flows_after_focal, Integral)
+    ):
+        raise TypeError("remaining_flows_after_focal must be an integer")
+    if remaining_flows_after_focal < 0:
+        raise ValueError("remaining_flows_after_focal must not be negative")
+    noisy_length = min(
+        remaining_flows_after_focal,
+        parameters.monte_carlo_noisy_future_flows,
+    )
+    return noisy_length, remaining_flows_after_focal - noisy_length
 
 
 @dataclass(frozen=True)

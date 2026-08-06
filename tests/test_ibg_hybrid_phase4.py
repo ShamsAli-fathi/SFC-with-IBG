@@ -1,34 +1,48 @@
 import random
+import time
 from itertools import combinations, product
-from math import fsum
 from random import Random
 
 import pytest
 
 import IBG_Hybrid.policy as policy_module
 from IBG_Hybrid import (
+    D_LOOKAHEAD,
+    D_MC,
     GlobalLoadState,
+    HYBRID_MC_ROOT_SHORTLIST_SIZE,
     HybridConfiguration,
     HybridPolicyParameters,
     IBGHybridPolicy,
+    MonteCarloRootMode,
     NoFeasibleMonteCarloAction,
+    PipelinePath,
     ReplicaChoice,
     RolloutChoiceMode,
+    RolloutPhase,
     TwoStageAction,
 )
 from IBG_Hybrid.expected_utility import expected_stage_utility_from_belief
-from IBG_Hybrid.oracle import solve_tiny_exhaustive
 from IBG_Hybrid.phase0_contract import (
+    HYBRID_POLICY_CONTRACT_VERSION,
     HYBRID_ROLLOUT_SEED_SCHEME,
+    HybridActivationContext,
     ReplicaAdmission,
     derive_rollout_seed,
     evaluate_phase0_feasibility,
+    select_pipeline_path,
 )
 
 
 def action(*pairs):
     return TwoStageAction(
         tuple(ReplicaChoice(stage, replica) for stage, replica in pairs)
+    )
+
+
+def action_key(candidate):
+    return tuple(
+        (choice.stage, choice.replica) for choice in candidate.choices
     )
 
 
@@ -93,17 +107,124 @@ def select_monte_carlo(
     )
 
 
-def test_phase4_attempts_exactly_s50_samples_for_every_focal_candidate():
+def reference_monte_carlo(policy, configuration, **kwargs):
+    return policy.select_monte_carlo_all_roots_reference(
+        state=kwargs.get("state") or GlobalLoadState.empty(configuration),
+        admission=kwargs.get("admission") or full_admission(configuration),
+        beliefs=kwargs.get("beliefs") or uniform_beliefs(configuration),
+        known_pair_link_costs=(
+            kwargs.get("link_costs") or full_link_costs(configuration)
+        ),
+        root_seed=kwargs.get("root_seed", 2050),
+        slot_id=4,
+        decision_position=2,
+        flow_id=17,
+    )
+
+
+def test_production_mc_ranks_full_pool_and_samples_exactly_top_five():
+    configuration = HybridConfiguration(num_flows=1, num_replicas=2)
+    policy = IBGHybridPolicy(
+        configuration,
+        HybridPolicyParameters(monte_carlo_samples=2),
+    )
+    state = GlobalLoadState.empty(configuration)
+    admission = full_admission(configuration)
+    beliefs = uniform_beliefs(configuration)
+    links = full_link_costs(configuration)
+    greedy = policy.select_greedy(
+        state=state,
+        admission=admission,
+        beliefs=beliefs,
+        known_pair_link_costs=links,
+    )
+    decision = select_monte_carlo(
+        policy,
+        configuration,
+        state=state,
+        admission=admission,
+        beliefs=beliefs,
+        link_costs=links,
+    )
+
+    expected_ranking = tuple(
+        sorted(
+            greedy.scored_actions,
+            key=lambda scored: (-scored.objective_value, action_key(scored.action)),
+        )
+    )
+    assert decision.policy_contract_version == "ibg-hybrid-policy-contract-v5"
+    assert decision.policy_contract_version == HYBRID_POLICY_CONTRACT_VERSION
+    assert decision.root_mode is MonteCarloRootMode.PRODUCTION_TOP_FIVE
+    assert decision.root_shortlist_size == HYBRID_MC_ROOT_SHORTLIST_SIZE == 5
+    assert decision.ranked_root_pool == expected_ranking
+    assert decision.sampled_roots == expected_ranking[:5]
+    assert decision.excluded_roots == expected_ranking[5:]
+    assert len(decision.evaluations) == 5
+
+
+def test_canonical_tie_at_fifth_root_boundary():
+    configuration = HybridConfiguration(num_flows=1, num_replicas=2)
+    decision = select_monte_carlo(
+        IBGHybridPolicy(
+            configuration,
+            HybridPolicyParameters(monte_carlo_samples=1),
+        ),
+        configuration,
+    )
+
+    assert len({root.objective_value for root in decision.ranked_root_pool}) == 1
+    expected = tuple(
+        sorted(
+            (root.action for root in decision.ranked_root_pool),
+            key=action_key,
+        )[:5]
+    )
+    assert tuple(root.action for root in decision.sampled_roots) == expected
+    assert decision.result.action == expected[0]
+
+
+def test_fewer_than_five_roots_retains_every_feasible_root():
     configuration = HybridConfiguration(num_flows=1, num_replicas=1)
     decision = select_monte_carlo(
         IBGHybridPolicy(configuration),
         configuration,
     )
 
+    assert decision.full_root_count == 3
+    assert len(decision.sampled_roots) == 3
+    assert decision.excluded_roots == ()
+    assert len(decision.evaluations) == 3
+
+
+def test_outside_shortlist_roots_receive_no_samples_and_cannot_win():
+    configuration = HybridConfiguration(num_flows=2, num_replicas=2)
+    decision = select_monte_carlo(
+        IBGHybridPolicy(
+            configuration,
+            HybridPolicyParameters(monte_carlo_samples=3),
+        ),
+        configuration,
+    )
+
+    attempted = {
+        evaluation.focal_action for evaluation in decision.evaluations
+    } | {
+        rejected.focal_action for rejected in decision.rejected_candidates
+    }
+    excluded = {root.action for root in decision.excluded_roots}
+    assert attempted == {root.action for root in decision.sampled_roots}
+    assert attempted.isdisjoint(excluded)
+    assert decision.result.action in attempted
+
+
+def test_every_retained_root_receives_exactly_s50_independent_samples():
+    configuration = HybridConfiguration(num_flows=1, num_replicas=2)
+    decision = select_monte_carlo(IBGHybridPolicy(configuration), configuration)
+
     assert decision.requested_samples == 50
     assert decision.rollout_seed_scheme == HYBRID_ROLLOUT_SEED_SCHEME
-    assert len(decision.evaluations) == 3
-    assert decision.rejected_candidates == ()
+    assert len(decision.evaluations) == 5
     assert all(
         evaluation.requested_samples == 50
         and evaluation.completed_samples == 50
@@ -112,65 +233,273 @@ def test_phase4_attempts_exactly_s50_samples_for_every_focal_candidate():
         == tuple(range(50))
         for evaluation in decision.evaluations
     )
+    seeds = {
+        sample.derived_seed
+        for evaluation in decision.evaluations
+        for sample in evaluation.samples
+    }
+    assert len(seeds) == 5 * 50
 
 
-@pytest.mark.parametrize(
-    ("requested_depth", "expected_depth"),
-    ((0, 0), (1, 1), (2, 2)),
-)
-def test_phase4_supports_d0_d1_and_d2(requested_depth, expected_depth):
-    configuration = HybridConfiguration(num_flows=3, num_replicas=1)
+def test_lookahead_and_mc_depths_are_independent():
+    configuration = HybridConfiguration(num_flows=12, num_replicas=1)
     parameters = HybridPolicyParameters(
-        lookahead_future_flows=requested_depth,
-        monte_carlo_samples=2,
+        lookahead_future_flows=D_LOOKAHEAD,
+        monte_carlo_noisy_future_flows=D_MC,
+        monte_carlo_samples=1,
         rollout_epsilon=0.0,
     )
-    decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
+    policy = IBGHybridPolicy(configuration, parameters)
+    admission = full_admission(configuration)
+    beliefs = uniform_beliefs(configuration)
+    links = full_link_costs(configuration)
+
+    lookahead = policy.select_lookahead(
+        state=GlobalLoadState.empty(configuration),
+        admission=admission,
+        beliefs=beliefs,
+        known_pair_link_costs=links,
+    )
+    monte_carlo = select_monte_carlo(
+        policy,
         configuration,
+        admission=admission,
+        beliefs=beliefs,
+        link_costs=links,
     )
 
-    assert all(
-        evaluation.requested_depth == requested_depth
-        and evaluation.effective_depth == expected_depth
-        and all(
-            len(sample.continuation_steps) == expected_depth
-            for sample in evaluation.samples
-        )
-        for evaluation in decision.evaluations
-    )
+    assert D_LOOKAHEAD == 2
+    assert D_MC == 10
+    assert {evaluation.requested_depth for evaluation in lookahead.evaluations} == {2}
+    assert {evaluation.effective_depth for evaluation in lookahead.evaluations} == {2}
+    assert monte_carlo.requested_mc_depth == 10
+    assert monte_carlo.effective_mc_depth == 10
+    assert monte_carlo.tail_length == 1
 
 
-def test_phase4_clamps_depth_near_the_end_of_a_slot():
+def test_mc_depth_clamps_near_slot_end():
     configuration = HybridConfiguration(num_flows=4, num_replicas=1)
     previous = action((1, 1), (2, 1))
     near_end = GlobalLoadState.empty(configuration).apply(
-        previous,
-        configuration,
+        previous, configuration
     ).apply(previous, configuration)
-    parameters = HybridPolicyParameters(
-        monte_carlo_samples=2,
-        rollout_epsilon=0.0,
-    )
-
     decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
+        IBGHybridPolicy(
+            configuration,
+            HybridPolicyParameters(monte_carlo_samples=2),
+        ),
         configuration,
         state=near_end,
     )
 
+    assert decision.requested_mc_depth == 10
+    assert decision.effective_mc_depth == 1
+    assert decision.tail_length == 0
     assert all(
-        evaluation.requested_depth == 2
-        and evaluation.effective_depth == 1
-        and all(
-            len(sample.continuation_steps) == 1
-            for sample in evaluation.samples
-        )
+        len(sample.noisy_window_steps) == 1
+        and sample.pure_greedy_tail_steps == ()
         for evaluation in decision.evaluations
+        for sample in evaluation.samples
     )
 
 
-def test_phase4_uses_only_once_evaluated_focal_projected_value(monkeypatch):
+def test_noisy_window_uses_seeded_uniform_current_pool_at_epsilon_one():
+    configuration = HybridConfiguration(num_flows=2, num_replicas=2)
+    decision = select_monte_carlo(
+        IBGHybridPolicy(
+            configuration,
+            HybridPolicyParameters(
+                monte_carlo_noisy_future_flows=1,
+                monte_carlo_samples=4,
+                rollout_epsilon=1.0,
+            ),
+        ),
+        configuration,
+    )
+
+    for evaluation in decision.evaluations:
+        for sample in evaluation.samples:
+            step = sample.noisy_window_steps[0]
+            expected_index = Random(sample.derived_seed).randrange(
+                len(step.feasible_actions)
+            )
+            assert step.rollout_phase is RolloutPhase.NOISY_WINDOW
+            assert step.choice_mode is RolloutChoiceMode.EXPLORATION
+            assert step.chosen_action == step.feasible_actions[expected_index]
+
+
+def test_default_epsilon_window_contains_greedy_and_exploration_choices():
+    configuration = HybridConfiguration(num_flows=3, num_replicas=2)
+    decision = select_monte_carlo(IBGHybridPolicy(configuration), configuration)
+    modes = {
+        step.choice_mode
+        for evaluation in decision.evaluations
+        for sample in evaluation.samples
+        for step in sample.noisy_window_steps
+    }
+
+    assert modes == {
+        RolloutChoiceMode.GREEDY,
+        RolloutChoiceMode.EXPLORATION,
+    }
+
+
+def test_after_mc_window_every_remaining_flow_is_pure_updated_state_greedy():
+    configuration = HybridConfiguration(num_flows=4, num_replicas=2)
+    policy = IBGHybridPolicy(
+        configuration,
+        HybridPolicyParameters(
+            monte_carlo_noisy_future_flows=1,
+            monte_carlo_samples=2,
+            rollout_epsilon=1.0,
+        ),
+    )
+    admission = full_admission(configuration)
+    beliefs = uniform_beliefs(configuration)
+    links = full_link_costs(configuration)
+    decision = select_monte_carlo(
+        policy,
+        configuration,
+        admission=admission,
+        beliefs=beliefs,
+        link_costs=links,
+    )
+
+    assert decision.effective_mc_depth == 1
+    assert decision.tail_length == 2
+    for evaluation in decision.evaluations:
+        for sample in evaluation.samples:
+            assert len(sample.noisy_window_steps) == 1
+            assert len(sample.pure_greedy_tail_steps) == 2
+            for step in sample.pure_greedy_tail_steps:
+                direct = policy.select_greedy(
+                    state=step.state_before,
+                    admission=admission,
+                    beliefs=beliefs,
+                    known_pair_link_costs=links,
+                )
+                assert step.rollout_phase is RolloutPhase.PURE_GREEDY_TAIL
+                assert step.choice_mode is RolloutChoiceMode.GREEDY
+                assert step.chosen_action == step.greedy_action
+                assert step.chosen_action == direct.result.action
+                assert step.accounting == direct.accounting
+            assert sample.projected_final_state.total_assignments == 8
+
+
+def test_every_window_and_tail_step_rebuilds_phase2_at_updated_state():
+    configuration = HybridConfiguration(num_flows=4, num_replicas=2)
+    policy = IBGHybridPolicy(
+        configuration,
+        HybridPolicyParameters(
+            monte_carlo_noisy_future_flows=2,
+            monte_carlo_samples=1,
+            rollout_epsilon=1.0,
+        ),
+    )
+    admission = full_admission(configuration)
+    beliefs = uniform_beliefs(configuration)
+    links = full_link_costs(configuration)
+    decision = select_monte_carlo(
+        policy,
+        configuration,
+        admission=admission,
+        beliefs=beliefs,
+        link_costs=links,
+    )
+
+    for evaluation in decision.evaluations:
+        for step in evaluation.samples[0].continuation_steps:
+            direct = policy.select_greedy(
+                state=step.state_before,
+                admission=admission,
+                beliefs=beliefs,
+                known_pair_link_costs=links,
+            )
+            assert step.greedy_action == direct.result.action
+            assert step.feasible_actions == tuple(
+                scored.action for scored in direct.scored_actions
+            )
+            assert step.accounting == direct.accounting
+            assert evaluate_phase0_feasibility(
+                step.chosen_action,
+                step.state_before,
+                configuration,
+                admission,
+                links,
+            ).feasible
+
+
+def test_mc_never_calls_lookahead_or_recursively_calls_mc(monkeypatch):
+    configuration = HybridConfiguration(num_flows=3, num_replicas=1)
+    policy = IBGHybridPolicy(
+        configuration,
+        HybridPolicyParameters(monte_carlo_samples=1),
+    )
+    production_entry = policy.select_monte_carlo
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("MC invoked a forbidden strategic policy")
+
+    monkeypatch.setattr(policy, "select_lookahead", forbidden)
+    monkeypatch.setattr(policy, "select_monte_carlo", forbidden)
+    decision = production_entry(
+        state=GlobalLoadState.empty(configuration),
+        admission=full_admission(configuration),
+        beliefs=uniform_beliefs(configuration),
+        known_pair_link_costs=full_link_costs(configuration),
+        root_seed=2050,
+        slot_id=1,
+        decision_position=1,
+        flow_id=1,
+    )
+
+    assert decision.evaluations
+
+
+def test_branches_are_isolated_and_only_selected_focal_is_committed():
+    configuration = HybridConfiguration(num_flows=4, num_replicas=2)
+    state = GlobalLoadState.empty(configuration)
+    admission = full_admission(configuration)
+    beliefs = uniform_beliefs(configuration)
+    links = full_link_costs(configuration)
+    before = (dict(admission), dict(beliefs), dict(links))
+    policy = IBGHybridPolicy(
+        configuration,
+        HybridPolicyParameters(monte_carlo_samples=2),
+    )
+
+    first = select_monte_carlo(
+        policy,
+        configuration,
+        state=state,
+        admission=admission,
+        beliefs=beliefs,
+        link_costs=links,
+    )
+    second = select_monte_carlo(
+        policy,
+        configuration,
+        state=state,
+        admission=admission,
+        beliefs=beliefs,
+        link_costs=links,
+    )
+
+    assert first == second
+    assert state == GlobalLoadState.empty(configuration)
+    assert (admission, beliefs, links) == before
+    assert first.result.state_after == state.apply(
+        first.result.action, configuration
+    )
+    assert first.result.state_after.total_assignments == 2
+    assert all(
+        sample.projected_final_state.total_assignments == 8
+        for evaluation in first.evaluations
+        for sample in evaluation.samples
+    )
+
+
+def test_focal_value_is_evaluated_once_at_final_projected_load(monkeypatch):
     configuration = HybridConfiguration(num_flows=2, num_replicas=1)
     focal = action((1, 1), (2, 1))
     values = {
@@ -182,134 +511,39 @@ def test_phase4_uses_only_once_evaluated_focal_projected_value(monkeypatch):
         choice: (choice.stage, choice.replica)
         for choice in choices(configuration)
     }
-    link_costs = full_link_costs(configuration, cost=1_000.0)
-    link_costs[(focal.choices[0], focal.choices[1])] = 7.0
-    parameters = HybridPolicyParameters(
-        monte_carlo_samples=3,
-        rollout_epsilon=0.0,
-    )
+    links = full_link_costs(configuration, cost=1_000.0)
+    links[(focal.choices[0], focal.choices[1])] = 7.0
     monkeypatch.setattr(
         policy_module,
         "expected_stage_utility_from_belief",
         lambda belief, load: values[tuple(belief)][load - 1],
     )
-
     decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
+        IBGHybridPolicy(
+            configuration,
+            HybridPolicyParameters(monte_carlo_samples=3, rollout_epsilon=0.0),
+        ),
         configuration,
         beliefs=beliefs,
-        link_costs=link_costs,
+        link_costs=links,
     )
-    selected = decision.selected_evaluation
 
     assert decision.result.action == focal
     assert decision.result.state_after.loads == ((1,), (1,), (0,))
     assert all(
-        sample.state_after_focal.loads == ((1,), (1,), (0,))
-        and sample.projected_final_state.loads == ((2,), (2,), (0,))
-        and sample.continuation_actions == (focal,)
+        sample.projected_final_state.loads == ((2,), (2,), (0,))
         and sample.focal_value == pytest.approx(30.0 + 20.0 - 7.0)
-        for sample in selected.samples
+        for sample in decision.selected_evaluation.samples
     )
-    assert selected.mean_focal_value == pytest.approx(43.0)
-    assert selected.mean_focal_value != pytest.approx(173.0 + 43.0)
-    assert selected.mean_focal_value != pytest.approx(43.0 + 43.0)
+    assert decision.result.objective_value == pytest.approx(43.0)
 
 
-def test_phase4_epsilon_zero_is_always_phase2_greedy():
+def test_seed_derivation_is_fixed_reproducible_local_and_isolated():
     configuration = HybridConfiguration(num_flows=3, num_replicas=2)
-    parameters = HybridPolicyParameters(
-        monte_carlo_samples=4,
-        rollout_epsilon=0.0,
-    )
-
-    decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
+    policy = IBGHybridPolicy(
         configuration,
+        HybridPolicyParameters(monte_carlo_samples=4, rollout_epsilon=1.0),
     )
-
-    assert all(
-        step.choice_mode is RolloutChoiceMode.GREEDY
-        and step.chosen_action == step.greedy_action
-        for evaluation in decision.evaluations
-        for sample in evaluation.samples
-        for step in sample.continuation_steps
-    )
-
-
-def test_phase4_epsilon_one_uses_seeded_uniform_feasible_draws():
-    configuration = HybridConfiguration(num_flows=2, num_replicas=2)
-    parameters = HybridPolicyParameters(
-        lookahead_future_flows=1,
-        monte_carlo_samples=8,
-        rollout_epsilon=1.0,
-    )
-
-    decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
-        configuration,
-    )
-
-    for evaluation in decision.evaluations:
-        for sample in evaluation.samples:
-            step = sample.continuation_steps[0]
-            expected_index = Random(sample.derived_seed).randrange(
-                len(step.feasible_actions)
-            )
-            assert step.choice_mode is RolloutChoiceMode.EXPLORATION
-            assert step.chosen_action == step.feasible_actions[expected_index]
-
-
-def test_phase4_exploration_stays_inside_updated_feasible_pruned_pool():
-    configuration = HybridConfiguration(num_flows=2, num_replicas=6)
-    admission = full_admission(configuration)
-    admission[ReplicaChoice(1, 6)] = ReplicaAdmission(
-        ReplicaChoice(1, 6),
-        ready=False,
-        max_assigned_flows=20,
-    )
-    link_costs = full_link_costs(configuration)
-    del link_costs[(ReplicaChoice(1, 1), ReplicaChoice(2, 1))]
-    parameters = HybridPolicyParameters(
-        lookahead_future_flows=1,
-        monte_carlo_samples=5,
-        rollout_epsilon=1.0,
-    )
-
-    decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
-        configuration,
-        admission=admission,
-        link_costs=link_costs,
-    )
-
-    for evaluation in decision.evaluations:
-        for sample in evaluation.samples:
-            step = sample.continuation_steps[0]
-            selected = step.chosen_action
-            assert selected in step.feasible_actions
-            assert selected.stages[0] < selected.stages[1]
-            assert all(
-                choice in step.accounting.retained_by_stage[choice.stage - 1]
-                for choice in selected.choices
-            )
-            assert evaluate_phase0_feasibility(
-                selected,
-                step.state_before,
-                configuration,
-                admission,
-                link_costs,
-            ).feasible
-
-
-def test_phase4_seed_derivation_is_stable_isolated_and_local():
-    configuration = HybridConfiguration(num_flows=2, num_replicas=2)
-    parameters = HybridPolicyParameters(
-        lookahead_future_flows=1,
-        monte_carlo_samples=4,
-        rollout_epsilon=1.0,
-    )
-    policy = IBGHybridPolicy(configuration, parameters)
     random.seed(991)
     global_state_before = random.getstate()
 
@@ -318,19 +552,8 @@ def test_phase4_seed_derivation_is_stable_isolated_and_local():
     other_seed = select_monte_carlo(policy, configuration, root_seed=2051)
 
     assert first == second
+    assert first != other_seed
     assert random.getstate() == global_state_before
-    first_seeds = {
-        (evaluation.focal_action, sample.sample_index): sample.derived_seed
-        for evaluation in first.evaluations
-        for sample in evaluation.samples
-    }
-    other_seeds = {
-        (evaluation.focal_action, sample.sample_index): sample.derived_seed
-        for evaluation in other_seed.evaluations
-        for sample in evaluation.samples
-    }
-    assert len(set(first_seeds.values())) == len(first_seeds)
-    assert first_seeds != other_seeds
     assert all(
         sample.derived_seed == derive_rollout_seed(sample.seed_key)
         for evaluation in first.evaluations
@@ -338,140 +561,16 @@ def test_phase4_seed_derivation_is_stable_isolated_and_local():
     )
 
 
-def test_phase4_samples_and_inputs_do_not_leak_state():
-    configuration = HybridConfiguration(num_flows=3, num_replicas=2)
-    state = GlobalLoadState.empty(configuration)
-    admission = full_admission(configuration)
-    beliefs = uniform_beliefs(configuration)
-    link_costs = full_link_costs(configuration)
-    admission_before = dict(admission)
-    beliefs_before = dict(beliefs)
-    links_before = dict(link_costs)
-    parameters = HybridPolicyParameters(
-        monte_carlo_samples=4,
-        rollout_epsilon=1.0,
-    )
-
-    decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
-        configuration,
-        state=state,
-        admission=admission,
-        beliefs=beliefs,
-        link_costs=link_costs,
-    )
-
-    assert state == GlobalLoadState.empty(configuration)
-    assert admission == admission_before
-    assert beliefs == beliefs_before
-    assert link_costs == links_before
-    for evaluation in decision.evaluations:
-        expected_after_focal = state.apply(
-            evaluation.focal_action,
-            configuration,
-        )
-        for sample in evaluation.samples:
-            assert sample.state_after_focal == expected_after_focal
-            assert sample.projected_final_state.total_assignments == 6
-
-
-def test_phase4_recomputes_phase2_at_every_updated_rollout_state():
-    configuration = HybridConfiguration(num_flows=3, num_replicas=1)
-    parameters = HybridPolicyParameters(
-        monte_carlo_samples=2,
-        rollout_epsilon=0.0,
-    )
-    policy = IBGHybridPolicy(configuration, parameters)
-    admission = full_admission(configuration)
-    beliefs = uniform_beliefs(configuration)
-    link_costs = full_link_costs(configuration)
-
-    decision = select_monte_carlo(
-        policy,
-        configuration,
-        admission=admission,
-        beliefs=beliefs,
-        link_costs=link_costs,
-    )
-
-    for evaluation in decision.evaluations:
-        for sample in evaluation.samples:
-            for step in sample.continuation_steps:
-                direct = policy.select_greedy(
-                    state=step.state_before,
-                    admission=admission,
-                    beliefs=beliefs,
-                    known_pair_link_costs=link_costs,
-                )
-                assert step.greedy_action == direct.result.action
-                assert step.feasible_actions == tuple(
-                    scored.action for scored in direct.scored_actions
-                )
-                assert step.accounting == direct.accounting
-
-
-def test_phase4_canonical_ties_cover_greedy_steps_and_focal_mean(monkeypatch):
+def test_all_dead_end_samples_reject_every_shortlisted_candidate():
     configuration = HybridConfiguration(num_flows=2, num_replicas=1)
-    canonical = action((1, 1), (2, 1))
-    parameters = HybridPolicyParameters(
-        lookahead_future_flows=1,
-        monte_carlo_samples=3,
-        rollout_epsilon=0.0,
-    )
-    monkeypatch.setattr(
-        policy_module,
-        "expected_stage_utility_from_belief",
-        lambda _belief, _load: 1.0,
-    )
-    beliefs = {choice: (1.0,) for choice in choices(configuration)}
-
-    decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
+    policy = IBGHybridPolicy(
         configuration,
-        beliefs=beliefs,
+        HybridPolicyParameters(monte_carlo_samples=4),
     )
-
-    assert decision.result.action == canonical
-    assert all(
-        sample.continuation_actions == (canonical,)
-        for evaluation in decision.evaluations
-        for sample in evaluation.samples
-    )
-
-
-def test_phase4_partial_failures_are_excluded_from_the_sample_mean():
-    configuration = HybridConfiguration(num_flows=3, num_replicas=2)
-    parameters = HybridPolicyParameters(
-        monte_carlo_samples=20,
-        rollout_epsilon=1.0,
-    )
-
-    decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
-        configuration,
-        admission=full_admission(configuration, capacity=1),
-        root_seed=2050,
-    )
-    partial = next(
-        evaluation
-        for evaluation in decision.evaluations
-        if evaluation.failed_samples
-    )
-
-    assert 0 < partial.completed_samples < partial.requested_samples
-    assert partial.failed_sample_count > 0
-    assert partial.mean_focal_value == fsum(
-        sample.focal_value for sample in partial.samples
-    ) / partial.completed_samples
-
-
-def test_phase4_all_dead_end_samples_reject_every_candidate():
-    configuration = HybridConfiguration(num_flows=2, num_replicas=1)
-    parameters = HybridPolicyParameters(monte_carlo_samples=4)
 
     with pytest.raises(NoFeasibleMonteCarloAction) as raised:
         select_monte_carlo(
-            IBGHybridPolicy(configuration, parameters),
+            policy,
             configuration,
             admission=full_admission(configuration, capacity=1),
         )
@@ -479,138 +578,75 @@ def test_phase4_all_dead_end_samples_reject_every_candidate():
     assert len(raised.value.rejected_candidates) == 3
     assert all(
         len(candidate.failed_samples) == 4
-        and all(
-            failure.completed_steps == ()
-            and failure.failing_state == failure.state_after_focal
-            for failure in candidate.failed_samples
-        )
         for candidate in raised.value.rejected_candidates
     )
 
 
-def test_phase4_epsilon_zero_agrees_with_phase3_lookahead():
-    configuration = HybridConfiguration(num_flows=3, num_replicas=2)
+def test_historical_all_root_method_remains_explicit_reference_only():
+    configuration = HybridConfiguration(num_flows=3, num_replicas=6)
     parameters = HybridPolicyParameters(
-        monte_carlo_samples=4,
+        lookahead_future_flows=2,
+        monte_carlo_noisy_future_flows=10,
+        monte_carlo_samples=1,
         rollout_epsilon=0.0,
     )
     policy = IBGHybridPolicy(configuration, parameters)
-    admission = full_admission(configuration)
-    beliefs = uniform_beliefs(configuration)
-    link_costs = full_link_costs(configuration)
-    state = GlobalLoadState.empty(configuration)
 
-    lookahead = policy.select_lookahead(
-        state=state,
-        admission=admission,
-        beliefs=beliefs,
-        known_pair_link_costs=link_costs,
-    )
-    monte_carlo = select_monte_carlo(
-        policy,
-        configuration,
-        state=state,
-        admission=admission,
-        beliefs=beliefs,
-        link_costs=link_costs,
-    )
+    production = select_monte_carlo(policy, configuration)
+    historical = reference_monte_carlo(policy, configuration)
 
-    assert monte_carlo.result.action == lookahead.result.action
-    assert monte_carlo.result.objective_value == pytest.approx(
-        lookahead.result.objective_value
-    )
-    lookahead_by_action = {
-        evaluation.focal_action: evaluation
-        for evaluation in lookahead.evaluations
-    }
-    assert all(
-        sample.continuation_actions
-        == lookahead_by_action[evaluation.focal_action].continuation_actions
-        and sample.focal_value
-        == pytest.approx(
-            lookahead_by_action[evaluation.focal_action].focal_value
+    assert production.root_mode is MonteCarloRootMode.PRODUCTION_TOP_FIVE
+    assert len(production.sampled_roots) == 5
+    assert production.requested_mc_depth == 10
+    assert historical.root_mode is MonteCarloRootMode.HISTORICAL_ALL_FEASIBLE
+    assert len(historical.sampled_roots) == 75
+    assert historical.excluded_roots == ()
+    assert historical.requested_mc_depth == 2
+    assert historical.effective_mc_depth == 2
+    assert historical.tail_length == 0
+
+
+def test_automatic_slot_path_still_cannot_select_mc():
+    selected = select_pipeline_path(
+        HybridActivationContext(
+            contention_ratio=1.0,
+            maximum_normalized_belief_entropy=1.0,
+            high_priority=True,
         )
-        for evaluation in monte_carlo.evaluations
-        for sample in evaluation.samples
     )
 
-
-def test_phase4_d0_matches_tiny_oracle_when_objectives_are_equivalent():
-    configuration = HybridConfiguration(num_flows=1, num_replicas=2)
-    parameters = HybridPolicyParameters(
-        lookahead_future_flows=0,
-        monte_carlo_samples=3,
-    )
-    state = GlobalLoadState.empty(configuration)
-    admission = full_admission(configuration)
-    beliefs = uniform_beliefs(
-        configuration,
-        belief=(0.0, 0.0, 1.0, 0.0),
-    )
-    beliefs[ReplicaChoice(1, 2)] = (0.0, 0.0, 0.0, 1.0)
-    link_costs = full_link_costs(configuration, cost=4.0)
-    link_costs[(ReplicaChoice(1, 2), ReplicaChoice(3, 1))] = 1.0
-
-    decision = select_monte_carlo(
-        IBGHybridPolicy(configuration, parameters),
-        configuration,
-        state=state,
-        admission=admission,
-        beliefs=beliefs,
-        link_costs=link_costs,
-    )
-
-    def immediate_value(candidate, current_state):
-        projected = current_state.apply(candidate, configuration)
-        return (
-            sum(
-                expected_stage_utility_from_belief(
-                    beliefs[choice],
-                    projected.load_for(choice),
-                )
-                for choice in candidate.choices
-            )
-            - link_costs[(candidate.choices[0], candidate.choices[1])]
-        )
-
-    oracle = solve_tiny_exhaustive(
-        configuration,
-        state,
-        remaining_flows=1,
-        action_value=immediate_value,
-        feasibility_check=lambda candidate, current_state: (
-            evaluate_phase0_feasibility(
-                candidate,
-                current_state,
-                configuration,
-                admission,
-                link_costs,
-            )
-        ),
-    )
-
-    assert decision.result.action == oracle.action
-    assert decision.result.objective_value == pytest.approx(
-        oracle.objective_value
-    )
+    assert selected is PipelinePath.LOOKAHEAD
 
 
-def test_phase4_20x3x10_s50_d2_boundary_completes_with_seeded_detail():
+def test_seeded_20x3x10_production_mc_boundary_reports_local_runtime():
     configuration = HybridConfiguration()
+    started = time.perf_counter()
     decision = select_monte_carlo(
         IBGHybridPolicy(configuration),
         configuration,
         admission=full_admission(configuration, capacity=20),
     )
+    elapsed_seconds = time.perf_counter() - started
 
-    assert decision.requested_samples == 50
     assert decision.focal_accounting.available_actions == 300
     assert decision.focal_accounting.feasible_pruned_actions == 75
-    assert len(decision.evaluations) == 75
-    assert decision.rejected_candidates == ()
+    assert decision.full_root_count == 75
+    assert len(decision.sampled_roots) == 5
+    assert decision.excluded_root_count == 70
+    assert decision.requested_samples == 50
+    assert decision.requested_mc_depth == 10
+    assert decision.effective_mc_depth == 10
+    assert decision.tail_length == 9
+    assert len(decision.evaluations) == 5
     assert all(
         evaluation.completed_samples == 50
         and evaluation.failed_sample_count == 0
-        and evaluation.effective_depth == 2
+        and all(
+            len(sample.noisy_window_steps) == 10
+            and len(sample.pure_greedy_tail_steps) == 9
+            and sample.projected_final_state.total_assignments == 40
+            for sample in evaluation.samples
+        )
         for evaluation in decision.evaluations
     )
+    assert elapsed_seconds >= 0.0

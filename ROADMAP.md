@@ -1557,3 +1557,137 @@ coefficients dominate the observed solver-time difference, compare benchmark
 states with runtime links, runtime states with benchmark links, and the full
 benchmark profile at equal dimensions/cutoff. Do not treat this diagnostic as
 latency calibration or alter the normal runtime profile by default.
+
+## Future IBG-Hybrid Kernel rollout/resource phases
+
+Evaluated: 2026-08-06. Not implemented.
+
+### Infrastructure Phase 0: freeze ownership and reuse boundaries
+
+Specify Hybrid-owned names, labels, profile schema, Ready-only discovery,
+controller lifecycle, and image ownership. Record the existing one-worker
+processor/two-worker forwarder split as reused infrastructure, not new work.
+No deployment or image build belongs to this phase.
+
+### Infrastructure Phase 1: Hybrid L=2 route execution
+
+Add and test the versioned exactly-two-hop route contract around the existing
+processor/forwarder split. Support noncontiguous routes and routes beginning
+after stage 1. Prove that the skipped stage receives no request, observation,
+pair endpoint, learning input, or metric contribution.
+
+### Infrastructure Phase 2: Hybrid-owned Kubernetes boundary
+
+Add the separate namespace, RBAC, labels, ConfigMaps, profiles, Services,
+StatefulSets, flow generator, Ready discovery, and controller adapter. Require
+complete placement and exact Ready ordinal coverage before traffic. Do not
+share mutable ownership with Exact or MILP.
+
+### Infrastructure Phase 3: lean Hybrid image split
+
+Create separate service and controller images. Prove the service image excludes
+controller-only policy dependencies and that the controller contains the
+Hybrid policy/learning stack without unnecessary MILP solver dependencies.
+Preserve ports, workers, clients, keep-alive, latency, observation, and
+telemetry behavior.
+
+### Infrastructure Phase 4: first small live Kernel gate
+
+Run only a separately approved small topology. Verify routing, complete
+two-observation/one-pair telemetry per flow, skipped-stage absence, belief
+retention across slots, imports, readiness, restarts, and pure/Kernel semantic
+parity before adding rollout optimizations.
+
+### Infrastructure Phase 5: bounded rollout and existing-count preservation
+
+Add deterministic all-stage rollout batches. Preserve the existing consistent
+replica count during scale-up, add only missing ordinals, reject partial or
+inconsistent StatefulSet ownership, and finish at the explicitly requested
+replica count.
+
+### Infrastructure Phase 6: append-only runtime profiles
+
+Allow new ordinal profile entries without rolling existing Pods. Reject any
+change to a running identity's runtime profile, prove existing Pod UID
+preservation, and keep learned beliefs exclusively in controller state.
+
+### Infrastructure Phase 7: Hybrid-specific resource evidence
+
+Measure the Hybrid service image before accepting the candidate processor
+50m/1 CPU and 64Mi/256Mi memory declaration. Preserve the forwarder at two
+workers and 25m/1 CPU, 128Mi/256Mi unless new separately authorized evidence
+supports a change. Record cgroup memory, CPU throttling, probes, restarts,
+OOM/eviction, rollout time, and controller resource use.
+
+### Infrastructure Phase 8: incremental scale validation
+
+Increase topology only one explicitly approved step at a time. Choose each
+next scale from the preceding phase's node/Pod/controller evidence; there is no
+pre-authorized final-scale readiness gate. If Monte Carlo is later reopened, size
+its controller CPU/memory/deadline separately without retuning replica services
+or changing policy semantics.
+
+No implementation phase begins from this evaluation alone; it requires a new
+explicit user authorization.
+
+## IBG-Hybrid MC root-shortlist correction
+
+Next authorized pure-algorithm task. Updated: 2026-08-06.
+
+Replace the planned production `Q=10` MC root shortlist with the professor's
+top-five complete-route shortlist. Preserve existing per-stage `C=5` pruning,
+rank the resulting complete feasible action pool by immediate joint score, and
+give only the canonical top five roots `S=50` independent epsilon-greedy
+rollouts. Keep `D=2`. Future rollout flows use the current updated-state Phase
+2 greedy/pruned policy with its seeded epsilon exploration; they never invoke
+deterministic lookahead. Preserve the historical all-feasible-root MC as a
+test/reference path and keep automatic MC disabled.
+
+Acceptance requires root-shortlist, fewer-than-five, outside-shortlist,
+candidate-specific sample-count, seed, canonical-tie, separate
+`D_LOOKAHEAD=2` and `D_MC=10` behavior, D_MC clamping, updated-state
+greedy/epsilon MC-window behavior, pure-greedy completion-tail behavior,
+no-lookahead, branch-isolation, focal-only-value, and fixed-seed 20x3x10
+sequential-runtime tests. This task is pure Python;
+Kubernetes, containers, images, rollout batching, resource tuning,
+append-only profiles, nodes, and traffic remain out of scope.
+
+The MC branch must not terminate its projected state at `D_MC`. After the
+noisy MC window it completes the remaining branch arrivals through pure greedy
+Phase 2 choices, so their congestion contributes to the focal value. This tail
+is an approximation only; it is not normal Hybrid lookahead or another MC
+decision.
+
+## IBG-Hybrid rollout/resource phases postponed
+
+The previously evaluated Hybrid infrastructure phases are retained as future
+reference only. Do not begin any of them now. Reopen them during later Hybrid
+Kubernetes/node implementation, in the recorded order and one separately
+authorized phase at a time.
+
+## IBG-Hybrid professor-baseline MC correction completed
+
+Completed: 2026-08-06.
+
+The pure-Python production `select_monte_carlo` now uses the canonical top five
+complete roots from the unchanged Phase 2 `C=5` per-stage pruned pool. Every
+retained root receives `S=50` independent samples. `D_MC=10` owns only the
+epsilon-greedy window; a pure updated-state greedy tail completes the projected
+slot. `D_LOOKAHEAD=2` remains independent. The old all-root/truncated method is
+available only through an explicitly named reference boundary, and automatic
+slot orchestration still cannot select MC.
+
+Acceptance evidence includes canonical fifth-root ties, fewer-than-five pools,
+excluded-root absence, exact per-root sample counts, depth independence and
+clamping, epsilon-window and no-noise-tail behavior, updated-state Phase 2
+accounting, forbidden lookahead/recursive-MC calls, branch isolation,
+focal-only scoring, fixed seeds, reference-path separation, and a sequential
+20-flow/3-stage/10-replica production-boundary run. The local explicit MC call
+accounted for 75 roots, sampled five, excluded 70, ran 50 samples per root with
+10 noisy plus nine tail arrivals, and completed in 11.489301 seconds. This is
+local solver evidence, not a real-time guarantee.
+
+Next work is not implicitly authorized. MC automatic activation and
+parallelism remain deferred. All previously evaluated Hybrid Kubernetes,
+node, image, resource, rollout, append-only-profile, and live-traffic phases
+remain postponed until explicitly reopened one phase at a time.

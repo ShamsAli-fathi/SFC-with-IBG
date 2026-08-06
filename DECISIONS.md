@@ -1132,3 +1132,122 @@ Updated: 2026-08-03.
   the effect to one coefficient without a separate ablation experiment.
 - Use synthetic-scale only for a controlled same-input comparison. Keep normal
   runtime mode and future evidence-backed planning-latency calibration separate.
+
+## IBG-Hybrid infrastructure feasibility decisions
+
+Updated: 2026-08-06. Evaluation only.
+
+- Accept the MILP deployment-ownership pattern as the required direction for
+  a future Hybrid Kernel path, but require a separate Hybrid namespace,
+  manifests, labels, ConfigMaps, profiles, discovery, controller, images, and
+  rollout state. Do not share mutable deployment ownership with Exact or MILP.
+- Accept the service/controller image split as reusable architecture. A Hybrid
+  service image must contain only replica/forwarding/flow-generator runtime
+  dependencies; a Hybrid controller image must contain the Hybrid policy and
+  learning stack. Do not carry SciPy/HiGHS into either image without an actual
+  Hybrid dependency.
+- Preserve the algorithm-neutral processor/forwarder boundary: one private
+  processor worker on 8081, two public-forwarder workers on 8080, separate
+  clients, and the active keep-alive behavior. Require a versioned Hybrid
+  exactly-two-hop validator supporting noncontiguous selected stages and routes
+  beginning after stage 1. Do not use Exact's contiguous validation or import
+  MILP's controller/solver behavior.
+- Treat the MILP processor memory reduction to 64Mi request/256Mi limit as a
+  candidate requiring Hybrid-specific evidence. Preserve 50m/1 CPU and the
+  existing forwarder resources/workers as the initial baseline. No further
+  resource reduction is accepted by this evaluation.
+- Accept bounded all-stage batching, existing-count preservation, and
+  append-only profile validation as reusable launcher behaviors. Scale-up must
+  add only missing ordinals, keep existing identity profiles unchanged, reject
+  drift, and wait for complete Ready coverage before starting Hybrid policy
+  execution.
+- Keep Hybrid beliefs/controller state out of Pod runtime profiles. Hidden
+  state and observation-seed configuration may be distributed to processors;
+  beliefs remain controller-private learning state and must persist correctly
+  across Hybrid slots.
+- Reject transfer of MILP's one-centralized-solve lifecycle, clairvoyant true
+  state, assigned objective, SciPy/HiGHS dependency, incumbent handling, or
+  one-slot controller semantics. Hybrid remains belief-driven, sequential
+  within placement, and iterative across learning slots.
+- Reject one combined final-scale infrastructure readiness gate. Each future
+  Hybrid infrastructure phase requires separate authorization and acceptance;
+  live scale increases occur only after the immediately preceding phase passes.
+  Future Monte Carlo controller cost remains separate and does not alter
+  replica resources or outcomes.
+- This evaluation authorizes no code, manifest, image, deployment, resource,
+  routing, algorithm, latency, learning, utility, SLA, or telemetry change.
+
+## IBG-Hybrid MC professor-baseline decision
+
+Updated: 2026-08-06. This supersedes the earlier planned `Q=10` production-MC
+shortlist; retain that decision as historical context only.
+
+- For production MC root selection, rank the complete feasible pruned action
+  pool by its Phase 2 immediate joint score and canonical ordering, then retain
+  the top five complete routes. If fewer than five routes are feasible, retain
+  all of them. Candidates outside that set receive no production MC rollouts.
+- Preserve current per-stage `C=5` pruning. The professor's five-route MC
+  shortlist is a different quantity and must receive a distinct explicit name
+  in code; it must not weaken or redefine per-stage pruning.
+- Retain `S=50` independent candidate-specific rollouts and keep `D=2` as the
+  accepted project MC horizon. Do not change D as part of this correction.
+- Define MC noise solely as seeded epsilon-greedy future action choice:
+  normally the updated-state Phase 2 canonical greedy action, occasionally a
+  seeded uniform action from that same updated feasible/pruned pool. Do not
+  call deterministic lookahead in a rollout and do not use hidden true state,
+  physical/observation randomness, or measured pair outcomes for planning.
+- Score and average the focal flow's projected final utility only, deducting
+  its planning link exactly once. Preserve deterministic root ties and commit
+  only the final selected focal action.
+- Keep the historical all-feasible-root Phase 4 MC implementation as a named
+  reference/test boundary. Keep automatic MC disabled; a future uncertainty
+  event/activation decision is separate.
+- Postpone every evaluated Hybrid rollout/resource optimization until the
+  Hybrid Kubernetes/node implementation is explicitly reopened. This MC work
+  authorizes no image, manifest, cluster, node, resource, batching, profile,
+  or traffic change.
+
+### IBG-Hybrid separate MC-depth decision
+
+Updated: 2026-08-06. This supersedes the preceding statement that `D=2` is the
+complete MC horizon.
+
+- Split the overloaded depth meaning into explicit `D_LOOKAHEAD=2` and
+  `D_MC=10` controls. `D_LOOKAHEAD` belongs only to normal deterministic
+  Hybrid lookahead and remains unchanged.
+- `D_MC` covers the first ten future simulated arrivals after a tentative MC
+  focal route, clamped to the actual remaining arrivals. Each one uses the
+  updated-state Phase 2 greedy policy with seeded epsilon noise.
+- Complete every remaining hypothetical flow after that MC window with the
+  pure canonical Phase 2 greedy policy. It has no epsilon noise, no
+  deterministic lookahead, and no recursive MC. Its committed branch loads
+  remain part of the focal route's final projected utility.
+- Record both configured/effective depths in MC decision and sample detail.
+  Do not retain an ambiguous shared depth field or silently alter
+  `D_LOOKAHEAD` while changing `D_MC`.
+
+## IBG-Hybrid professor-baseline MC implementation decision
+
+Updated: 2026-08-06.
+
+- Accept `ibg-hybrid-policy-contract-v5` as the active Hybrid policy contract.
+- Keep per-stage pruning fixed at `C=5`; it continues to produce at most 75
+  complete roots at three stages and `L=2`.
+- Fix the production MC root shortlist at five complete routes, ranked by
+  existing immediate joint score and canonical ties. Do not expose the old
+  `Q=10` behavior and do not reinterpret per-stage `C` as this shortlist.
+- Keep `S=50`, epsilon `0.10`, focal-only final-load scoring, and one configured
+  planning-link deduction. Roots outside the shortlist receive no production
+  samples and cannot be selected.
+- Keep `D_LOOKAHEAD=2` and `D_MC=10` as independent parameters. The first
+  clamped `D_MC` future arrivals use updated-state epsilon-greedy Phase 2;
+  every remaining branch arrival uses updated-state pure canonical Phase 2
+  greedy so its congestion still affects focal utility.
+- Forbid deterministic lookahead and recursive MC everywhere inside an MC
+  branch. The only stochastic choice is seeded uniform exploration from the
+  current feasible/pruned action pool during the MC window.
+- Retain the former all-feasible-root, lookahead-depth MC only through the
+  explicitly named historical/reference method. It is not production policy.
+- Keep automatic slot orchestration on deterministic lookahead. MC activation,
+  parallelism, Kubernetes/node rollout work, and all infrastructure changes
+  remain deferred and require separate authorization.

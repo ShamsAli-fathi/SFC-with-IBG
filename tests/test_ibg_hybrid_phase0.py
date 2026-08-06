@@ -8,11 +8,14 @@ from IBG_Hybrid import (
 )
 from IBG_Hybrid.phase0_contract import (
     DEFAULT_HYBRID_POLICY_PARAMETERS,
+    D_LOOKAHEAD,
+    D_MC,
     HYBRID_BUDGET_MODE,
     HYBRID_COMPLETE_ACTION_MODE,
     HYBRID_FLOW_ORDER_SEED_SCHEME,
     HYBRID_LINK_WEIGHT_UTILITY_PER_MS,
     HYBRID_LOOKAHEAD_VALUE_MODE,
+    HYBRID_MC_ROOT_SHORTLIST_SIZE,
     HYBRID_NODE_RESOURCE_MODE,
     HYBRID_PAIR_LINK_MODE,
     HYBRID_PLANNING_LINK_UNIT,
@@ -22,6 +25,7 @@ from IBG_Hybrid.phase0_contract import (
     HYBRID_ROLLOUT_KERNEL,
     HYBRID_ROLLOUT_SEED_SCHEME,
     HybridActivationContext,
+    HybridPolicyParameters,
     PipelinePath,
     ReplicaAdmission,
     RolloutSeedKey,
@@ -29,7 +33,8 @@ from IBG_Hybrid.phase0_contract import (
     derive_rollout_seed,
     evaluate_phase0_feasibility,
     focal_utility_at_projected_loads,
-    future_flows_to_simulate,
+    lookahead_flows_to_simulate,
+    monte_carlo_continuation_lengths,
     maximum_contention_ratio,
     maximum_normalized_belief_entropy,
     project_focal_and_continuation,
@@ -48,7 +53,7 @@ def action(*pairs):
 def test_phase0_defaults_and_units_are_frozen():
     parameters = DEFAULT_HYBRID_POLICY_PARAMETERS
 
-    assert HYBRID_POLICY_CONTRACT_VERSION == "ibg-hybrid-policy-contract-v4"
+    assert HYBRID_POLICY_CONTRACT_VERSION == "ibg-hybrid-policy-contract-v5"
     assert HYBRID_BUDGET_MODE == "exact-stage-cardinality-v1"
     assert HYBRID_REPLICA_CAPACITY_UNIT == "assigned-flows-per-slot"
     assert HYBRID_NODE_RESOURCE_MODE == "deferred-versioned-per-flow-demands"
@@ -59,10 +64,15 @@ def test_phase0_defaults_and_units_are_frozen():
     assert HYBRID_PRUNING_SCORE_MODE == "belief-load-aware-stage-utility-v1"
     assert HYBRID_COMPLETE_ACTION_MODE == "enumerate-all-pruned-l2-actions-v1"
     assert HYBRID_LOOKAHEAD_VALUE_MODE == "focal-final-load-once-v1"
-    assert HYBRID_ROLLOUT_KERNEL == "epsilon-greedy-pruned-joint-v1"
+    assert (
+        HYBRID_ROLLOUT_KERNEL
+        == "epsilon-greedy-window-pure-greedy-tail-v2"
+    )
     assert HYBRID_PAIR_LINK_MODE == "known-directed-selected-pair-v1"
     assert parameters.candidates_per_stage == 5
-    assert parameters.lookahead_future_flows == 2
+    assert D_LOOKAHEAD == parameters.lookahead_future_flows == 2
+    assert D_MC == parameters.monte_carlo_noisy_future_flows == 10
+    assert HYBRID_MC_ROOT_SHORTLIST_SIZE == 5
     assert parameters.monte_carlo_samples == 50
     assert parameters.rollout_epsilon == pytest.approx(0.10)
     assert parameters.lookahead_contention_threshold == pytest.approx(0.70)
@@ -96,10 +106,24 @@ def test_pruning_ties_use_lowest_replica_id():
 
 
 def test_d_counts_future_flows_after_the_focal_action():
-    assert future_flows_to_simulate(0) == 0
-    assert future_flows_to_simulate(1) == 1
-    assert future_flows_to_simulate(2) == 2
-    assert future_flows_to_simulate(8) == 2
+    assert lookahead_flows_to_simulate(0) == 0
+    assert lookahead_flows_to_simulate(1) == 1
+    assert lookahead_flows_to_simulate(2) == 2
+    assert lookahead_flows_to_simulate(8) == 2
+    assert monte_carlo_continuation_lengths(8) == (8, 0)
+    assert monte_carlo_continuation_lengths(15) == (10, 5)
+
+
+def test_mc_depth_validation_is_independent_from_lookahead_depth():
+    with pytest.raises(ValueError, match="monte_carlo_noisy_future_flows"):
+        HybridPolicyParameters(monte_carlo_noisy_future_flows=-1)
+
+    parameters = HybridPolicyParameters(
+        lookahead_future_flows=1,
+        monte_carlo_noisy_future_flows=7,
+    )
+    assert lookahead_flows_to_simulate(20, parameters) == 1
+    assert monte_carlo_continuation_lengths(20, parameters) == (7, 13)
 
 
 def test_core_pipeline_always_selects_pruned_lookahead():

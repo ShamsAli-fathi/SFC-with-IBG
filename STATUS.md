@@ -1620,3 +1620,104 @@ The available temporary remedy is `--planner-profile synthetic-scale` with a
 matching `--profile-seed`, which gives pure and Kernel paths the benchmark's
 complete planner table and matching Pod states. Normal mode remains untouched;
 the generated/deterministic tables are not calibrated real network latency.
+
+## IBG-Hybrid rollout/resource feasibility evaluation
+
+Updated: 2026-08-06. Analysis complete; implementation not started.
+
+The MILP rollout/resource work can inform a future Hybrid Kernel path, but no
+MILP deployment or controller behavior should be copied wholesale. Recommended
+reuse is: Hybrid-owned deployment resources, a lean service/controller image
+split, the existing one-worker processor/two-worker forwarder boundary,
+bounded all-stage rollout batches, existing-replica preservation, and strict
+append-only profile validation.
+
+Hybrid-specific adaptation is mandatory for the L=2 route contract,
+noncontiguous routes, routes beginning after stage 1, skipped-stage bypass,
+belief-private sequential placement, belief retention across slots, and the
+controller's lookahead cost. MILP's clairvoyant one-solve/one-slot lifecycle and
+SciPy/HiGHS dependency are not transferable.
+
+The 64Mi request/256Mi limit for each private processor is only a candidate.
+It needs Hybrid-image cgroup and live traffic evidence. The public forwarder
+baseline remains two workers, 25m CPU/128Mi request, and 1 CPU/256Mi limit.
+
+Future work is now split into separately authorized phases: ownership/reuse
+contracts; L=2 route execution; Hybrid-owned Kubernetes resources; lean image
+split; a first small live gate; bounded rollout; append-only profiles;
+Hybrid-specific resource evidence; and incremental scale validation. No final
+scale readiness gate is pre-authorized. Each phase must pass before the user
+chooses the next one. Evidence must cover Ready ordinal completeness, rollout
+time, Pod UID preservation, profile-drift rejection, restarts/OOM/eviction,
+cgroup CPU/memory, controller time/memory, exact two-hop telemetry,
+skipped-stage absence, belief retention, and unchanged Hybrid placement,
+learning, utility, and SLA semantics.
+
+This evaluation changed only the four top-level handoff files. It performed no
+build, cluster start, deployment, live traffic, image, manifest, runtime,
+resource, algorithm, or outcome change.
+
+## IBG-Hybrid MC professor-baseline update
+
+Updated: 2026-08-06. Next task: pure MC redesign only.
+
+The old future production-MC `Q=10` shortlist is superseded by the professor's
+top-five complete-route shortlist. Existing `C=5` stays as per-stage pruning;
+after that pruning yields the complete feasible route pool, MC ranks it by
+immediate joint score and retains only the canonical top five roots. Each
+retained root receives `S=50` independent rollouts. `D=2` remains unchanged.
+Future simulated flows use seeded epsilon-greedy Phase 2 choices—normally
+greedy and occasionally a random current feasible/pruned action. That action
+randomness is the intended MC noise. The focal flow's final projected utility
+is averaged; automatic MC remains disabled.
+
+The historical all-feasible-root MC remains reference/test-only. The corrected
+production MC path has not yet been implemented or runtime-measured.
+
+## IBG-Hybrid rollout/resource work postponed
+
+All Hybrid rollout/node optimization phases are postponed while the pure MC
+correction is completed. No Hybrid image split, Kubernetes manifest, namespace,
+controller, resource tuning, batching, append-only-profile, cluster, node, or
+traffic work is authorized now. Those phases will be revisited during later
+Hybrid Kubernetes/node implementation, one phase at a time.
+
+### IBG-Hybrid MC-depth correction
+
+Updated: 2026-08-06. Pending implementation.
+
+The prior shared MC `D=2` statement is superseded. Normal Hybrid remains
+`D_LOOKAHEAD=2`. MC receives its own `D_MC=10`: the first ten later simulated
+flows use updated-state seeded greedy-with-epsilon-noise selection. Any still
+later branch flows use pure canonical greedy only, without noise, lookahead,
+or recursive MC; their load still affects the focal flow's projected value.
+Both configured and effective depths require distinct provenance and tests.
+
+## IBG-Hybrid professor-baseline MC correction complete
+
+Updated: 2026-08-06.
+
+The active pure policy contract is now `ibg-hybrid-policy-contract-v5`.
+Production MC preserves Phase 2 per-stage `C=5` pruning, ranks the resulting
+complete feasible roots, and runs exactly 50 independent rollouts for only the
+canonical top five routes. At the default boundary this means 75 roots are
+accounted for, five sampled, and 70 excluded.
+
+Normal lookahead remains `D_LOOKAHEAD=2`. MC independently uses `D_MC=10` for
+its seeded epsilon-greedy window and then pure updated-state greedy for every
+remaining branch flow. The structured result records root ranking/scores,
+sampled/excluded roots, depths, tail, seeds, steps, Phase 2 accounting, and
+failures. The former all-root truncated MC is reference-only. Automatic slot
+orchestration remains deterministic lookahead and cannot select MC.
+
+Validation currently passes 82 Hybrid Phase 0--5 tests and 45 relevant
+unchanged Exact characterization, latency, runner, adapter, Kubernetes-adapter,
+and learning-signal regressions. The seeded sequential 20x3x10 explicit MC
+boundary selected route `(1,1)->(2,4)`, reported focal objective `170.813750`,
+and completed locally in 11.489301 seconds with 10 noisy and nine pure-greedy
+tail actions per completed branch. This is local evidence only.
+
+No work occurred under `IBG/` or `MILP/`, and no Kubernetes, container, image,
+node, rollout, traffic, learning, latency, utility, SLA, diagnostics, replay,
+netem, or reporting behavior changed. Hybrid infrastructure optimizations,
+automatic MC activation, and parallel MC remain deferred.
