@@ -57,13 +57,18 @@ class HybridFlow:
 
 @dataclass(frozen=True)
 class HybridReplica:
-    """Known metadata, current belief, and simulation-only hidden state."""
+    """Known metadata, current belief, and optional simulation-only state.
+
+    Kernel controller inputs leave ``hidden_state`` unset.  The field exists
+    only for the in-process simulation adapter and is never part of the policy
+    maps constructed by the slot runner.
+    """
 
     choice: ReplicaChoice
     belief: BeliefVector
     ready: bool
     max_assigned_flows: int
-    hidden_state: int
+    hidden_state: int | None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "belief", _normalize_belief(self.belief))
@@ -76,13 +81,14 @@ class HybridReplica:
             raise TypeError("max_assigned_flows must be an integer")
         if self.max_assigned_flows < 1:
             raise ValueError("max_assigned_flows must be positive")
-        if (
-            isinstance(self.hidden_state, bool)
-            or not isinstance(self.hidden_state, Integral)
-        ):
-            raise TypeError("hidden_state must be an integer")
-        if self.hidden_state not in (1, 2, 3, 4):
-            raise ValueError("hidden_state must be one of 1, 2, 3, or 4")
+        if self.hidden_state is not None:
+            if (
+                isinstance(self.hidden_state, bool)
+                or not isinstance(self.hidden_state, Integral)
+            ):
+                raise TypeError("hidden_state must be an integer or None")
+            if self.hidden_state not in (1, 2, 3, 4):
+                raise ValueError("hidden_state must be one of 1, 2, 3, or 4")
 
 
 @dataclass(frozen=True, order=True)

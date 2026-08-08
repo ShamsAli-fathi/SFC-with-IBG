@@ -1,0 +1,30 @@
+FROM mcr.microsoft.com/azurelinux/base/python:3.12
+
+USER root
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/IBG
+
+WORKDIR /app
+
+COPY deploy/hybrid-kubernetes/requirements-service.txt ./
+RUN python3 -m pip install --no-cache-dir -r requirements-service.txt
+
+# Frozen Exact private processor and public-forwarder runtime dependencies.
+COPY IBG/datapath.py IBG/latency_model.py /app/IBG/
+COPY testbed/__init__.py testbed/profiles.py testbed/cnf_service.py testbed/route_forwarder.py /app/testbed/
+
+# Hybrid service contracts/executors only.  Policy, runner, learning,
+# controller, reporting, MILP, and solver sources are not copied.
+COPY deploy/hybrid-kubernetes/service-package-init.py /app/IBG_Hybrid/__init__.py
+COPY deploy/hybrid-kubernetes/image-stage-budget.py /app/IBG_Hybrid/budgeted.py
+COPY IBG_Hybrid/contracts.py IBG_Hybrid/kernel_infrastructure_contract.py IBG_Hybrid/kernel_runtime_profiles.py /app/IBG_Hybrid/
+COPY IBG_Hybrid/kernel_route_contracts.py IBG_Hybrid/kernel_route_execution.py IBG_Hybrid/kernel_route_forwarder.py /app/IBG_Hybrid/
+COPY IBG_Hybrid/kernel_processor_service.py IBG_Hybrid/kernel_route_forwarder_service.py IBG_Hybrid/kernel_flow_generator.py /app/IBG_Hybrid/
+
+USER 10001:10001
+
+EXPOSE 8080 8081
+
+CMD ["python3", "-m", "uvicorn", "IBG_Hybrid.kernel_flow_generator:app", "--host", "0.0.0.0", "--port", "8080"]

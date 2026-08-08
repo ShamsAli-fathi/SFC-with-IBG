@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ibg-hybrid-controller
+  namespace: ibg-hybrid-testbed
+  labels:
+    app.kubernetes.io/name: ibg-hybrid-controller
+    app.kubernetes.io/part-of: ibg-hybrid-testbed
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibg-hybrid-controller
+        app.kubernetes.io/part-of: ibg-hybrid-testbed
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ibg-hybrid-controller
+      containers:
+        - name: controller
+          image: ibg-hybrid-testbed:kernel-controller-v1
+          imagePullPolicy: Never
+          command: ["python3", "-m", "IBG_Hybrid.kernel_controller_service"]
+          env:
+            - name: HYBRID_CONTROLLER_INPUTS_PATH
+              value: /etc/ibg-hybrid-controller/controller-inputs.json
+            - name: FLOW_GENERATOR_URL
+              value: http://ibg-hybrid-flow-generator.ibg-hybrid-testbed.svc.cluster.local.:8080
+            - name: SLOT_ID
+              value: "1"
+            - name: MAX_ITERATIONS
+              value: "1"
+          volumeMounts:
+            - name: controller-inputs
+              mountPath: /etc/ibg-hybrid-controller
+              readOnly: true
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "2", memory: 1Gi}
+      volumes:
+        - name: controller-inputs
+          configMap:
+            name: ibg-hybrid-planning-links
+

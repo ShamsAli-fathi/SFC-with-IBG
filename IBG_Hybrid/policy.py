@@ -1517,6 +1517,7 @@ class IBGHybridPolicy:
         decision_position: int,
         flow_id: int,
         rollout_workers: int = 1,
+        rollout_executor: ProcessPoolExecutor | None = None,
     ) -> HybridMonteCarloDecision:
         """Run the professor-baseline top-five production MC policy.
 
@@ -1537,6 +1538,7 @@ class IBGHybridPolicy:
             flow_id=flow_id,
             root_mode=MonteCarloRootMode.PRODUCTION_TOP_FIVE,
             rollout_workers=rollout_workers,
+            rollout_executor=rollout_executor,
         )
 
     def select_monte_carlo_all_roots_reference(
@@ -1573,6 +1575,7 @@ class IBGHybridPolicy:
             flow_id=flow_id,
             root_mode=MonteCarloRootMode.HISTORICAL_ALL_FEASIBLE,
             rollout_workers=1,
+            rollout_executor=None,
         )
 
     def _select_monte_carlo(
@@ -1591,6 +1594,7 @@ class IBGHybridPolicy:
         flow_id: int,
         root_mode: MonteCarloRootMode,
         rollout_workers: int,
+        rollout_executor: ProcessPoolExecutor | None,
     ) -> HybridMonteCarloDecision:
         rollout_workers = _require_rollout_workers(rollout_workers)
         configuration = self.configuration
@@ -1668,7 +1672,13 @@ class IBGHybridPolicy:
             )
             for scored_focal in sampled_roots
         )
-        if rollout_workers == 1 or len(root_tasks) == 1:
+        if rollout_executor is not None:
+            # The full-slot runner owns this bounded pool and keeps it alive
+            # across real focal flows. ``map`` preserves canonical task order.
+            root_outcomes = tuple(
+                rollout_executor.map(_evaluate_monte_carlo_root, root_tasks)
+            )
+        elif rollout_workers == 1 or len(root_tasks) == 1:
             root_outcomes = tuple(
                 _evaluate_monte_carlo_root(task)
                 for task in root_tasks

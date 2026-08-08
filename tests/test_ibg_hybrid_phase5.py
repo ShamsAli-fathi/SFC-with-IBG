@@ -311,6 +311,32 @@ def test_full_slot_parallel_mc_matches_one_worker_fixed_seed():
     )
 
 
+def test_full_slot_mc_reuses_one_worker_pool_then_shuts_it_down(monkeypatch):
+    parameters = HybridPolicyParameters(
+        candidates_per_stage=2,
+        monte_carlo_noisy_future_flows=1,
+        monte_carlo_samples=1,
+    )
+    slot_input = make_input(flows=3, replicas=2, parameters=parameters)
+    from IBG_Hybrid import IBGHybridPolicy
+
+    policy = IBGHybridPolicy(slot_input.configuration, slot_input.parameters)
+    original = policy.select_monte_carlo
+    executors = []
+
+    def record_executor(**kwargs):
+        executors.append(kwargs["rollout_executor"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(policy, "select_monte_carlo", record_executor)
+    run_hybrid_slot(slot_input, policy=policy, policy_mode="mc", mc_workers=3)
+
+    assert len(executors) == 3
+    assert all(executor is executors[0] for executor in executors)
+    with pytest.raises(RuntimeError):
+        executors[0].submit(int, 1)
+
+
 def test_unknown_explicit_slot_policy_is_rejected():
     with pytest.raises(ValueError, match="policy_mode"):
         run_hybrid_slot(make_input(flows=1), policy_mode="automatic-mc")

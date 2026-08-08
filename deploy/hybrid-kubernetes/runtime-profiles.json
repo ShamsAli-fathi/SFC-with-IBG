@@ -1,0 +1,19 @@
+{
+  "contract_version": "ibg-hybrid-kernel-runtime-profile-v1",
+  "source_identity": "ibg-hybrid-infrastructure-phase2-small-v1",
+  "configuration": {
+    "num_flows": 4,
+    "num_stages": 3,
+    "num_replicas": 2,
+    "stage_budget": 2
+  },
+  "profiles": [
+    {"stage": 1, "replica": 1, "hidden_state": 4, "observation_seed": 1101},
+    {"stage": 1, "replica": 2, "hidden_state": 2, "observation_seed": 1102},
+    {"stage": 2, "replica": 1, "hidden_state": 3, "observation_seed": 1201},
+    {"stage": 2, "replica": 2, "hidden_state": 1, "observation_seed": 1202},
+    {"stage": 3, "replica": 1, "hidden_state": 4, "observation_seed": 1301},
+    {"stage": 3, "replica": 2, "hidden_state": 3, "observation_seed": 1302}
+  ]
+}
+

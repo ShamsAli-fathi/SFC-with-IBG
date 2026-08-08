@@ -1,0 +1,34 @@
+FROM mcr.microsoft.com/azurelinux/base/python:3.12
+
+USER root
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/IBG
+
+WORKDIR /app
+
+COPY deploy/hybrid-kubernetes/requirements-controller.txt ./
+RUN python3 -m pip install --no-cache-dir --timeout 300 -r requirements-controller.txt
+
+# Exact latency, selected-only learning, outcome mode, and metric functions.
+# The image-local header/report files contain only the behavior-identical
+# functions exercised by Hybrid slots, without legacy CSV/plot/SciPy imports.
+COPY IBG/datapath.py IBG/latency_model.py IBG/learning.py IBG/outcome_latency.py /app/IBG/
+COPY deploy/hybrid-kubernetes/controller-exact-header.py /app/IBG/header.py
+COPY deploy/hybrid-kubernetes/controller-exact-report.py /app/IBG/report.py
+
+# Route wire models are reused without copying any Hybrid ASGI entry point or
+# installing Uvicorn.  Importing these modules constructs no running server.
+COPY testbed/__init__.py testbed/profiles.py testbed/cnf_service.py testbed/route_forwarder.py /app/testbed/
+
+COPY deploy/hybrid-kubernetes/controller-package-init.py /app/IBG_Hybrid/__init__.py
+COPY deploy/hybrid-kubernetes/image-stage-budget.py /app/IBG_Hybrid/budgeted.py
+COPY IBG_Hybrid/contracts.py IBG_Hybrid/expected_utility.py IBG_Hybrid/phase0_contract.py IBG_Hybrid/policy.py /app/IBG_Hybrid/
+COPY IBG_Hybrid/slot_contracts.py IBG_Hybrid/simulation.py IBG_Hybrid/runner.py /app/IBG_Hybrid/
+COPY IBG_Hybrid/kernel_infrastructure_contract.py IBG_Hybrid/kernel_route_contracts.py /app/IBG_Hybrid/
+COPY IBG_Hybrid/kernel_controller_config.py IBG_Hybrid/kernel_kubernetes_discovery.py IBG_Hybrid/kernel_controller.py IBG_Hybrid/kernel_controller_service.py IBG_Hybrid/kernel_phase4_validation.py /app/IBG_Hybrid/
+
+USER 10001:10001
+
+CMD ["python3", "-m", "IBG_Hybrid.kernel_controller_service"]

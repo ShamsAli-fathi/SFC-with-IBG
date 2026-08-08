@@ -14,5 +14,16 @@ deploy/milp-kubernetes/*
 !deploy/milp-kubernetes/Dockerfile.service
 !deploy/milp-kubernetes/requirements-service.txt
 !deploy/milp-kubernetes/service_package_init.py
+!deploy/hybrid-kubernetes/
+deploy/hybrid-kubernetes/*
+!deploy/hybrid-kubernetes/Dockerfile.controller
+!deploy/hybrid-kubernetes/Dockerfile.service
+!deploy/hybrid-kubernetes/requirements-controller.txt
+!deploy/hybrid-kubernetes/requirements-service.txt
+!deploy/hybrid-kubernetes/controller-exact-header.py
+!deploy/hybrid-kubernetes/controller-exact-report.py
+!deploy/hybrid-kubernetes/controller-package-init.py
+!deploy/hybrid-kubernetes/image-stage-budget.py
+!deploy/hybrid-kubernetes/service-package-init.py
 *.csv
 *.pkl

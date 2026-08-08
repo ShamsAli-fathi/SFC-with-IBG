@@ -6,6 +6,7 @@ import importlib
 import random
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from itertools import combinations, product
 from pathlib import Path
@@ -397,44 +398,16 @@ def _compute_metrics(
     )
 
 
-def run_hybrid_slot(
-    slot_input: HybridSlotInput,
+def _place_all_flows(
     *,
-    policy: IBGHybridPolicy | None = None,
-    simulation_adapter: HybridSlotSimulationAdapter | None = None,
-    policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
-    mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
-) -> HybridSlotResult:
-    """Place all flows, then simulate, learn, and report one Hybrid slot.
-
-    ``lookahead`` is the unchanged normal Hybrid mode.  ``mc`` is an explicit
-    full-slot execution mode for the completed v5 production Monte Carlo
-    selector; it is never selected by activation inputs.
-    """
-
-    if not isinstance(slot_input, HybridSlotInput):
-        raise TypeError("slot_input must be HybridSlotInput")
-    policy_mode = _require_slot_policy(policy_mode)
-    mc_workers = _require_mc_workers(mc_workers)
-    policy = policy or IBGHybridPolicy(
-        slot_input.configuration,
-        slot_input.parameters,
-    )
-    if policy.configuration != slot_input.configuration:
-        raise ValueError("policy configuration does not match the slot input")
-    if policy.parameters != slot_input.parameters:
-        raise ValueError("policy parameters do not match the slot input")
-    simulation_adapter = (
-        simulation_adapter or InProcessHybridSimulationAdapter()
-    )
-
-    started_at = time.perf_counter()
-    flow_order_seed = derive_flow_order_seed(
-        slot_input.root_seed,
-        slot_input.slot_id,
-    )
-    ordered_flow_ids = [flow.flow_id for flow in slot_input.flows]
-    random.Random(flow_order_seed).shuffle(ordered_flow_ids)
+    slot_input: HybridSlotInput,
+    policy: IBGHybridPolicy,
+    policy_mode: str,
+    mc_workers: int,
+    ordered_flow_ids: list[int],
+    rollout_executor: ProcessPoolExecutor | None,
+) -> tuple[tuple[HybridPlacement, ...], GlobalLoadState]:
+    """Commit every real focal placement, optionally sharing one MC pool."""
 
     admission, beliefs, planning_links = _policy_maps(slot_input)
     flow_by_id = slot_input.flow_by_id
@@ -491,6 +464,7 @@ def run_hybrid_slot(
                 decision_position=decision_position,
                 flow_id=flow_id,
                 rollout_workers=mc_workers,
+                rollout_executor=rollout_executor,
             )
 
         state = detail.result.state_after
@@ -520,8 +494,70 @@ def run_hybrid_slot(
                 policy_detail=detail,
             )
         )
+    return tuple(placements), state
 
-    placement_tuple = tuple(placements)
+
+def run_hybrid_slot(
+    slot_input: HybridSlotInput,
+    *,
+    policy: IBGHybridPolicy | None = None,
+    simulation_adapter: HybridSlotSimulationAdapter | None = None,
+    policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
+    mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
+) -> HybridSlotResult:
+    """Place all flows, then simulate, learn, and report one Hybrid slot.
+
+    ``lookahead`` is the unchanged normal Hybrid mode.  ``mc`` is an explicit
+    full-slot execution mode for the completed v5 production Monte Carlo
+    selector; it is never selected by activation inputs.
+    """
+
+    if not isinstance(slot_input, HybridSlotInput):
+        raise TypeError("slot_input must be HybridSlotInput")
+    policy_mode = _require_slot_policy(policy_mode)
+    mc_workers = _require_mc_workers(mc_workers)
+    policy = policy or IBGHybridPolicy(
+        slot_input.configuration,
+        slot_input.parameters,
+    )
+    if policy.configuration != slot_input.configuration:
+        raise ValueError("policy configuration does not match the slot input")
+    if policy.parameters != slot_input.parameters:
+        raise ValueError("policy parameters do not match the slot input")
+    simulation_adapter = (
+        simulation_adapter or InProcessHybridSimulationAdapter()
+    )
+
+    started_at = time.perf_counter()
+    flow_order_seed = derive_flow_order_seed(
+        slot_input.root_seed,
+        slot_input.slot_id,
+    )
+    ordered_flow_ids = [flow.flow_id for flow in slot_input.flows]
+    random.Random(flow_order_seed).shuffle(ordered_flow_ids)
+
+    if policy_mode == HYBRID_SLOT_POLICY_MC:
+        # One pool lives for the whole placement phase, avoiding twenty
+        # process-start/shutdown cycles while keeping learning/simulation out
+        # of worker processes.
+        with ProcessPoolExecutor(max_workers=mc_workers) as rollout_executor:
+            placement_tuple, state = _place_all_flows(
+                slot_input=slot_input,
+                policy=policy,
+                policy_mode=policy_mode,
+                mc_workers=mc_workers,
+                ordered_flow_ids=ordered_flow_ids,
+                rollout_executor=rollout_executor,
+            )
+    else:
+        placement_tuple, state = _place_all_flows(
+            slot_input=slot_input,
+            policy=policy,
+            policy_mode=policy_mode,
+            mc_workers=mc_workers,
+            ordered_flow_ids=ordered_flow_ids,
+            rollout_executor=None,
+        )
     actions_by_flow = {
         placement.flow.flow_id: placement.action
         for placement in placement_tuple

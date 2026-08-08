@@ -1278,3 +1278,344 @@ Updated: 2026-08-06.
 Keep Monte Carlo manually selected only through `--policy mc`. Do not add
 automatic MC activation from entropy, contention, priority, uncertainty-event,
 or any other runtime input unless the user explicitly reopens that scope.
+
+### MC process-pool lifetime
+
+Updated: 2026-08-06.
+
+Create the bounded local MC process pool once per explicit MC slot, reuse it
+for all sequential real focal decisions, and close it before simulation and
+learning. This removes repeated worker startup only; it is not Kubernetes work
+and does not permit concurrent real-flow placement.
+
+## Hybrid Kernel implementation and optimization sequencing
+
+Updated: 2026-08-06.
+
+- Use the detailed Hybrid Kernel Phase 0--8 roadmap as one merged sequence:
+  apply rollout/image/resource work with the implementation phase that needs
+  it, rather than creating a parallel optimization-only track.
+- Establish first a Hybrid-owned L=2 route contract and small live baseline;
+  then add image ownership, bounded rollout, existing-replica preservation,
+  append-only profiles, and resource decisions in their dependency order.
+- Do not apply the MILP processor-memory candidate or any other resource
+  reduction until Hybrid-specific cgroup and live-route evidence supports it.
+- Preserve the existing one-private-processor/two-public-forwarder architecture
+  as the initial reusable baseline. It is not permission to modify Exact or
+  share mutable deployments/profiles with Exact or MILP.
+- Treat each scale increase as an explicit evidence gate, not as a fixed final
+  target. Hybrid MC controller resource needs are measured separately from
+  replica service resources.
+
+## IBG-Hybrid Kernel Infrastructure Phase 0 decisions
+
+Accepted: 2026-08-06.
+
+- Accept `ibg-hybrid-kernel-infrastructure-phase0-v1` as the Hybrid Kernel
+  ownership contract. Hybrid owns `ibg-hybrid-testbed` and names its mutable
+  Kubernetes objects with the `ibg-hybrid-` prefix. Exact and MILP namespaces,
+  selectors, ConfigMaps, images, and rollout state remain foreign and frozen.
+- Accept separate future image ownership:
+  `ibg-hybrid-testbed:kernel-service-v1` for processor/forwarder/flow-generator
+  responsibilities and `ibg-hybrid-testbed:kernel-controller-v1` for policy,
+  learning, and slot orchestration. This freezes names and dependency roles;
+  it does not build either image.
+- Keep the processor runtime profile minimal and versioned: replica identity,
+  hidden state, and observation seed only, with complete canonical coverage.
+  Beliefs remain controller-private; admission capacity and planning-link data
+  remain separate controller inputs.
+- Require future discovery to accept only the exact configured set of Hybrid-
+  labelled Running/Ready StatefulSet ordinals in the Hybrid namespace. Missing,
+  duplicate, foreign, unready, mislabelled, or wrong-ordinal replicas must fail
+  before placement or traffic.
+- Freeze the controller ordering as discovery, complete sequential placement,
+  traffic, telemetry validation, selected-only learning, and result emission.
+  Preserve beliefs across slots, keep hidden true state out of planning, and
+  keep MC manual-only.
+- Reuse Exact's one-worker processor, two-worker forwarder, ports, split HTTP
+  clients, and keep-alive behavior as an unchanged infrastructure boundary.
+  Do not implement the Hybrid L=2 route extension until Infrastructure Phase 1
+  and do not accept resource right-sizing until Infrastructure Phase 7.
+- Phase 0 authorizes no manifest, Kubernetes API adapter, image build,
+  deployment, cluster operation, traffic, route contract, resource change, or
+  algorithm/outcome change.
+
+## IBG-Hybrid Kernel Infrastructure Phase 1 decisions
+
+Accepted: 2026-08-06.
+
+- Accept `ibg-hybrid-two-selected-stage-route-v1` as the future Hybrid Kernel
+  route contract and `ibg-hybrid-kernel-route-execution-v1` as its pure
+  execution result boundary.
+- Require exactly two selected hops per flow in increasing stage order. Permit
+  noncontiguous stage 1 to stage 3 and stage-2-first routes. Require the
+  explicit skipped stage to be exactly the one absent from the two hops.
+- Require complete placement before route construction. Reconstruct final
+  assigned loads from every committed focal action, use canonical flow order,
+  and reject stale load values or endpoint drift.
+- Require route execution to return exactly two identity/load-correlated
+  processor observations and one identity-correlated measured pair per flow.
+  Partial, extra, reversed, wrong-load, wrong-endpoint, or wrong-pair telemetry
+  fails explicitly.
+- Define selected-only outcome inputs from the two returned hop records. The
+  skipped stage contributes no request, endpoint, observation, learning
+  signal, physical processing total, or pair endpoint.
+- Reuse Exact's public-forwarder implementation through a Hybrid subclass that
+  changes only continuation validation to allow one strictly later selected
+  stage. Keep Exact's contiguous forwarder frozen and unchanged.
+- Reuse Exact's Kernel datapath, processor-response, measured-pair, convolved-
+  likelihood, and state-estimation contracts directly. Do not import MILP
+  solver/controller behavior or alter Hybrid policy, learning, utility, SLA,
+  latency, jitter, or MC activation.
+- Keep the HTTP service wrapper, Kubernetes adapters/manifests, images,
+  deployment, and live traffic in later phases. Phase 1 authorizes no cluster
+  action or resource change.
+
+## IBG-Hybrid Kernel Infrastructure Phase 2 decisions
+
+Accepted: 2026-08-08.
+
+- Accept `deploy/hybrid-kubernetes/` as the sole Phase 2 manifest boundary.
+  Use namespace `ibg-hybrid-testbed`, Hybrid-owned object names/labels/selectors,
+  and namespace-scoped Pod `get`/`list` RBAC only. Do not share mutable
+  ConfigMaps, Services, StatefulSets, Deployments, Jobs, images, or rollout
+  state with Exact or MILP.
+- Accept a small four-flow/three-stage/two-replica static manifest template for
+  mocked Phase 2 validation. This is not a live, resource, or scale gate. Keep
+  the controller Job outside the long-running Kustomize base so complete
+  rollout remains a prerequisite for controller traffic.
+- Accept `ibg-hybrid-kernel-runtime-profile-v1` as the processor ConfigMap
+  document and `ibg-hybrid-kernel-controller-inputs-v1` as the separately
+  mounted admission/planning document. Runtime profiles contain only replica
+  identity, hidden state, and observation seed. Controller inputs contain
+  assigned-flow capacities and directed planning links. Neither contains
+  beliefs, and the controller must not mount hidden-state profiles.
+- Require the Hybrid Kubernetes adapter to query only the Hybrid namespace and
+  selector and to reject every incomplete or inconsistent Pod set before
+  placement: missing, duplicate, unexpected, foreign, non-Running, unready,
+  mislabelled, wrong-name, or wrong-ordinal Pods are errors.
+- Accept the Hybrid-only ASGI processor, forwarder, and flow-generator entry
+  points as wrappers around the completed Phase 0/1 and frozen Exact runtime
+  boundaries. The flow generator accepts only
+  `ibg-hybrid-two-selected-stage-route-v1`; Exact's contiguous request remains
+  unchanged and invalid at the Hybrid endpoint.
+- Reuse `run_hybrid_slot` as the controller lifecycle rather than copying
+  placement, learning, or metric mathematics into Kubernetes code. Its traffic
+  adapter is invoked once only after all focal placements, accepts no simulated
+  pair-outcome input, and must validate the entire two-observation/one-pair set
+  before selected-only learning.
+- Accept `ibg-hybrid-kernel-observation-provenance-v1` for Kernel observations.
+  It identifies the discovered Pod/UID/endpoint and deliberately has no pure-
+  simulation physical or observation seed fields. Hidden true state is not a
+  controller replica value, policy input, or observed signal.
+- Keep configured planning-link cost and measured selected-pair latency as
+  separate inputs. Preserve physical plus independent observation-jitter
+  learning signals, the exact convolved likelihood, physical-only active
+  outcome/SLA behavior, and skipped-stage absence.
+- Preserve one private processor worker on 8081 with the current Exact
+  50m/1 CPU and 128/768 MiB baseline, plus two public forwarder workers on 8080
+  with 25m/1 CPU and 128/256 MiB, split HTTP clients, and 30-second public
+  keep-alive. Do not apply the 64/256 MiB candidate before Phase 7 evidence.
+- Phase 2 authorizes no image build/load, cluster start, resource apply,
+  rollout, live traffic, automatic MC activation, netem, diagnostics, replay,
+  reporting, calibration, resource right-sizing, or large-scale validation.
+
+## IBG-Hybrid Kernel Infrastructure Phase 3 decisions
+
+Accepted: 2026-08-08.
+
+- Accept separate Hybrid-owned `Dockerfile.service` and
+  `Dockerfile.controller` boundaries with the unchanged Phase 0 image names.
+  Use explicit file allowlists rather than copying the repository wholesale.
+- Accept narrow image-local `IBG_Hybrid` initializers so importing a service
+  module cannot execute the eager repository facade. Use a behavior-identical
+  L=2 compatibility module in both images instead of copying the legacy
+  pandas/SciPy-bearing `budgeted.py`; this is packaging isolation, not an
+  algorithm or configurable-budget change.
+- Limit the service dependency manifest to NumPy, FastAPI, HTTPX, and Uvicorn.
+  Copy only frozen Exact processor/forwarder dependencies and Hybrid service,
+  route-contract, executor, and profile modules. Exclude controller, policy,
+  runner, learning orchestration, belief retention, reporting, MILP,
+  SciPy/HiGHS, OR-Tools, and pandas.
+- Limit the controller dependency manifest to NumPy, FastAPI, and HTTPX. Keep
+  deterministic lookahead, manually selected MC, selected-only learning,
+  metrics, Ready discovery, controller adapters, and the Job entry point.
+  Do not copy a Hybrid ASGI service entry point or install Uvicorn. Continue
+  using the Exact route wire schema without starting any server.
+- Accept image-local lean Exact header/report compatibility files containing
+  only the frozen methods and functions exercised by Hybrid learning and
+  metrics. Require functional equality tests against `IBG/header.py` and
+  `IBG/report.py`. Do not change the frozen Exact source or its tests.
+- Keep runtime profiles and hidden true state out of the controller image and
+  Job mounts. Beliefs remain controller-private; capacity/planning inputs and
+  measured pair outcomes remain separate.
+- Preserve the Phase 2 commands, ports, worker counts, client split,
+  30-second keep-alive, probes, and processor/forwarder resources. Resource
+  reduction remains Phase 7 work.
+- Permit local image builds only without pulling or new network access in this
+  phase. The network-disabled service build proved the Docker definition and
+  context but found no cached dependency wheels, so no completed image or
+  in-image inspection is accepted. Do not build via new network access, build
+  the controller, push, kind-load, deploy, or run live traffic until separately
+  authorized.
+
+### Infrastructure Phase 3 image-validation decision
+
+Accepted: 2026-08-08.
+
+- Accept the successfully built local service and controller images as the
+  completion of the Phase 3 image gate. Their Phase 0 tags, numeric non-root
+  user, commands, port ownership, dependency inventories, and source
+  inclusions/exclusions were inspected directly.
+- Accept a temporary BuildKit named-context bind mount of the user-downloaded
+  wheelhouse for the controller build. Require `--network=none`; do not copy
+  the wheelhouse into the repository or image. Keep the committed dependency
+  manifest as the resolver contract.
+- Accept a 300-second pip read timeout in `Dockerfile.controller` as a build-
+  transport setting only. It changes no package range, policy, learning,
+  telemetry, utility/SLA, runtime resource, or Kubernetes behavior.
+- Require in-image import checks to remain read-only and network-disabled.
+  Constructing/importing ASGI objects for inspection is allowed; starting
+  Uvicorn, invoking the controller Job, contacting Kubernetes, or sending HTTP
+  traffic remains outside Phase 3.
+- Phase 3 is complete. Image loading, deployment, and the first live small-
+  topology gate remain Infrastructure Phase 4 and require separate approval.
+
+## IBG-Hybrid Kernel Infrastructure Phase 4 decisions
+
+Accepted: 2026-08-08.
+
+- Bound the first live Kernel gate to two flows, three stages, one replica per
+  stage, two controller slots, four long-running Pods, and one finite Job.
+  Keep the Phase 2 base reusable and put only the reduced profiles, controller
+  inputs, replica counts, and validation Job in a sibling Phase 4 overlay.
+- Keep the controller Job outside the long-running Kustomize boundary. Apply it
+  only after all configured Hybrid replica ordinals and the flow generator are
+  Ready. Do not treat Kubernetes scheduling or partial discovery as permission
+  to send traffic.
+- Require the live gate to exercise both a noncontiguous 1-to-3 route and a
+  stage-2-first 2-to-3 route. Accept only exactly two selected observations and
+  one measured pair per flow; skipped-stage requests, observations, learning,
+  metric inputs, and pair endpoints remain invalid.
+- Accept seedless Pod identity provenance for Kernel observations. Keep hidden
+  state and observation seed only in Pod runtime profiles, beliefs only in the
+  controller, and admission capacity plus planning links in the separate
+  controller-input ConfigMap.
+- Accept pure/Kernel semantic parity by replaying the already returned complete
+  Kernel telemetry through the pure slot boundary. This validation sends no
+  second flow-generator request and compares placements, final loads, belief
+  updates, and metrics while excluding wall-clock elapsed time.
+- Preserve the raw measured pair evidence without normalization. In particular,
+  the first-slot 1-to-3 pair measured about 425.056 ms while its configured
+  planning link was 0 ms. This does not enter physical-only realized utility or
+  the 110-ms SLA and does not authorize diagnostics or latency-law changes.
+- Preserve all Phase 2/3 processor and forwarder workers, ports, HTTP clients,
+  keep-alive windows, probes, and resources. Infrastructure Phase 4 authorizes
+  no rollout batching, append-only profiles, right-sizing, automatic MC,
+  netem, diagnostics, calibration, or scale increase.
+- Mark Infrastructure Phase 4 complete after two successful slots, exact Ready
+  coverage, belief retention, semantic parity, and stable Pod UIDs with zero
+  restarts/OOM/evictions. Infrastructure Phase 5 remains separately authorized
+  bounded-rollout work.
+
+## Hybrid live-cluster isolation correction
+
+Accepted: 2026-08-08.
+
+- Reject further Hybrid use of the historical `ibg` kind cluster. Its retained
+  Exact/MILP state makes restarting the cluster an implicit start of unrelated
+  workloads and violates the intended ownership isolation even though the
+  Kubernetes namespaces themselves are distinct.
+- Use only a dedicated single-node cluster named `ibg-hybrid` and context
+  `kind-ibg-hybrid` for the small Hybrid live gate. Validate the exact node
+  identity and reject foreign baseline namespaces or workload Pods before any
+  Hybrid resource apply or traffic.
+- Require the kind node image and both Hybrid images to exist locally. The
+  isolated runner must not pull or download an image as a side effect.
+- Default the dedicated live-gate lifecycle to deletion after success or
+  failure so its memory is released. Retention requires an explicit
+  `--keep-cluster`; cleanup may affect only `ibg-hybrid` and must never stop,
+  scale, or delete the shared `ibg` cluster or frozen Exact/MILP resources.
+- Keep the historical Phase 4 evidence valid, but supersede its operating
+  procedure. Future Phase 4 repetition and Phase 5 rollout work must extend the
+  dedicated-cluster boundary rather than reviving the shared cluster.
+
+## Hybrid persistent lifecycle and skip-build phase assignment
+
+Accepted: 2026-08-08. This latest decision supersedes only the automatic-
+deletion/`--keep-cluster` portions of the preceding isolation correction.
+
+- Retain the dedicated `ibg-hybrid` cluster, its node, loaded images, and
+  Hybrid workloads after both successful and failed runs. Create it only when
+  absent and validate isolation before every reuse. Normal completion must not
+  be treated as cleanup.
+- Keep cleanup as an explicit Hybrid-only action. It may delete `ibg-hybrid`
+  but must never target the historical `ibg` cluster. Cluster recreation is a
+  recovery event, not a normal experiment step.
+- In the corrected Phase 4 runner, a normal rerun loads the already-built local
+  service/controller images, explicitly restarts only Hybrid serving
+  workloads, waits for Ready coverage, and replaces only the completed Hybrid
+  controller Job. No image build is added retroactively to Phase 4.
+- Assign the user-facing `--skip-build` option to Infrastructure Phase 5. Match
+  Exact semantics across both Hybrid images: skip Docker build, skip kind
+  image load, skip forced service restart, reuse the persistent node's images,
+  but continue manifest/count reconciliation, Ready validation, and fresh Job
+  creation. Fail closed when the node does not contain both expected tags.
+- Keep append-only ConfigMap/profile behavior and proof of existing Pod UID/
+  process retention in Infrastructure Phase 6. A Phase 5 `--skip-build`
+  scale-up must not pre-empt or weaken Phase 6's profile-drift rejection.
+- Preserve persistent-cluster reuse through Phases 7 and 8 so resource and
+  incremental-scale evidence has continuous Pod/node provenance. Explicit
+  recreation starts a new evidence lineage.
+
+## Persistent Phase 4 lifecycle gate accepted
+
+Accepted: 2026-08-08.
+
+- Accept two consecutive small live runs on the same dedicated node as the
+  Phase 4 cluster-lifecycle proof. The Docker container ID and Kubernetes node
+  UID remained identical, while the shared Exact/MILP cluster stayed stopped.
+- Accept the second run's service Pod UID changes as expected normal-run
+  behavior because it deliberately reloaded images and forced only Hybrid
+  service rollouts. Do not mislabel this as Phase 5 `--skip-build` evidence.
+- Accept deletion/recreation of only the completed Hybrid controller Job as
+  the correct per-run controller lifecycle. The dedicated node and serving
+  boundary remain running after completion.
+- Keep Phase 5 unstarted. Its acceptance must separately prove both images are
+  already loaded, skip build/load/forced restart, and retain existing service
+  Pod UIDs while still producing a fresh complete controller Job.
+- For that future image-presence proof, inspect the node container runtime's
+  normalized `docker.io/library/ibg-hybrid-testbed` tags and platform image
+  IDs. Do not infer absence from `kind load` comparing the host manifest-list
+  identity: the second Phase 4 run unnecessarily re-imported both images even
+  though `crictl images` confirmed their node-local tags and platform images.
+
+## Post-Phase-7 manual MC Kubernetes decision
+
+Accepted for future sequencing: 2026-08-08. No implementation is authorized by
+this decision alone.
+
+- Insert Infrastructure Phase 7.5 after resource evidence and before
+  incremental scale validation. Keep Phase 8 as the scale phase rather than
+  combining the first MC integration with a topology increase.
+- Expose Kubernetes MC only through explicit controller Job arguments
+  `--policy mc` and `--mc-workers N`. With no policy argument, deterministic
+  lookahead remains unchanged. Automatic MC activation remains prohibited.
+- Reuse the existing frozen MC algorithm exactly: per-stage `C=5`, canonical
+  top-five complete roots, `S=50`, `D_MC=10`, seeded epsilon-greedy window,
+  pure greedy tail, focal final-utility scoring, canonical ties, and manual-only
+  execution. Phase 7.5 is integration/resource evidence, not algorithm work.
+- Keep the MC process pool controller-local, bounded, one per slot, reused
+  across focal decisions, and closed before traffic/learning. Do not add MC
+  workers to replica Pods or change the service image.
+- Require pure/Kernel fixed-seed placement and final-load parity plus equality
+  between one and multiple MC workers. Preserve complete-placement-before-one-
+  request, exactly two observations/one pair per flow, skipped-stage absence,
+  belief retention, selected-only learning, and hidden-state exclusion.
+- Run the first live MC gate at the Phase 7-accepted topology with Phase 5
+  `--skip-build` and Phase 6 profile/UID preservation. Record controller CPU,
+  RSS, worker count, deadline, restarts, completion, and failure behavior
+  without retuning service resources.
+- Phase 7.5 authorizes no scale increase. In Phase 8, manual MC at each larger
+  topology requires a separate choice and fresh controller sizing; lookahead
+  success does not automatically authorize MC at that scale.

@@ -1,0 +1,282 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hybrid-stage-1
+  namespace: ibg-hybrid-testbed
+  labels:
+    app.kubernetes.io/name: ibg-hybrid-replica
+    app.kubernetes.io/part-of: ibg-hybrid-testbed
+    app.kubernetes.io/component: replica-stage
+    ibg-hybrid.stage: "1"
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ibg-hybrid-replica
+    ibg-hybrid.stage: "1"
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hybrid-stage-1
+  namespace: ibg-hybrid-testbed
+  labels:
+    app.kubernetes.io/name: ibg-hybrid-replica
+    app.kubernetes.io/part-of: ibg-hybrid-testbed
+    app.kubernetes.io/component: replica-stage
+    ibg-hybrid.stage: "1"
+spec:
+  serviceName: hybrid-stage-1
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibg-hybrid-replica
+      ibg-hybrid.stage: "1"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibg-hybrid-replica
+        app.kubernetes.io/part-of: ibg-hybrid-testbed
+        app.kubernetes.io/component: replica-stage
+        ibg-hybrid.stage: "1"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: private-processor
+          image: ibg-hybrid-testbed:kernel-service-v1
+          imagePullPolicy: Never
+          command: ["python3", "-m", "uvicorn", "IBG_Hybrid.kernel_processor_service:app", "--host", "0.0.0.0", "--port", "8081"]
+          ports:
+            - name: processor
+              containerPort: 8081
+          env:
+            - name: STAGE
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HYBRID_RUNTIME_PROFILES_PATH
+              value: /etc/ibg-hybrid/runtime-profiles.json
+          volumeMounts:
+            - name: runtime-profiles
+              mountPath: /etc/ibg-hybrid
+              readOnly: true
+          readinessProbe:
+            httpGet: {path: /warmup, port: processor}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /health, port: processor}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: "1", memory: 768Mi}
+        - name: public-forwarder
+          image: ibg-hybrid-testbed:kernel-service-v1
+          imagePullPolicy: Never
+          command: ["python3", "-m", "uvicorn", "IBG_Hybrid.kernel_route_forwarder_service:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2", "--timeout-keep-alive", "30"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: STAGE
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: PROCESSOR_URL
+              value: http://127.0.0.1:8081
+            - name: FORWARDER_KEEPALIVE_SECONDS
+              value: "30"
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 25m, memory: 128Mi}
+            limits: {cpu: "1", memory: 256Mi}
+      volumes:
+        - name: runtime-profiles
+          configMap:
+            name: ibg-hybrid-runtime-profiles
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hybrid-stage-2
+  namespace: ibg-hybrid-testbed
+  labels:
+    app.kubernetes.io/name: ibg-hybrid-replica
+    app.kubernetes.io/part-of: ibg-hybrid-testbed
+    app.kubernetes.io/component: replica-stage
+    ibg-hybrid.stage: "2"
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ibg-hybrid-replica
+    ibg-hybrid.stage: "2"
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hybrid-stage-2
+  namespace: ibg-hybrid-testbed
+  labels:
+    app.kubernetes.io/name: ibg-hybrid-replica
+    app.kubernetes.io/part-of: ibg-hybrid-testbed
+    app.kubernetes.io/component: replica-stage
+    ibg-hybrid.stage: "2"
+spec:
+  serviceName: hybrid-stage-2
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibg-hybrid-replica
+      ibg-hybrid.stage: "2"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibg-hybrid-replica
+        app.kubernetes.io/part-of: ibg-hybrid-testbed
+        app.kubernetes.io/component: replica-stage
+        ibg-hybrid.stage: "2"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: private-processor
+          image: ibg-hybrid-testbed:kernel-service-v1
+          imagePullPolicy: Never
+          command: ["python3", "-m", "uvicorn", "IBG_Hybrid.kernel_processor_service:app", "--host", "0.0.0.0", "--port", "8081"]
+          ports: [{name: processor, containerPort: 8081}]
+          env:
+            - {name: STAGE, value: "2"}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: HYBRID_RUNTIME_PROFILES_PATH, value: /etc/ibg-hybrid/runtime-profiles.json}
+          volumeMounts: [{name: runtime-profiles, mountPath: /etc/ibg-hybrid, readOnly: true}]
+          readinessProbe: {httpGet: {path: /warmup, port: processor}, periodSeconds: 2, failureThreshold: 30}
+          livenessProbe: {httpGet: {path: /health, port: processor}, initialDelaySeconds: 10, periodSeconds: 10}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: "1", memory: 768Mi}
+        - name: public-forwarder
+          image: ibg-hybrid-testbed:kernel-service-v1
+          imagePullPolicy: Never
+          command: ["python3", "-m", "uvicorn", "IBG_Hybrid.kernel_route_forwarder_service:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2", "--timeout-keep-alive", "30"]
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - {name: STAGE, value: "2"}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: PROCESSOR_URL, value: http://127.0.0.1:8081}
+            - {name: FORWARDER_KEEPALIVE_SECONDS, value: "30"}
+          readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 2, failureThreshold: 30}
+          livenessProbe: {httpGet: {path: /health, port: http}, initialDelaySeconds: 10, periodSeconds: 10}
+          resources:
+            requests: {cpu: 25m, memory: 128Mi}
+            limits: {cpu: "1", memory: 256Mi}
+      volumes:
+        - name: runtime-profiles
+          configMap:
+            name: ibg-hybrid-runtime-profiles
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hybrid-stage-3
+  namespace: ibg-hybrid-testbed
+  labels:
+    app.kubernetes.io/name: ibg-hybrid-replica
+    app.kubernetes.io/part-of: ibg-hybrid-testbed
+    app.kubernetes.io/component: replica-stage
+    ibg-hybrid.stage: "3"
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ibg-hybrid-replica
+    ibg-hybrid.stage: "3"
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hybrid-stage-3
+  namespace: ibg-hybrid-testbed
+  labels:
+    app.kubernetes.io/name: ibg-hybrid-replica
+    app.kubernetes.io/part-of: ibg-hybrid-testbed
+    app.kubernetes.io/component: replica-stage
+    ibg-hybrid.stage: "3"
+spec:
+  serviceName: hybrid-stage-3
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibg-hybrid-replica
+      ibg-hybrid.stage: "3"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibg-hybrid-replica
+        app.kubernetes.io/part-of: ibg-hybrid-testbed
+        app.kubernetes.io/component: replica-stage
+        ibg-hybrid.stage: "3"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: private-processor
+          image: ibg-hybrid-testbed:kernel-service-v1
+          imagePullPolicy: Never
+          command: ["python3", "-m", "uvicorn", "IBG_Hybrid.kernel_processor_service:app", "--host", "0.0.0.0", "--port", "8081"]
+          ports: [{name: processor, containerPort: 8081}]
+          env:
+            - {name: STAGE, value: "3"}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: HYBRID_RUNTIME_PROFILES_PATH, value: /etc/ibg-hybrid/runtime-profiles.json}
+          volumeMounts: [{name: runtime-profiles, mountPath: /etc/ibg-hybrid, readOnly: true}]
+          readinessProbe: {httpGet: {path: /warmup, port: processor}, periodSeconds: 2, failureThreshold: 30}
+          livenessProbe: {httpGet: {path: /health, port: processor}, initialDelaySeconds: 10, periodSeconds: 10}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: "1", memory: 768Mi}
+        - name: public-forwarder
+          image: ibg-hybrid-testbed:kernel-service-v1
+          imagePullPolicy: Never
+          command: ["python3", "-m", "uvicorn", "IBG_Hybrid.kernel_route_forwarder_service:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2", "--timeout-keep-alive", "30"]
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - {name: STAGE, value: "3"}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: PROCESSOR_URL, value: http://127.0.0.1:8081}
+            - {name: FORWARDER_KEEPALIVE_SECONDS, value: "30"}
+          readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 2, failureThreshold: 30}
+          livenessProbe: {httpGet: {path: /health, port: http}, initialDelaySeconds: 10, periodSeconds: 10}
+          resources:
+            requests: {cpu: 25m, memory: 128Mi}
+            limits: {cpu: "1", memory: 256Mi}
+      volumes:
+        - name: runtime-profiles
+          configMap:
+            name: ibg-hybrid-runtime-profiles

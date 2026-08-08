@@ -758,6 +758,18 @@ class ReplicaRouteForwarder:
             self._event_loop_lag_tracker.finish_window()
             self._diagnostic_active_route_handlers -= 1
 
+    def _validate_next_hop(self, request: RouteProcessRequest) -> None:
+        """Validate the Exact contiguous-route continuation contract."""
+
+        if not request.remaining_hops:
+            return
+        expected_next_stage = self.config.stage + 1
+        if request.remaining_hops[0].stage != expected_next_stage:
+            raise RouteForwardingError(
+                "next forwarded stage must be "
+                f"{expected_next_stage}, got {request.remaining_hops[0].stage}"
+            )
+
     async def _process_route_impl(
         self,
         request: RouteProcessRequest,
@@ -769,13 +781,7 @@ class ReplicaRouteForwarder:
             raise RouteForwardingError(
                 f"unsupported forwarding mode {request.datapath_mode!r}"
             )
-        if request.remaining_hops:
-            expected_next_stage = self.config.stage + 1
-            if request.remaining_hops[0].stage != expected_next_stage:
-                raise RouteForwardingError(
-                    "next forwarded stage must be "
-                    f"{expected_next_stage}, got {request.remaining_hops[0].stage}"
-                )
+        self._validate_next_hop(request)
 
         started_at = time.perf_counter()
         handler_started_unix_ns = (
@@ -1157,12 +1163,19 @@ def create_app(
     transport: httpx.AsyncBaseTransport | None = None,
     cgroup_reader: Callable[[ForwarderConfig], ForwarderCgroupSnapshot]
     | None = None,
+    *,
+    runtime: ReplicaRouteForwarder | None = None,
 ):
-    runtime = ReplicaRouteForwarder(
-        config or ForwarderConfig.from_env(),
-        transport=transport,
-        cgroup_reader=cgroup_reader,
-    )
+    if runtime is None:
+        runtime = ReplicaRouteForwarder(
+            config or ForwarderConfig.from_env(),
+            transport=transport,
+            cgroup_reader=cgroup_reader,
+        )
+    elif config is not None or transport is not None or cgroup_reader is not None:
+        raise ValueError(
+            "an injected forwarder runtime cannot be combined with constructor inputs"
+        )
 
     @asynccontextmanager
     async def lifespan(application):

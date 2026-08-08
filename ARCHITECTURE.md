@@ -1823,3 +1823,406 @@ not change the v5 algorithm, seeds, utility, learning, latency, or outcomes.
 
 MC remains a manual-only execution mode. No automatic entropy, contention,
 priority, or uncertainty-event trigger is part of the active runner.
+
+The runner creates the bounded local MC process pool once for the placement
+phase of an explicit MC slot, reuses it for every real focal decision, and
+closes it before in-process simulation and learning. It is not a Kubernetes
+worker pool and has no lifecycle beyond that one pure-Python slot.
+
+## Hybrid Kernel sequencing clarification
+
+Updated: 2026-08-06. Planning only; no Hybrid Kubernetes code has changed.
+
+The detailed Phase 0--8 sequence in `ROADMAP.md` remains authoritative. It
+already joins each rollout/resource optimization to its proper Kernel
+implementation phase: image split, first live gate, bounded rollout,
+append-only profiles, resource evidence, and incremental scale validation.
+This paragraph is only a compact summary of that existing plan, not a separate
+or replacement phase track.
+
+## IBG-Hybrid Kernel Infrastructure Phase 0 boundary
+
+Completed: 2026-08-06. Contract-only implementation; no Kubernetes resources
+were created.
+
+`IBG_Hybrid/kernel_infrastructure_contract.py` is the import-safe,
+pure-Python ownership boundary for the future Hybrid Kernel runtime. Its
+active infrastructure contract is
+`ibg-hybrid-kernel-infrastructure-phase0-v1`. Hybrid owns the namespace
+`ibg-hybrid-testbed`, the `ibg-hybrid-*` controller, ServiceAccount, discovery
+Role, flow-generator, and ConfigMap names, the `ibg-hybrid-replica` selector,
+the `ibg-hybrid.stage` stage label, and distinct service/controller image
+names. These values cannot alias the frozen Exact `ibg-testbed` or MILP
+`milp-testbed` ownership boundaries.
+
+The versioned runtime-profile contract contains only canonical replica
+identity, processor hidden state, and deterministic observation seed for every
+configured replica. Learned beliefs are deliberately absent and remain
+controller-private across slots. Assigned-flow admission capacity and directed
+planning links remain separate controller inputs rather than processor-profile
+fields.
+
+The versioned Ready-discovery snapshot requires exact stage/replica coverage,
+Running and Ready status, Hybrid namespace and labels, and StatefulSet ordinal
+identity. It is a pure validator in Phase 0; no Kubernetes API adapter exists
+yet. The controller lifecycle is frozen as: complete Ready discovery, all
+sequential focal placements, selected-route execution, complete telemetry
+validation, selected-only learning, then one slot result. Traffic therefore
+cannot begin before complete placement, hidden state cannot enter Hybrid
+policy, beliefs persist between slots, and automatic MC activation remains
+disabled.
+
+The reusable runtime boundary records the existing one-worker private
+processor on port 8081, two-worker public forwarder on port 8080, separate
+local/downstream clients, and 30-second public-forwarder keep-alive. Phase 0
+does not implement Hybrid two-hop routing or accept resource sizes: routing
+remains Infrastructure Phase 1 and resource evidence remains Infrastructure
+Phase 7. Image ownership is separated now only as a contract: service owns the
+processor, forwarder, and flow generator; controller owns Hybrid policy,
+learning, and orchestration; MILP solver dependencies are forbidden.
+
+## IBG-Hybrid Kernel Infrastructure Phase 1 route boundary
+
+Completed: 2026-08-06. Pure route-contract/execution implementation; no
+Kubernetes resources or service application were created.
+
+`IBG_Hybrid/kernel_route_contracts.py` defines the immutable
+`ibg-hybrid-two-selected-stage-route-v1` wire boundary. Every flow has exactly
+two processor/forwarder hop targets in strictly increasing stage order and one
+explicit skipped stage. Routes may be noncontiguous, such as stage 1 to stage
+3, and may begin after stage 1, such as stage 2 to stage 3. Different flows in
+one slot may select different stage pairs. The complete-slot request uses
+canonical flow ordering and requires each selected hop's assigned load to
+equal the load reconstructed from all committed routes.
+
+The pure route builder consumes only a complete map of real Hybrid focal
+actions and the Phase 0 complete Ready snapshot. It refuses partial placement,
+derives final selected-replica loads, and includes only selected endpoints.
+The skipped stage cannot appear in a processor request or pair endpoint.
+
+`IBG_Hybrid/kernel_route_forwarder.py` subclasses the frozen Exact public
+forwarder only to replace Exact's contiguous-next-stage rule with one strictly
+later selected stage. Exact's processor calls, HTTP clients, pair telemetry,
+timing, and forwarding implementation are inherited unchanged; the Exact
+forwarder itself is not modified. `IBG_Hybrid/kernel_route_execution.py`
+concurrently dispatches complete routes through their first selected public
+forwarder and validates exactly two correlated processor observations and one
+measured selected-pair result per flow.
+
+The executor directly reuses Exact's `RouteProcessResponse`,
+`PairwiseLinkTelemetry`, Kernel datapath validation, exact convolved
+learning-signal likelihood, and state-estimation helpers. It verifies physical
+processing plus independent observation jitter equals the learning signal.
+The response exposes metric/learning inputs only through the two selected hop
+records: selected physical latency is their sum and selected learning input is
+their two signals. No skipped-stage request, observation, learning input,
+physical metric input, or measured-pair endpoint can be represented.
+
+The Phase 1 executor is not yet a FastAPI flow-generator service and performs
+no discovery or Kubernetes API operation. Phase 2 owns the Hybrid namespace,
+RBAC, ConfigMaps, Services, StatefulSets, flow-generator service, Ready
+discovery adapter, and controller adapter.
+
+## IBG-Hybrid Kernel Infrastructure Phase 2 boundary
+
+Completed: 2026-08-08. Mocked/controller-level implementation only; no image,
+cluster, deployment, or live-traffic operation was performed.
+
+`deploy/hybrid-kubernetes/` is the isolated Hybrid-owned Kubernetes boundary.
+Its namespace, namespace-scoped Pod get/list RBAC, labels, selectors, headless
+stage Services, three StatefulSets, flow-generator Service/Deployment,
+ConfigMaps, and explicit controller Job template use only the Phase 0 Hybrid
+ownership. The long-running Kustomize base excludes the controller Job so a
+future launcher must finish all rollouts before starting controller traffic.
+The static Phase 2 profile is deliberately a small four-flow, three-stage,
+two-replica template; it is not a live or large-scale acceptance claim.
+
+The processor runtime ConfigMap follows
+`ibg-hybrid-kernel-runtime-profile-v1` and contains complete canonical replica
+identity, hidden state, and observation seed only. A separately mounted
+`ibg-hybrid-kernel-controller-inputs-v1` document supplies complete assigned-
+flow admission capacities and directed planning-link metadata. The controller
+does not mount processor profiles, and neither ConfigMap contains beliefs.
+Beliefs remain private mutable controller state across slots.
+
+`IBG_Hybrid/kernel_kubernetes_discovery.py` lists only Hybrid-labelled Pods
+through the namespace-scoped Core API path. It converts no response into a
+usable snapshot until every configured StatefulSet ordinal is present exactly
+once with the required namespace, labels, name/ordinal identity, Running
+phase, and Ready condition. Missing, duplicate, unexpected, foreign, unready,
+mislabelled, or identity-mismatched responses fail before policy construction
+or traffic.
+
+The Hybrid service image boundary now has three import-safe ASGI entry points.
+`kernel_processor_service.py` loads the minimal Hybrid runtime profile and
+constructs the unchanged Exact processor runtime. `kernel_route_forwarder_service.py`
+wraps the Phase 1 Hybrid continuation subclass around the unchanged Exact
+forwarding application. `kernel_flow_generator.py` accepts only the versioned
+Hybrid two-selected-stage request and delegates to the Phase 1 concurrent
+executor; Exact's contiguous request is not a substitute.
+
+`IBG_Hybrid/kernel_controller.py` supplies the controller-side HTTP port, the
+Kernel traffic adapter, explicit seedless
+`ibg-hybrid-kernel-observation-provenance-v1`, and a stateful controller
+adapter. The existing Hybrid runner still owns flow order and all focal
+placements. It calls the Kernel traffic adapter only after every focal action
+is committed. The adapter builds one complete request, validates exactly two
+selected observations and one measured pair per flow against the Ready
+snapshot and final assigned loads, and rejects partial or mismatched telemetry.
+Only after that complete result exists does the unchanged Hybrid runner call
+the frozen Exact selected-only learner and metric helpers. Kernel physical
+latency, observation-only jitter, exact convolved likelihood, and measured
+pair values enter through selected telemetry; no skipped-stage record or
+fabricated pure-simulation seed can enter learning or metrics. Configured
+planning links remain policy/expected-utility inputs while measured pair cost
+remains a separately named outcome input.
+
+The manifests retain the Exact processor baseline of one worker on port 8081
+with 50m/1 CPU and 128/768 MiB, and the forwarder baseline of two workers on
+port 8080 with 25m/1 CPU and 128/256 MiB. The inherited local/downstream HTTP
+client split and 30-second public keep-alive remain unchanged. The candidate
+64/256 MiB processor reduction remains Infrastructure Phase 7 work.
+
+## IBG-Hybrid Kernel Infrastructure Phase 3 image boundary
+
+Implemented: 2026-08-08. No cluster, kind, deployment, image load, or live
+HTTP operation was performed.
+
+`deploy/hybrid-kubernetes/Dockerfile.service` now defines
+`ibg-hybrid-testbed:kernel-service-v1` from an explicit source allowlist. It
+contains the frozen Exact `datapath.py`, `latency_model.py`, private processor,
+public forwarder, and profile parser together with only the Hybrid runtime-
+profile, two-hop route, executor, forwarder, processor, and flow-generator
+modules needed by the three Phase 2 ASGI paths. Its narrow image-local Hybrid
+initializer prevents the repository convenience facade from eagerly loading
+policy or runner code. The image-local budget module preserves exactly L=2
+without copying the legacy pandas/SciPy-bearing `budgeted.py`. The service
+dependency set is NumPy, FastAPI, HTTPX, and Uvicorn; controller, policy,
+lookahead/MC orchestration, belief retention, reporting, MILP, SciPy/HiGHS,
+OR-Tools, and pandas sources/dependencies are absent.
+
+`deploy/hybrid-kubernetes/Dockerfile.controller` separately defines
+`ibg-hybrid-testbed:kernel-controller-v1`. It contains the Hybrid policy,
+deterministic lookahead, manual MC path, slot runner, selected-only learning
+and metrics boundary, Ready discovery, controller configuration/adapter, and
+Job entry point. Its dependency set is NumPy, FastAPI, and HTTPX; it has no
+Uvicorn, pandas, SciPy/HiGHS, OR-Tools, or MILP dependency/source. The existing
+Exact route wire models remain the shared schema dependency, but no Hybrid
+processor, forwarder, or flow-generator ASGI entry point is copied and the
+controller command runs only `IBG_Hybrid.kernel_controller_service`.
+
+Two controller-image compatibility files contain only behavior-identical
+copies of the frozen Exact `Replica` learning/utility methods, equilibrium and
+Jain helpers, and `SLA_v`. This avoids importing the unrelated legacy CSV,
+plotting, and truncated-normal surfaces while preserving the runner's existing
+selected-only update, 0.8 belief retention, physical-only SLA, and metric
+semantics. Functional comparison tests bind these lean copies to the frozen
+Exact implementations. They are deployment-context files and do not modify
+anything under `IBG/`.
+
+Both image roots were materialized in temporary directories for silent,
+RNG-neutral, file-clean import smokes and content inspection. The service
+imports all three ASGI modules without loading policy, runner, controller,
+pandas, SciPy, OR-Tools, or MILP modules. The controller imports policy,
+manual-MC, learning, metrics, discovery, and adapter code without importing a
+Hybrid service entry point, Uvicorn, pandas, SciPy, OR-Tools, or MILP. The
+Phase 2 manifests remain unchanged, so one processor worker on 8081, two
+forwarder workers on 8080, the split clients, 30-second public keep-alive,
+probes, and 50m/1 CPU 128/768 MiB processor plus 25m/1 CPU 128/256 MiB
+forwarder resources remain authoritative.
+
+A local Docker build was attempted with the existing base image,
+`--pull=false`, and `--network=none`. Docker accepted the service definition
+and context, then stopped at dependency installation because no NumPy wheel
+was cached. New network access was not requested, the controller build was not
+attempted, and no completed Hybrid image was claimed. Image construction and
+in-image inspection therefore remain an explicit prerequisite before the
+separately approved Infrastructure Phase 4 live gate.
+
+### Infrastructure Phase 3 image validation completed
+
+Completed: 2026-08-08. The two Phase 0 image identities now resolve to built,
+locally inspected images. The service image is
+`sha256:01b9795bea127235c7537677379fe42c67e076e07a69c52fece1c19e19651737`
+(78,954,015 bytes); the controller image is
+`sha256:8726906596820d56ae4ec17fd03efe583e1b84cf030f79de5fb87f905a7448c3`
+(78,492,804 bytes). Both retain numeric user `10001:10001`. The service image
+exposes only 8080/8081 and retains the Hybrid flow-generator Uvicorn command;
+the controller exposes no port and retains only the controller Job command.
+
+After an online controller-wheel download timed out, the user downloaded the
+resolved wheels individually into `/tmp/ibg-hybrid-controller-wheels`. The
+controller was then built with `--network=none` using a temporary BuildKit
+read-only bind mount. The wheel directory was neither copied into the source
+tree nor retained as an image layer. The committed controller Dockerfile now
+uses a 300-second pip read timeout for future ordinary builds; this affects
+only dependency acquisition.
+
+Read-only, network-disabled, non-service container smokes imported every
+service entry module and the controller/policy/manual-MC/learning stack. Both
+were silent, RNG-neutral, and file-clean. In-image package/source inspection
+proved Uvicorn is service-only; pandas, SciPy/HiGHS, OR-Tools, and MILP are in
+neither image; controller/policy/runner code is absent from the service; and
+Hybrid processor, forwarder, flow-generator, and runtime-profile modules are
+absent from the controller. No HTTP server, Kubernetes API, cluster, kind
+load, deployment, or live traffic was started. Infrastructure Phase 3 is now
+fully complete; Infrastructure Phase 4 remains separately authorized work.
+
+## IBG-Hybrid Kernel Infrastructure Phase 4 small live boundary
+
+Completed: 2026-08-08.
+
+The first live gate is a sibling Kustomize overlay at
+`deploy/hybrid-kubernetes-phase4-small/`. It retains the Phase 2 Hybrid-owned
+namespace and long-running base, but narrows it to two flows, three stages,
+and exactly one ordinal per stage. The base still excludes the controller
+Job. The Phase 4 Job remains a separately applied object, so the controller
+cannot start discovery, placement, or traffic until all three replica Pods and
+the flow generator have become Ready.
+
+`IBG_Hybrid.kernel_phase4_validation` is the controller-image live-gate entry
+point. It runs two stateful controller slots through the completed Phase 2
+adapter, emits one compact JSON evidence object per slot, and validates exact
+two-selected-stage telemetry, skipped-stage absence, seedless Kernel
+provenance, separated physical/observation jitter, and belief retention. It
+then replays the returned Kernel observations and measured pairs through the
+existing pure Hybrid slot boundary without issuing another HTTP request. The
+replay must preserve placement, final assigned loads, beliefs, and metrics
+(excluding wall-clock elapsed time).
+
+The live topology exercised both required route shapes in the first slot:
+flow 1 selected stages 1 and 3, while flow 2 began at stage 2 and continued to
+stage 3. Each slot produced four selected observations and two measured pairs,
+equivalent to exactly two observations and one pair for each flow. Planning
+links remained controller input at 0 ms for the selected pairs; measured pair
+latencies remained separate observations. Physical processing totals remained
+the only realized-utility and 110-ms SLA input, with zero physical-only SLA
+violations in both slots.
+
+The existing kind cluster was restarted, not recreated. The inspected Phase 3
+service image and the controller image containing the validation entry point
+were loaded on all three existing nodes. The deployed boundary has four
+long-running Pods plus one completed controller Job. Exact Ready ordinal
+coverage was established before the Job was applied. After both slots, every
+long-running Pod retained its original UID, remained Ready, and had zero
+restarts; no OOM kill or eviction occurred. No rollout batching, profile
+scaling, resource change, netem, diagnostic tracing, calibration, replay
+traffic, or larger topology was introduced.
+
+## Hybrid kind-cluster isolation correction
+
+Corrected: 2026-08-08.
+
+The Phase 4 live topology must no longer reuse the historical `ibg` kind
+cluster. That cluster retains unrelated Exact/MILP Kubernetes state, so
+restarting its node containers also restarts those workloads. The supported
+Hybrid live-gate boundary is now the temporary, single-control-plane
+`ibg-hybrid` cluster defined by
+`deploy/hybrid-kubernetes-phase4-small/kind-config.yaml` and operated through
+`scripts/run_hybrid_kernel_phase4.py`. Its only accepted kubectl context is
+`kind-ibg-hybrid`.
+
+The runner is fail-closed at four boundaries. It requires the pinned kind node
+image and both Hybrid images to exist locally before cluster creation; it
+accepts only the exact `ibg-hybrid-control-plane` node identity; it rejects the
+`ibg-testbed` and `milp-testbed` namespaces plus every workload Pod outside
+the Hybrid/system namespaces; and it verifies the exact three Ready stage Pods
+plus one Ready flow generator before applying the controller Job. It never
+starts, targets, scales, or deletes the historical `ibg` cluster or its frozen
+baseline resources.
+
+`run-small` creates only the dedicated cluster, loads only the two Hybrid
+images, executes the bounded Phase 4 gate, prints the completed Job evidence,
+and deletes the dedicated cluster in a `finally` path by default. An explicit
+`--keep-cluster` is required to retain its memory-consuming state. A failed
+post-creation step follows the same default cleanup path. `preflight` and
+`cleanup` are likewise bound to the dedicated cluster name and context.
+
+## Hybrid persistent-cluster lifecycle correction
+
+Corrected: 2026-08-08. This latest section supersedes the preceding temporary-
+cluster deletion policy while retaining its dedicated-cluster isolation rule.
+
+The supported Hybrid runner now follows the Exact launcher lifecycle without
+sharing Exact's cluster. `run-small` checks for `ibg-hybrid`; when absent it
+creates the pinned one-node cluster, and when present it validates the exact
+node, namespace, and workload inventory before reuse. A normal Phase 4 run
+requires both local Hybrid images, loads them into the dedicated node, applies
+the small long-running boundary, explicitly restarts those service workloads,
+waits for complete Ready coverage, and deletes/recreates only the finite
+controller Job. Successful completion or failure leaves the dedicated cluster,
+node image cache, and Hybrid workloads intact.
+
+Cluster deletion is available only through the explicit `cleanup` action and
+can target only `ibg-hybrid`. The runner has no automatic deletion path and no
+`--keep-cluster` inversion of the normal lifecycle.
+
+Exact-style `--skip-build` is intentionally assigned to Infrastructure Phase
+5 rather than pulled into the completed Phase 4 gate. It must skip both Hybrid
+Docker builds, both kind image loads, and the otherwise explicit service
+rollout restart while still reconciling manifests/counts, waiting for Ready
+coverage, and creating a fresh controller Job. Infrastructure Phase 6 then
+extends that reuse boundary to append-only profiles and proves that existing
+Pod UIDs/processes are unchanged while only missing ordinals are created.
+
+## Persistent Phase 4 lifecycle live verification
+
+Verified: 2026-08-08.
+
+The dedicated one-control-plane `ibg-hybrid` architecture has now completed
+two consecutive normal Phase 4 executions. Both used Docker container
+`d6b8e934dfd9` and Kubernetes node UID
+`11d63e26-dd1a-448d-9a14-a99c1667727a`; the second invocation discovered and
+reused that node instead of creating another cluster. Its normal pre-Phase-5
+path reloaded the two local Hybrid images, reapplied unchanged resources,
+explicitly restarted only the three Hybrid StatefulSets and flow generator,
+then deleted/recreated only the completed controller Job.
+
+The historical three-node `ibg` cluster remained stopped throughout. The
+dedicated cluster contains only Kubernetes system namespaces plus
+`ibg-hybrid-testbed`; no Exact or MILP namespace/workload appeared. After the
+second run, the three two-container stage Pods and flow-generator Pod were
+Ready with zero restarts, and the replacement controller Job had succeeded.
+The dedicated node remains running by design. This validates persistent node
+reuse only; Phase 5 `--skip-build` and its no-service-restart/Pod-UID guarantee
+were not exercised.
+
+The second normal invocation also exposed the correct future image-presence
+boundary. `kind load docker-image` reported both unqualified host tags as not
+present and re-imported them, while node `crictl images` showed the normalized
+runtime tags `docker.io/library/ibg-hybrid-testbed:kernel-service-v1` and
+`...:kernel-controller-v1` with platform image IDs `bb6c47d791a1f` and
+`eda04655da857`. Phase 5 `--skip-build` must inspect normalized node-runtime
+tags/platform IDs directly; kind's host-manifest comparison is not an absence
+test for these multi-platform images.
+
+## Planned Infrastructure Phase 7.5 manual MC Kernel boundary
+
+Planned: 2026-08-08. This phase is explicitly ordered after Hybrid-specific
+resource evidence in Phase 7 and before incremental scale validation in Phase
+8. It is not implemented or authorized by this planning record.
+
+The existing controller image already owns deterministic lookahead, the frozen
+top-five-root MC selector, `S=50`, `D_MC=10`, the pure greedy tail, selected-
+only learning, metrics, and bounded rollout-worker support. Phase 7.5 adds only
+the Kubernetes controller selection/lifecycle boundary: an absent policy flag
+continues to mean deterministic lookahead, while explicit `--policy mc` plus
+`--mc-workers N` selects MC for that finite controller Job. No automatic
+entropy/contention/priority trigger is introduced.
+
+For each Kernel MC slot, the controller creates one bounded local process pool,
+uses it for independent shortlisted-root rollout groups across all sequential
+real focal decisions, and closes it before any flow-generator HTTP request.
+All focal actions and final assigned loads must be committed before exactly one
+complete request. The unchanged service image then executes the selected
+two-hop routes, and the existing complete-telemetry boundary applies learning
+only after every selected observation and measured pair is present. Hidden
+processor state never enters MC planning.
+
+The live gate reuses the topology and service resources accepted by Phase 7;
+it is not a scale phase. Under Phase 5 `--skip-build`, all existing service Pod
+UIDs must remain unchanged. Controller evidence separately records CPU, RSS,
+worker count, deadline, completion/failure, and pure-versus-Kernel decision
+parity. Service workers, ports, keep-alive, resources, physical/observation
+jitter, planning/measured latency, utility/SLA, and route semantics remain
+frozen.

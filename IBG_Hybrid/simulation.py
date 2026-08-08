@@ -85,6 +85,10 @@ class InProcessHybridSimulationAdapter:
                         "selected replica has no simulation profile: "
                         f"{choice.stage}:{choice.replica}"
                     ) from error
+                if profile.hidden_state is None:
+                    raise RuntimeError(
+                        "in-process simulation requires a hidden-state profile"
+                    )
                 assigned_load = final_loads.load_for(choice)
                 physical_seed = _derive_observation_seed(
                     scheme=HYBRID_PHYSICAL_SEED_SCHEME,
