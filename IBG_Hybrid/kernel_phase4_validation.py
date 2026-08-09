@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, replace
 import json
+import multiprocessing
 import os
 from typing import Mapping
 
@@ -23,7 +24,12 @@ from .kernel_kubernetes_discovery import (
 )
 from .phase0_contract import DEFAULT_HYBRID_POLICY_PARAMETERS
 from .policy import IBGHybridPolicy
-from .runner import run_hybrid_slot
+from .runner import (
+    DEFAULT_HYBRID_MC_WORKERS,
+    HYBRID_SLOT_POLICY_LOOKAHEAD,
+    HYBRID_SLOT_POLICY_MC,
+    run_hybrid_slot,
+)
 from .slot_contracts import (
     HybridFlow,
     HybridReplica,
@@ -61,6 +67,8 @@ def _replay_kernel_semantics(
     *,
     outcome,
     inputs: HybridKernelControllerInputDocument,
+    policy_mode: str,
+    mc_workers: int,
 ) -> bool:
     slot = outcome.slot
     admission = {item.choice: item for item in inputs.admission}
@@ -100,6 +108,8 @@ def _replay_kernel_semantics(
         replay_input,
         policy=IBGHybridPolicy(inputs.configuration),
         simulation_adapter=replay_adapter,
+        policy_mode=policy_mode,
+        mc_workers=mc_workers,
     )
     return (
         replay_adapter.calls == 1
@@ -118,6 +128,8 @@ def _slot_evidence(
     outcome,
     inputs: HybridKernelControllerInputDocument,
     retained_from_previous: bool,
+    policy_mode: str,
+    mc_workers: int,
 ) -> dict[str, object]:
     slot = outcome.slot
     planning = {item.pair: item.latency_ms for item in inputs.planning_pair_links}
@@ -167,6 +179,12 @@ def _slot_evidence(
         "slot_id": slot.slot_id,
         "configuration": asdict(slot.configuration),
         "flow_order": list(slot.flow_order),
+        "policy_mode": policy_mode,
+        "mc_workers": (
+            mc_workers if policy_mode == HYBRID_SLOT_POLICY_MC else None
+        ),
+        "placement_paths": [placement.path.value for placement in slot.placements],
+        "final_loads": [list(row) for row in slot.final_loads.loads],
         "ready_replicas": [
             {
                 "stage": replica.choice.stage,
@@ -216,11 +234,16 @@ def _slot_evidence(
         "separated_jitter_valid": separated_jitter,
         "seedless_kernel_provenance": seedless_kernel_provenance,
         "belief_retained_from_previous": retained_from_previous,
+        "active_child_processes_after_slot": len(
+            multiprocessing.active_children()
+        ),
         "beliefs_before": _belief_mapping(slot.beliefs_before),
         "beliefs_after": _belief_mapping(slot.beliefs_after),
         "pure_kernel_replay_parity": _replay_kernel_semantics(
             outcome=outcome,
             inputs=inputs,
+            policy_mode=policy_mode,
+            mc_workers=mc_workers,
         ),
         "metrics": asdict(slot.metrics),
     }
@@ -232,6 +255,8 @@ def run_small_live_gate(
     *,
     first_slot: int = 1,
     iterations: int = 2,
+    policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
+    mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
 ) -> tuple[dict[str, object], ...]:
     if first_slot < 1 or iterations < 2:
         raise ValueError("Phase 4 requires a positive slot and at least two slots")
@@ -247,6 +272,8 @@ def run_small_live_gate(
             outcome=outcome,
             inputs=inputs,
             retained_from_previous=retained,
+            policy_mode=policy_mode,
+            mc_workers=mc_workers,
         )
         if item["observation_count"] != 2 * inputs.configuration.num_flows:
             raise RuntimeError("Phase 4 did not receive two observations per flow")
@@ -262,6 +289,17 @@ def run_small_live_gate(
         ):
             if not item[required]:
                 raise RuntimeError(f"Phase 4 validation failed: {required}")
+        if item["active_child_processes_after_slot"] != 0:
+            raise RuntimeError(
+                "Hybrid controller retained an MC child process after the slot"
+            )
+        expected_path = (
+            "monte-carlo"
+            if policy_mode == HYBRID_SLOT_POLICY_MC
+            else "deterministic-lookahead"
+        )
+        if set(item["placement_paths"]) != {expected_path}:
+            raise RuntimeError("Hybrid controller used an unexpected policy path")
         evidence.append(item)
         previous_beliefs = outcome.slot.beliefs_after
     first_routes = {
@@ -277,6 +315,9 @@ def run_small_live_gate(
 
 def _controller_from_environment(
     environ: Mapping[str, str] | None = None,
+    *,
+    policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
+    mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
 ) -> tuple[HybridKernelControllerAdapter, HybridKernelControllerInputDocument]:
     values = os.environ if environ is None else environ
     inputs = load_controller_input_document(
@@ -305,6 +346,8 @@ def _controller_from_environment(
             discovery=discovery,
             flow_generator=flow_generator,
             initial_beliefs={item.choice: uniform for item in inputs.admission},
+            policy_mode=policy_mode,
+            mc_workers=mc_workers,
         ),
         inputs,
     )
@@ -317,6 +360,8 @@ def main() -> None:
         inputs,
         first_slot=int(os.environ.get("SLOT_ID", "1")),
         iterations=int(os.environ.get("MAX_ITERATIONS", "2")),
+        policy_mode=HYBRID_SLOT_POLICY_LOOKAHEAD,
+        mc_workers=DEFAULT_HYBRID_MC_WORKERS,
     )
     for item in evidence:
         print(json.dumps(item, sort_keys=True, separators=(",", ":")), flush=True)

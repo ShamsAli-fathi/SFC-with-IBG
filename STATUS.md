@@ -2156,3 +2156,336 @@ approved topology only through a separate choice and fresh controller sizing.
 
 Phase 5 remains next and unstarted. The currently running dedicated one-node
 Phase 4 cluster was not contacted or changed for this planning update.
+
+## IBG-Hybrid Kernel Infrastructure Phase 5 complete
+
+Updated: 2026-08-09.
+
+Phase 5 implemented count-safe persistent rollout planning and
+Exact-compatible `--skip-build` without changing Hybrid algorithm or service
+semantics. `IBG_Hybrid/kernel_rollout.py` validates exact ownership of all
+three StatefulSets, one consistent existing count, no implicit shrink,
+deterministic bounded missing-ordinal targets, and exact Ready coverage per
+target. The runner reconciles the current count before batching so an existing
+topology cannot be transiently reduced by the static overlay.
+
+`run-small --skip-build` now requires the persistent `ibg-hybrid` cluster,
+derives each local linux/amd64 image config ID from a temporary offline OCI
+archive, matches it to the normalized `crictl` tag/config ID on the dedicated
+node, and skips both builds, the kind image load, and the explicit service
+restart. It still validates isolation and StatefulSet ownership, applies only
+Hybrid resources, waits for exact Ready coverage, and deletes/recreates the
+finite controller Job. Normal mode defines both builds with `--pull=false
+--network=none`; it was mocked but not executed during the live Phase 5 gate.
+No dependency, image, or package download occurred.
+
+The unchanged-count live gate completed at 2 flows x 3 stages x 1 replica.
+Docker node `d6b8e934dfd9` and Kubernetes node UID
+`11d63e26-dd1a-448d-9a14-a99c1667727a` remained unchanged. Pre/post serving
+state is:
+
+- `hybrid-stage-1-0`: `df6d584d-35cd-4de9-b53e-3f8b071586c2`, restarts 0/0.
+- `hybrid-stage-2-0`: `760f9475-b6f3-412f-9279-fdcd3f53ece4`, restarts 0/0.
+- `hybrid-stage-3-0`: `b0dd1dc9-59d8-4580-bbe5-a3fd7c55814c`, restarts 0/0.
+- flow generator: `f9b97cb9-031a-4c72-b298-2c1a85cb8562`, restarts 0.
+
+The controller Job UID changed from
+`71ba7251-e4d9-48e8-b4c6-388573e62242` to
+`42dd9e64-c7e5-4b37-93d1-ecee8cac59c3` and completed once. Both slots
+retained `(1,3)` and `(2,3)` routes, four observations/two measured pairs,
+complete-placement-before-one-request, belief retention, skipped-stage
+absence, physical/observation separation, planning/measured separation, zero
+physical-only SLA violations, and pure/Kernel parity.
+
+The shared `ibg-control-plane`, `ibg-worker`, and `ibg-worker2` containers
+remained exited before and after. The dedicated node remains running. No live
+new ordinal, Phase 6 profile mutation, Phase 7 resource change, Phase 7.5
+Kubernetes MC flag/worker wiring, or Phase 8 scale validation occurred.
+
+Validation passes 14 focused Infrastructure Phase 5 tests, 179 Hybrid Phase
+0--5 plus Infrastructure Phase 0--5 tests, and 111 relevant unchanged Exact
+processor, forwarder, flow-generator, adapter, runner, learning,
+dynamic-configuration, experiment, and launcher lifecycle tests. No commit or
+push occurred.
+
+Infrastructure Phase 6 is next: append-only profile entries must preserve
+every running identity byte-for-byte, create only missing ordinals under
+skip-build, retain existing Pod UIDs/processes, and prove the first safe
+3-flow x 3-stage x 2-replica live gate before resource or MC work begins.
+
+## IBG-Hybrid Kernel Infrastructure Phase 6 complete
+
+Updated: 2026-08-09.
+
+Phase 6 added `ibg-hybrid-kernel-profile-expansion-v1` and the separate
+`deploy/hybrid-kubernetes-phase6-3x3x2/` projection. The new runtime profile
+preserves all three old identity/state/seed entries and adds only replica 2 at
+each stage. The controller profile preserves every old capacity/link and adds
+complete two-replica admission and directed planning-link coverage. Beliefs
+remain controller-private; controller inputs contain no hidden state or
+observation seed.
+
+Before mutation, the runner now reads both deployed ConfigMaps, requires exact
+field/canonical completeness, rejects any old runtime/admission/link drift,
+and permits only complete additions. A server-side dry-run must also preserve
+each StatefulSet Pod template exactly. The fixed-name ConfigMaps have no hash,
+checksum annotation, or `subPath`; existing processors retain the immutable
+profile loaded at startup while only new processes read added entries.
+
+The live `--skip-build --replica 2 --rollout-batch-size 1` gate completed on
+the existing persistent cluster. Docker node `d6b8e934dfd9` and Kubernetes
+node UID `11d63e26-dd1a-448d-9a14-a99c1667727a` are unchanged. Preserved
+serving identities, all still at zero restarts, are:
+
+- `hybrid-stage-1-0`: `df6d584d-35cd-4de9-b53e-3f8b071586c2`.
+- `hybrid-stage-2-0`: `760f9475-b6f3-412f-9279-fdcd3f53ece4`.
+- `hybrid-stage-3-0`: `b0dd1dc9-59d8-4580-bbe5-a3fd7c55814c`.
+- flow generator: `f9b97cb9-031a-4c72-b298-2c1a85cb8562`.
+
+Only these new zero-restart Pods were created:
+
+- `hybrid-stage-1-1`: `ade01b78-9f31-4795-a5c6-a39cf00291c1`.
+- `hybrid-stage-2-1`: `db51c381-0491-4a88-ac61-a4b396f0e8e1`.
+- `hybrid-stage-3-1`: `c40c5d06-78fd-4635-bd61-32d44223386e`.
+
+Every StatefulSet is exactly 2 desired/Ready/current/updated. The fresh
+`ibg-hybrid-controller-phase6` Job UID is
+`2517db9e-db76-43a0-b63b-3c7da2bb2374` and it completed once with zero Pod
+restarts. Both live slots produced six selected observations and three
+measured pairs after one complete request, passed skipped-stage absence,
+belief retention, seedless provenance, jitter/latency separation, and
+pure/Kernel parity, and had zero physical-only SLA violations. Slot 1 covered
+`(1,3)`, `(2,3)`, and `(1,2)` with one final assigned flow per replica.
+
+Node image identities remain service
+`bb6c47d791a1fdd645e1ff14ed90f04619fa09fd80d36db7d12c71227bcb78f5`
+and controller
+`eda04655da8573cad9d60d72c8ef44761f1fb351619f089cdab38ae490ce6803`.
+No image build/load/download, service restart, node creation, or cluster
+deletion occurred. `ibg-control-plane`, `ibg-worker`, and `ibg-worker2`
+remained exited before and after; the dedicated cluster remains running.
+
+Validation passes 12 focused Phase 6 tests, 191 Hybrid Phase 0--5 plus
+Infrastructure Phase 0--6 tests, and 119 relevant frozen Exact processor,
+forwarder, flow-generator, adapter, runner, learning, latency, dynamic-
+configuration, experiment, and launcher lifecycle tests. Compilation,
+Kustomize rendering, `git diff --check`, empty `IBG/`/`MILP/` diffs, no
+Markdown under `IBG_Hybrid/`, and stale-process checks pass.
+
+Infrastructure Phase 7 is next. It must collect resource evidence at this
+accepted persistent 3x3x2 topology before deciding on the candidate processor
+64Mi/256Mi memory reduction. Phase 7.5 Kubernetes MC and Phase 8 incremental
+scale remain unstarted and separately authorized. No commit or push occurred.
+
+### Phase 6 explicit topology CLI correction complete
+
+Updated: 2026-08-09.
+
+The Hybrid persistent runner now accepts `--flow`/`--flows`,
+`--stage`/`--stages`, and `--replica`/`--replicas`, matching the Exact and MILP
+dimension interface. Explicit `--flow 2 --stage 3 --replica 1` selects the
+historical Phase 4 profile, while `--flow 3 --stage 3 --replica 2` selects the
+accepted Phase 6 profile. When flow/stage are omitted, the runner retains the
+old behavior by inferring them from the unique approved replica boundary.
+
+All topology resolution and local profile validation now precede the first
+cluster command. Mixed or unsupported tuples, stage counts other than three,
+and larger scales fail without contacting Kubernetes. Accepted runs print the
+resolved topology before continuing. This is an interface correction only:
+no profile generation, arbitrary dimensions, new live traffic, image action,
+resource change, or Phase 8 scale authorization was added.
+
+Forty-four focused Infrastructure Phase 4--6 tests, 196 complete Hybrid Phase
+0--5 plus Infrastructure Phase 0--6 tests, and 119 relevant frozen Exact tests
+pass. Compilation, CLI help, Kustomize rendering, `git diff --check`, frozen
+`IBG/`/`MILP/` diffs, no Hybrid Markdown, and stale-process checks pass. The
+accepted live topology remains 3x3x2 on the persistent dedicated cluster;
+Phase 7 resource evidence remains next. No commit or push occurred.
+
+## IBG-Hybrid Kernel Infrastructure Phase 7 complete
+
+Updated: 2026-08-09.
+
+Phase 7 added `IBG_Hybrid/kernel_resource_evidence.py`, the baseline
+`deploy/hybrid-kubernetes-phase7-3x3x2/` projection, the processor-only
+`deploy/hybrid-kubernetes-phase7-3x3x2-candidate/` projection, and
+`scripts/run_hybrid_kernel_phase7.py`. The runner's explicit
+`--processor-memory-profile baseline|candidate` boundary is legal only with
+`--skip-build --flow 3 --stage 3 --replica 2`. It validates the complete
+StatefulSet transition and preserves the Phase 6 profiles and counts.
+
+The baseline five-slot gate retained every Phase 6 serving UID/restart count.
+Its resource envelope was:
+
+- private processors: 48,599,040-byte maximum cgroup peak,
+  44,486,656-byte maximum CRI working set, zero throttling/events;
+- public forwarders: 129,855,488-byte peak, 125,829,120-byte working set,
+  zero throttling/events;
+- flow generator: 53,125,120-byte peak, 48,783,360-byte working set,
+  zero throttling/events;
+- controller: 68,743,168-byte maximum process RSS, 1,847,270 CPU usec,
+  zero throttling, and 6 seconds of the 600-second deadline.
+
+The controlled candidate rollout changed only processor memory from
+128Mi/768Mi to 64Mi/256Mi, retained 50m/1 CPU, and deliberately replaced the
+six stage Pods. Candidate Pods reached Ready five to seven seconds after
+creation; earliest creation to final Ready was 16 seconds. Startup-only
+connection-refused/503 readiness events cleared before traffic. The current
+zero-restart stage UIDs are:
+
+- `hybrid-stage-1-0`: `7afce7fc-6ad3-42b2-993a-0019a00eb1d5`.
+- `hybrid-stage-1-1`: `b2d8b1ae-e9f1-44c9-9a3a-9e13c0a4ac54`.
+- `hybrid-stage-2-0`: `285c0285-1aaa-4565-9943-be36fddd096a`.
+- `hybrid-stage-2-1`: `7c24806a-6936-47f7-b9ab-5ab976c8d3a3`.
+- `hybrid-stage-3-0`: `4b7dd167-72c9-4bcf-9cd7-709b0f8123a2`.
+- `hybrid-stage-3-1`: `b1d98cab-5069-4a64-b47b-42b6c3332ec5`.
+
+Docker node `d6b8e934dfd9`, Kubernetes node UID
+`11d63e26-dd1a-448d-9a14-a99c1667727a`, and flow-generator UID
+`f9b97cb9-031a-4c72-b298-2c1a85cb8562` are unchanged. The node remains Ready
+with 4 CPU and 16,328,364 Ki allocatable memory and no Memory/Disk/PID
+pressure. The shared `ibg-control-plane`, `ibg-worker`, and `ibg-worker2`
+containers remained exited.
+
+The final candidate gate measured a 46,583,808-byte maximum processor cgroup
+peak and 42,487,808-byte working set, leaving 221,851,648 bytes below the
+256Mi limit. Processor/forwarder/flow-generator throttling and memory-event
+deltas were zero; all serving restarts, OOM kills, evictions, fatal events,
+and post-Ready probe failures were zero. The controller completed in 6 seconds
+with 69,238,784-byte maximum process RSS, 2,396,824 CPU usec, and 116,940
+throttled usec. The candidate is accepted and remains deployed.
+
+Each of five final slots produced six selected observations and three measured
+pairs after one complete request. Noncontiguous and stage-2-first routes,
+skipped-stage absence, final loads, belief retention, selected-only learning,
+seedless Kernel provenance, physical/observation and planning/measured
+separation, zero physical-only SLA violations, and pure/Kernel parity passed.
+
+No image build/load/download, new dependency, node/topology scale, Phase 7.5
+MC wiring, Phase 8 work, commit, or push occurred. Phase 7.5 manual MC
+Kubernetes integration is next and must reuse this accepted candidate
+resource boundary at 3x3x2 without changing service Pods or scale.
+
+Validation passes seven focused Infrastructure Phase 7 tests, 203 Hybrid
+Phase 0--5 plus Infrastructure Phase 0--7 tests, and 119 relevant frozen Exact
+processor, forwarder, flow-generator, adapter, runner, learning, latency,
+dynamic-configuration, experiment, and launcher-lifecycle tests. Python
+compilation, both Phase 7 Kustomize renders, CLI help, `git diff --check`, the
+empty `IBG/`/`MILP/` diff, no Markdown under `IBG_Hybrid/`, and stale-process
+checks pass.
+
+## IBG-Hybrid Kernel Infrastructure Phase 7.5 complete
+
+Updated: 2026-08-09.
+
+Manual Kubernetes MC is now exposed only by
+`--policy mc --mc-workers N`; omitted policy still resolves to deterministic
+lookahead, and `N` is restricted to 1--2. The finite Job mounts only the three
+Phase 7.5 controller source files from
+`ibg-hybrid-controller-phase75-source`, allowing the already-loaded controller
+image to run the new boundary without a build or kind load. No serving Pod,
+runtime profile, controller input, hidden state, or belief uses that ConfigMap.
+
+The one-worker and two-worker live Jobs each completed two slots at exactly
+3 flows x 3 stages x 2 replicas. Their placements and final load matrices were
+identical at fixed seeds. All four slots used MC for every focal placement,
+completed placement before one flow-generator request, returned six selected
+observations and three measured pairs, covered `(1,3)` and `(2,3)` routes,
+excluded skipped stages, propagated final loads, retained beliefs, used
+seedless Kernel provenance, preserved physical/observation and
+planning/measured separation, and passed pure/Kernel replay parity. Direct
+child sampling observed exactly one and two workers respectively; every slot
+ended with zero active children.
+
+Controller evidence is:
+
+- one worker: 3,367,647 CPU usec, 0 throttled usec, 58,904,576-byte maximum
+  cgroup current, 62,308,352-byte cgroup peak, 71,356,416-byte maximum process
+  RSS, 16 samples;
+- two workers: 3,408,358 CPU usec, 897 throttled usec, 64,458,752-byte maximum
+  cgroup current, 67,727,360-byte cgroup peak, 71,315,456-byte maximum process
+  RSS, 13 samples;
+- both Jobs: duration 8 seconds, deadline margin 592 seconds, zero controller
+  restarts, zero fatal events/post-Ready probe failures, and no node pressure.
+
+Persistent identities remain:
+
+- Docker node `d6b8e934dfd9`;
+- Kubernetes node UID `11d63e26-dd1a-448d-9a14-a99c1667727a`;
+- stage UIDs `7afce7fc-6ad3-42b2-993a-0019a00eb1d5`,
+  `b2d8b1ae-e9f1-44c9-9a3a-9e13c0a4ac54`,
+  `285c0285-1aaa-4565-9943-be36fddd096a`,
+  `7c24806a-6936-47f7-b9ab-5ab976c8d3a3`,
+  `4b7dd167-72c9-4bcf-9cd7-709b0f8123a2`, and
+  `b1d98cab-5069-4a64-b47b-42b6c3332ec5`;
+- flow-generator UID `f9b97cb9-031a-4c72-b298-2c1a85cb8562`;
+- every serving restart count remains zero.
+
+The final Phase 7.5 Job Pod is
+`ibg-hybrid-controller-phase75-rm77s`, UID
+`aed04fbc-e03c-4624-9686-97e77ffa3068`, Succeeded with zero restarts. The
+shared `ibg-control-plane`, `ibg-worker`, and `ibg-worker2` remain exited. No
+image build/load/download, service restart, new profile, topology scale,
+Phase 8 work, commit, or push occurred. Nine focused Phase 7.5 tests, 212
+complete Hybrid Phase 0--7.5 tests, and 119 relevant frozen Exact regressions
+pass. Phase 8 incremental scale validation is next and remains unstarted.
+
+## IBG-Hybrid Kernel Infrastructure Phase 8 Gate 1 complete
+
+Updated: 2026-08-09.
+
+The first Phase 8 gate is exactly 4 flows x 3 stages x 2 replicas under
+deterministic lookahead. `deploy/hybrid-kubernetes-phase8-gate1-4x3x2/`
+changes only the versioned source identity and `num_flows`; its six runtime
+identity/state/seed entries, six admission capacities, twelve planning links,
+three StatefulSet templates, service resources, and images are unchanged.
+`validate_flow_only_profile_expansion` rejects any deployed or proposed drift
+before reconciliation. The runner accepts only explicit
+`--skip-build --flow 4 --stage 3 --replica 2`, emits no scale or restart for
+the equal two-replica target, and rejects MC at this gate.
+
+The live gate used the already-running dedicated cluster and completed two
+lookahead slots. Each slot completed four focal placements before one request,
+returned eight selected observations and four measured pairs, excluded every
+skipped stage, propagated admission-safe final loads, retained beliefs,
+preserved selected-only learning and seedless Kernel provenance, kept
+physical/observation jitter and planning/measured pair latency separate, and
+passed pure/Kernel parity. The first slot contained `(1,3)` and `(2,3)` routes;
+both slots had zero physical-only SLA violations.
+
+Persistent identities remain unchanged with zero serving restarts:
+
+- Docker node `d6b8e934dfd9`;
+- Kubernetes node UID `11d63e26-dd1a-448d-9a14-a99c1667727a`;
+- stage UIDs `7afce7fc-6ad3-42b2-993a-0019a00eb1d5`,
+  `b2d8b1ae-e9f1-44c9-9a3a-9e13c0a4ac54`,
+  `285c0285-1aaa-4565-9943-be36fddd096a`,
+  `7c24806a-6936-47f7-b9ab-5ab976c8d3a3`,
+  `4b7dd167-72c9-4bcf-9cd7-709b0f8123a2`, and
+  `b1d98cab-5069-4a64-b47b-42b6c3332ec5`;
+- flow-generator UID `f9b97cb9-031a-4c72-b298-2c1a85cb8562`.
+
+The finite controller Job UID is
+`f9ae6288-2799-4288-99ee-afe93b8cabd8`; its Pod UID is
+`c060064e-ed79-4a03-a4d6-b034f8d95364`, Succeeded with zero restarts.
+Controller duration was 22 seconds with 578 seconds of deadline margin,
+1,811,503 CPU usec, 79,981 throttled usec, 51,302,400-byte cgroup peak, and
+69,079,040-byte maximum process RSS.
+
+Serving processor/forwarder/flow-generator cgroup peaks were
+46,899,200/129,708,032/53,149,696 bytes; CPU deltas were
+734,676/1,344,907/125,690 usec. Serving throttling, memory events, restarts,
+fatal events, post-Ready probe failures, and node pressure were all zero. All
+three StatefulSets remain exactly 2/2 Ready. The shared `ibg-control-plane`,
+`ibg-worker`, and `ibg-worker2` containers remained exited before and after.
+
+No image build/load/pull/download, service rollout, new replica/stage/node,
+resource change, MC-at-scale run, later Phase 8 work, commit, or push occurred.
+Fourteen focused Gate 1 tests, 225 full Hybrid tests through Gate 1, and 122
+relevant frozen Exact tests pass, plus compilation, Kustomize, import-safety,
+diff, frozen-tree, and process checks. The dedicated cluster remains running.
+
+The next action requires a separate Phase 8 choice. Current evidence supports
+considering a `5x3x2` lookahead-only flow increment; manual MC at `4x3x2`
+would instead require its own controller-resource gate. Neither is authorized
+by this completion.

@@ -85,6 +85,9 @@ CONTROLLER_COPY_MAP = {
     "IBG_Hybrid/kernel_phase4_validation.py": (
         "IBG_Hybrid/kernel_phase4_validation.py"
     ),
+    "IBG_Hybrid/kernel_controller_cli.py": (
+        "IBG_Hybrid/kernel_controller_cli.py"
+    ),
 }
 
 
@@ -267,7 +270,10 @@ def test_controller_image_package_imports_policy_learning_and_manual_mc_only(
     completed = run_isolated_import(
         image_root,
         workdir,
-        ("IBG_Hybrid.kernel_controller_service",),
+        (
+            "IBG_Hybrid.kernel_controller_service",
+            "IBG_Hybrid.kernel_controller_cli",
+        ),
         (
             "from IBG_Hybrid.policy import IBGHybridPolicy, "
             "HybridMonteCarloDecision; "

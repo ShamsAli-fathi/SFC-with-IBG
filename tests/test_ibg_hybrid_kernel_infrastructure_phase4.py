@@ -232,13 +232,66 @@ def _inventory(names, *, namespace=None, ready=False):
         metadata = {"name": name}
         if namespace is not None:
             metadata["namespace"] = namespace
+        if namespace == cluster_runner.HYBRID_NAMESPACE:
+            if name.startswith("hybrid-stage-"):
+                stage = int(name.split("-")[2])
+                metadata["uid"] = f"uid-{name}"
+                metadata["labels"] = {
+                    "app.kubernetes.io/name": "ibg-hybrid-replica",
+                    "app.kubernetes.io/part-of": "ibg-hybrid-testbed",
+                    "app.kubernetes.io/component": "replica-stage",
+                    "ibg-hybrid.stage": str(stage),
+                }
+            elif name.startswith("ibg-hybrid-flow-generator-"):
+                metadata["uid"] = f"uid-{name}"
+                metadata["labels"] = {
+                    "app.kubernetes.io/name": "ibg-hybrid-flow-generator",
+                    "app.kubernetes.io/part-of": "ibg-hybrid-testbed",
+                }
         item = {"metadata": metadata}
         if ready:
             item["status"] = {
                 "phase": "Running",
                 "conditions": [{"type": "Ready", "status": "True"}],
+                "containerStatuses": [
+                    {"name": "serving", "restartCount": 0}
+                ],
             }
         items.append(item)
+    return {"items": items}
+
+
+def _statefulset_inventory(replicas=1):
+    items = []
+    for stage in (1, 2, 3):
+        name = f"hybrid-stage-{stage}"
+        labels = {
+            "app.kubernetes.io/name": "ibg-hybrid-replica",
+            "app.kubernetes.io/part-of": "ibg-hybrid-testbed",
+            "app.kubernetes.io/component": "replica-stage",
+            "ibg-hybrid.stage": str(stage),
+        }
+        items.append(
+            {
+                "kind": "StatefulSet",
+                "metadata": {
+                    "name": name,
+                    "namespace": cluster_runner.HYBRID_NAMESPACE,
+                    "labels": labels,
+                },
+                "spec": {
+                    "serviceName": name,
+                    "replicas": replicas,
+                    "selector": {
+                        "matchLabels": {
+                            "app.kubernetes.io/name": "ibg-hybrid-replica",
+                            "ibg-hybrid.stage": str(stage),
+                        }
+                    },
+                    "template": {"metadata": {"labels": labels}},
+                },
+            }
+        )
     return {"items": items}
 
 
@@ -256,7 +309,8 @@ def test_phase4_cluster_boundary_is_dedicated_single_node_and_local_only():
     assert "ibg-control-plane" not in runner_source
     assert "ibg-worker" not in runner_source
     assert "docker image inspect" not in runner_source
-    assert "pull" not in runner_source.lower()
+    assert "--pull=false" in runner_source
+    assert "--network=none" in runner_source
 
 
 def test_phase4_cluster_inventory_rejects_shared_or_foreign_workloads():
@@ -394,6 +448,55 @@ def test_phase4_runner_reuses_cluster_and_recreates_only_controller_job(capsys):
             "json",
         ):
             return json.dumps(serving)
+        if command == cluster_runner._kubectl(
+            "get",
+            "statefulsets",
+            "-n",
+            cluster_runner.HYBRID_NAMESPACE,
+            "-o",
+            "json",
+        ):
+            return json.dumps(_statefulset_inventory())
+        if command == cluster_runner._kubectl(
+            "get",
+            "configmap",
+            "ibg-hybrid-runtime-profiles",
+            "ibg-hybrid-planning-links",
+            "-n",
+            cluster_runner.HYBRID_NAMESPACE,
+            "-o",
+            "json",
+        ):
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": "ibg-hybrid-runtime-profiles",
+                                "namespace": cluster_runner.HYBRID_NAMESPACE,
+                            },
+                            "data": {
+                                "runtime-profiles.json": (
+                                    DEPLOY / "runtime-profiles.json"
+                                ).read_text()
+                            },
+                        },
+                        {
+                            "metadata": {
+                                "name": "ibg-hybrid-planning-links",
+                                "namespace": cluster_runner.HYBRID_NAMESPACE,
+                            },
+                            "data": {
+                                "controller-inputs.json": (
+                                    DEPLOY / "controller-inputs.json"
+                                ).read_text()
+                            },
+                        },
+                    ]
+                }
+            )
+        if "--dry-run=server" in command:
+            return json.dumps(_statefulset_inventory())
         if "logs" in command:
             return '{"slot_id":1}\n'
         return ""
@@ -412,7 +515,7 @@ def test_phase4_runner_reuses_cluster_and_recreates_only_controller_job(capsys):
     assert sum(
         command[:3] == ("docker", "image", "inspect")
         for command in command_values
-    ) == 2
+    ) == 1
     restart = next(command for command in command_values if "restart" in command)
     assert "statefulset/hybrid-stage-1" in restart
     delete_job = next(
@@ -426,7 +529,10 @@ def test_phase4_runner_reuses_cluster_and_recreates_only_controller_job(capsys):
         if "apply" in command and str(cluster_runner.CONTROLLER_JOB) in command
     )
     assert delete_job < apply_job
-    assert capsys.readouterr().out == '{"slot_id":1}\n'
+    assert capsys.readouterr().out == (
+        "Selected Hybrid topology: 2 flows x 3 stages x 1 replica per stage\n"
+        '{"slot_id":1}\n'
+    )
 
 
 def test_phase4_cluster_runner_import_is_silent_and_side_effect_free(tmp_path):

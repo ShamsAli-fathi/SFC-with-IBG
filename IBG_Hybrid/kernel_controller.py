@@ -21,7 +21,11 @@ from .kernel_route_contracts import (
 )
 from .phase0_contract import DEFAULT_HYBRID_POLICY_PARAMETERS
 from .policy import IBGHybridPolicy
-from .runner import HYBRID_SLOT_POLICY_LOOKAHEAD, run_hybrid_slot
+from .runner import (
+    DEFAULT_HYBRID_MC_WORKERS,
+    HYBRID_SLOT_POLICY_LOOKAHEAD,
+    run_hybrid_slot,
+)
 from .slot_contracts import (
     BeliefVector,
     HybridFlow,
@@ -309,6 +313,7 @@ class HybridKernelControllerAdapter:
         initial_beliefs: Mapping[ReplicaChoice, Sequence[float]],
         policy_root_seed: int = 2050,
         policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
+        mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
         policy: IBGHybridPolicy | None = None,
     ) -> None:
         expected = {item.choice for item in controller_inputs.admission}
@@ -319,6 +324,7 @@ class HybridKernelControllerAdapter:
         self.flow_generator = flow_generator
         self.policy_root_seed = policy_root_seed
         self.policy_mode = policy_mode
+        self.mc_workers = mc_workers
         self.policy = policy or IBGHybridPolicy(
             controller_inputs.configuration,
             DEFAULT_HYBRID_POLICY_PARAMETERS,
@@ -380,9 +386,9 @@ class HybridKernelControllerAdapter:
             policy=self.policy,
             simulation_adapter=traffic,
             policy_mode=self.policy_mode,
+            mc_workers=self.mc_workers,
         )
         if traffic.requests_submitted != 1:
             raise RuntimeError("Hybrid controller must submit exactly one slot request")
         self._beliefs = dict(result.beliefs_after)
         return HybridKernelControllerSlotResult(snapshot, result)
-

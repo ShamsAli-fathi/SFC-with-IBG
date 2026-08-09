@@ -1619,3 +1619,208 @@ this decision alone.
 - Phase 7.5 authorizes no scale increase. In Phase 8, manual MC at each larger
   topology requires a separate choice and fresh controller sizing; lookahead
   success does not automatically authorize MC at that scale.
+
+## Hybrid Infrastructure Phase 5 rollout and image-reuse decisions
+
+Accepted: 2026-08-09.
+
+- Accept `ibg-hybrid-kernel-rollout-v1` as the Hybrid-owned, policy-free
+  count/rollout contract. Require exactly stages 1--3 under the frozen Hybrid
+  namespace, names, labels, selectors, Service identities, and Pod-template
+  ownership, with one consistent existing desired count.
+- Forbid implicit scale-down. A requested count below the existing count fails,
+  equality is a rollout no-op, and a higher already-profiled count advances by
+  deterministic bounded targets. Apply one target to all three stages before
+  waiting for exact Running/Ready ordinals, and start no controller Job until
+  the final target is complete.
+- Reconcile manifests through a temporary count override that preserves the
+  validated existing count before batching. Do not reapply the static
+  one-replica overlay in a way that transiently shrinks a later persistent
+  topology.
+- Match Exact-compatible `--skip-build` semantics across both Hybrid images:
+  no Docker build, no kind load, and no forced serving-workload restart, while
+  isolation, manifest/count reconciliation, readiness, and fresh controller
+  Job creation remain mandatory. `--skip-build` requires an existing
+  `ibg-hybrid` cluster and never creates or contacts the shared `ibg` cluster.
+- Derive each locally selected image's unique linux/amd64 config digest from a
+  temporary offline OCI export, then require the same full config ID under the
+  normalized runtime tag in each accepted node's `crictl` inventory. Do not
+  compare the local multi-platform index digest with a node config digest, use
+  kind-load output as presence evidence, or hardcode the Phase 4 short IDs.
+- Accept `--pull=false --network=none` as the only normal-build mode in this
+  runner. A missing local base/dependency/cache fails closed; no dependency
+  download, image pull, host installation, or weakened image claim is allowed.
+- Require pre/post UID and per-container restart-count equality for every
+  existing serving Pod under `--skip-build`. Replacing the finite controller
+  Job remains correct and does not imply persistence of controller-private
+  beliefs across independent Job lifecycles.
+- Keep the current live target at one replica per stage. Reject a requested
+  count not already covered by both immutable runtime and controller profile
+  documents. Append-only profile growth and its new-ordinal live proof remain
+  exclusively Infrastructure Phase 6.
+- Accept the unchanged-count live gate on the persistent node as Phase 5
+  evidence: all serving UIDs/restarts and the node UID remained unchanged,
+  only the controller Job was replaced, both required route shapes and full
+  telemetry/parity passed, and the shared `ibg` nodes stayed stopped.
+
+## Hybrid Infrastructure Phase 6 append-only-profile decisions
+
+Accepted: 2026-08-09.
+
+- Accept `ibg-hybrid-kernel-profile-expansion-v1` as the policy-free
+  fail-before-write boundary and
+  `ibg-hybrid-infrastructure-phase6-3x3x2-v1` as the exact target source
+  identity. Keep the Phase 4/5 one-replica overlay unchanged as historical
+  input rather than overwriting it.
+- Preserve every old runtime identity, hidden state, and observation seed;
+  every old admission capacity; and every old directed planning-link value.
+  Permit only the three new runtime/admission identities and nine new links
+  required for complete three-stage/two-replica coverage. Continue rejecting
+  beliefs in ConfigMaps and hidden state or observation seeds in controller
+  inputs.
+- Treat the configuration change from two to three flows and one to two
+  replicas plus the new source identity as document-level Phase 6 metadata,
+  not permission to mutate an existing processor identity. Existing-profile,
+  admission, or link drift remains a separately approved refresh operation.
+- Require live deployed documents to be read and compared before either
+  ConfigMap is reconciled. Missing old entries, duplicates, partial additions,
+  unexpected identities, malformed/incomplete links, and runtime/controller
+  configuration disagreement fail before a Kubernetes write or scale action.
+- Require a server-side count-preserving dry-run and exact StatefulSet Pod-
+  template equality before ConfigMap apply. Retain fixed ConfigMap names with
+  no generator hash, profile checksum annotation, or `subPath`. Existing
+  processors keep their startup-loaded immutable profile while new ordinals
+  read the updated projected document.
+- Require `--skip-build` for the Phase 6 target. Reconcile profiles first,
+  verify their exact deployed contents, keep all existing Pod UIDs/restart
+  counts, add only ordinal 1 at each stage, require exact 2/2 Ready coverage,
+  and only then replace the finite controller Job.
+- Accept the successful 3x3x2 two-slot live gate as Phase 6 evidence. Both
+  required route forms, six observations/three pairs per slot, final loads,
+  skipped-stage absence, belief retention, separated jitter/latency inputs,
+  seedless provenance, and pure/Kernel parity passed while the shared `ibg`
+  nodes stayed stopped.
+- Keep processor/forwarder resources, images, workers, ports, clients,
+  keep-alive, probes, policy, learning, metrics, utility, SLA, and jitter laws
+  frozen. Phase 7 owns resource evidence; Phase 7.5 owns manual Kubernetes MC;
+  Phase 8 owns any larger scale.
+
+### Phase 6 explicit topology CLI decision
+
+Accepted: 2026-08-09.
+
+- Match the Exact/MILP dimension option names by accepting singular and plural
+  flow, stage, and replica flags in the Hybrid Kubernetes runner.
+- Treat the explicit tuple only as a selector for a complete approved profile:
+  accept `2x3x1` and `3x3x2`, infer flow/stage from replica when omitted for
+  compatibility, and reject every other tuple before cluster access.
+- Keep the stage count fixed at three because the frozen L=2 Hybrid semantics
+  select exactly two distinct stages while bypassing the third. Dimension
+  syntax does not authorize a different action model.
+- Print the resolved topology before an accepted execution. Do not create
+  profiles dynamically, weaken append-only validation, scale beyond two, or
+  pre-empt Phase 8 incremental approval.
+
+## Hybrid Infrastructure Phase 7 resource decisions
+
+Accepted: 2026-08-09.
+
+- Accept `ibg-hybrid-kernel-resource-evidence-v1` as the policy-free live
+  resource evidence boundary and retain both the historical 128Mi/768Mi
+  baseline and the explicit processor-only 64Mi/256Mi candidate projection.
+  Require exact live container coverage and keep CRI working set, CRI RSS,
+  cgroup current/peak/events, process RSS, and CPU throttling as separate
+  quantities.
+- Accept processor requests 50m CPU / 64Mi memory and limits 1 CPU / 256Mi
+  memory for the Hybrid Phase 7-accepted topology. The candidate's maximum
+  processor cgroup peak was 46,583,808 bytes and maximum working set was
+  42,487,808 bytes, leaving 221,851,648 bytes below its limit, with zero
+  processor throttling, memory events, restarts, OOM/eviction, or post-Ready
+  probe failure across the five-slot live gate.
+- Keep each public forwarder unchanged at two workers, 25m/1 CPU, and
+  128Mi/256Mi. Its candidate-run maximum cgroup peak was 129,314,816 bytes,
+  maximum working set was 125,370,368 bytes, and its throttling/memory-event
+  deltas were zero. This phase provides no authority to retune it.
+- Keep the flow generator and controller declarations unchanged. The final
+  controller gate completed in 6 seconds against a 600-second deadline,
+  sampled 69,238,784 bytes maximum process RSS, used 2,396,824 CPU usec, and
+  recorded 116,940 throttled usec. This remains ample lookahead evidence but
+  does not size the future Phase 7.5 MC worker pool.
+- Treat the processor resource change as an explicit rollout, not a violation
+  of Phase 5/6 process preservation. Require the flow generator and dedicated
+  node to remain stable, record all six new stage-Pod UIDs, and require zero
+  restarts. A later unchanged candidate rerun must again preserve those new
+  identities.
+- Accept only startup-before-Ready connection-refused/503 probe events during
+  the deliberate rollout. Any fatal resource event, node pressure, or probe
+  failure after exact Ready coverage rejects the gate. The accepted run had
+  no post-Ready probe failure and no Memory/Disk/PID pressure.
+- Keep lookahead as the only Kubernetes policy in Phase 7. Phase 7.5 remains a
+  separate manual-only `--policy mc` integration/resource gate at this same
+  topology and accepted service-resource profile. Phase 8 remains the only
+  larger-scale authority.
+
+## Hybrid Infrastructure Phase 7.5 manual MC decisions
+
+Accepted: 2026-08-09.
+
+- Accept `ibg-hybrid-kernel-mc-controller-v1` as the controller-only policy
+  interface. Omitted policy remains deterministic lookahead. MC requires both
+  explicit `--policy mc` and `--mc-workers N`; the worker count is positive and
+  capped at two, the largest value measured by this gate. Reject workers with
+  lookahead and prohibit automatic MC.
+- Reuse the frozen top-five-root, `S=50`, `D_MC=10`, epsilon-greedy-window and
+  pure-greedy-tail implementation unchanged. One bounded executor belongs to
+  one slot, is reused across every focal placement, and must close and join
+  before traffic, telemetry processing, learning, or the next slot. Never
+  silently fall back to lookahead on worker failure.
+- Accept a controller-only source ConfigMap mount for this no-build gate. It
+  overlays only controller adapter/validation/CLI files in the finite Job and
+  is not mounted by any serving workload. This preserves the explicit ban on
+  rebuilding or loading images while keeping the future controller Dockerfile
+  complete. Runtime profiles, controller inputs, beliefs, and hidden state do
+  not enter this ConfigMap.
+- Accept fixed-seed one-worker/two-worker equality for placements and final
+  loads and same-policy pure/Kernel replay parity for every live slot. Kernel
+  physical and measured-pair timings may vary between separately executed Jobs
+  and remain outcomes, not policy inputs or parity targets.
+- Retain the existing controller requests 100m CPU / 256Mi and limits 2 CPU /
+  1Gi. The one-worker Job used 3,367,647 CPU usec, zero throttled usec, a
+  62,308,352-byte cgroup memory peak, and 71,356,416-byte maximum process RSS.
+  The two-worker Job used 3,408,358 CPU usec, 897 throttled usec, a
+  67,727,360-byte cgroup memory peak, and 71,315,456-byte maximum process RSS.
+  Both completed in eight seconds with 592 seconds of deadline margin, so no
+  controller or service resource change is accepted.
+- Keep Phase 8 as the sole incremental-scale authority. Phase 7.5 authorizes
+  neither larger flows/replicas/stages nor automatic MC at any scale.
+
+## Hybrid Infrastructure Phase 8 Gate 1 decisions
+
+Accepted: 2026-08-09.
+
+- Accept exactly `4x3x2` as the first Phase 8 incremental topology and retain
+  `2x3x1` and `3x3x2` compatibility. Require explicit
+  `--skip-build --flow 4 --stage 3 --replica 2`; reject every other new tuple
+  before cluster contact. This decision does not authorize a final scale.
+- Treat the `3x3x2 -> 4x3x2` transition as flow-only. Advance only the source
+  identity and `num_flows`; preserve all six runtime profiles, admission
+  capacities, and twelve planning links exactly. Reject any old-entry drift
+  or incomplete coverage before ConfigMap reconciliation.
+- Keep admission capacities at two flows per replica. The live gate produced
+  admission-safe final loads totaling eight selected placements, so no
+  controller-only capacity expansion is needed at `4x3x2`.
+- Preserve every StatefulSet template and serving process across this gate.
+  ConfigMap reconciliation may not imply a scale or rollout; only the finite
+  Phase 8 controller Job may be recreated. Existing processors retain the
+  immutable profile loaded at process start.
+- Keep Gate 1 deterministic-lookahead only. Omitted policy remains lookahead,
+  `--mc-workers` is absent, and MC at `4x3x2` or any larger topology requires
+  separate Phase 8 authorization and controller evidence.
+- Retain the accepted Phase 7/7.5 resource declarations. Two live slots had
+  zero serving throttling/memory events/restarts, no fatal or post-Ready probe
+  event, no node pressure, and 578 seconds of controller deadline margin;
+  there is no evidence-based reason to retune service or controller resources.
+- Leave the next Phase 8 increment undecided until separately authorized. The
+  present headroom supports considering a `5x3x2` lookahead-only flow step,
+  while MC at `4x3x2` remains an independent alternative requiring its own
+  controller measurement. Neither path is automatically approved by Gate 1.

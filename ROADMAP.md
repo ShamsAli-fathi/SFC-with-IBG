@@ -2076,3 +2076,232 @@ and re-imported them, but node `crictl images` confirmed the normalized service
 and controller tags with platform IDs `bb6c47d791a1f` and `eda04655da857`.
 The future `--skip-build` gate must recognize those normalized tags/IDs and
 fail only on real absence or mismatch.
+
+### Infrastructure Phase 5 implementation result
+
+Completed: 2026-08-09.
+
+- Added the pure `ibg-hybrid-kernel-rollout-v1` adapter for exact three-stage
+  StatefulSet ownership/count discovery, no-shrink validation, deterministic
+  missing-ordinal batches, and exact Running/Ready ordinal coverage at every
+  target. Mocked Kubernetes tests cover missing, partial, duplicate, foreign,
+  mislabelled, inconsistent, equal-count, scale-down, and multi-batch cases.
+- Added `--skip-build`, `--replica`, and `--rollout-batch-size` to the dedicated
+  persistent Hybrid runner. The normal path owns two offline-only builds, two
+  image loads in one Hybrid-only kind operation, explicit service restart,
+  count-safe reconciliation, Ready gates, and a fresh Job. The skip path omits
+  builds, loads, and restart while preserving reconciliation, readiness, and
+  Job replacement.
+- Added fail-closed node-image proof using normalized runtime tags and full
+  platform config IDs. The expected config IDs are derived from each local
+  linux/amd64 OCI image rather than frozen to the observed `bb6c...` and
+  `eda0...` values. Missing/mismatched tags or config IDs fail before resource
+  reconciliation or traffic.
+- Added serving Pod UID/restart snapshots and rejection of any change to an
+  existing process under skip-build. Foreign Pods inside the Hybrid namespace
+  are now rejected in addition to foreign namespaces/workloads.
+- Mocked rollout validation exercised `1 -> 3 -> 5`, applying the same target
+  to all stages and completing every Ready gate before the controller Job.
+  This is control-plane evidence only: no live new ordinal was created.
+- The live gate used only the already-running one-node `ibg-hybrid` cluster at
+  2 flows x 3 stages x 1 replica. It performed no build, image load, restart,
+  or scale-up. Node UID and all four serving Pod UIDs/restart counts remained
+  unchanged; only the completed controller Job was replaced. Both two-hop
+  route shapes, complete telemetry, belief retention, skipped-stage absence,
+  separated jitter, and pure/Kernel parity passed. The shared `ibg` nodes
+  remained stopped and the dedicated cluster remains running.
+- Fourteen focused Infrastructure Phase 5 tests, 179 Hybrid Phase 0--5 plus
+  Infrastructure Phase 0--5 tests, and 111 relevant unchanged Exact runtime,
+  learning, dynamic-configuration, experiment, and launcher tests pass.
+
+Infrastructure Phase 6 is next and has not started. It must add append-only
+runtime/controller profiles, reject drift for every running identity, preserve
+all existing Pod UIDs/processes under skip-build while creating only newly
+profiled ordinals, and then establish the first safe 3-flow x 3-stage x
+2-replica live boundary. Resource right-sizing, Kubernetes MC wiring, and
+larger-scale validation remain Phases 7, 7.5, and 8 respectively.
+
+### Infrastructure Phase 6 implementation result
+
+Completed: 2026-08-09.
+
+- Added a separate 3x3x2 Kustomize overlay and exact source identity. The
+  runtime profile retains the three Phase 4 entries and adds only replica 2 at
+  each stage. Controller inputs retain all old capacities/links and add the
+  complete new admission and directed-link coverage.
+- Added `ibg-hybrid-kernel-profile-expansion-v1` to validate exact shapes,
+  canonical completeness, and entry preservation. Mocked tests cover state,
+  seed, identity, capacity, link, missing, duplicate, unexpected, partial,
+  malformed, and incomplete-target rejection before mutation.
+- Extended the persistent runner to read both deployed ConfigMaps before
+  apply, validate their append-only transition, require a server-side dry-run
+  with unchanged StatefulSet Pod templates, reconcile at the existing count,
+  verify exact target data, then use the Phase 5 bounded rollout. The 3x3x2
+  boundary is accepted only with `--skip-build`; larger counts remain rejected.
+- Mocked validation covers ConfigMap-before-scale ordering, template-drift
+  failure before apply, only-missing-ordinal creation, exact Ready gates,
+  controller-after-readiness ordering, process preservation, complete
+  three-flow telemetry, route forms, final loads, learning, retention, and
+  pure/Kernel parity.
+- The live gate reused the existing one-node dedicated cluster and scaled only
+  the three StatefulSets from one to two. All ordinal-0 and flow-generator
+  UIDs/restarts stayed unchanged; only `hybrid-stage-{1,2,3}-1` were created.
+  All six stage Pods reached Ready with zero restarts before the fresh Phase 6
+  Job ran.
+- Two live slots each produced six selected observations and three measured
+  pairs after one complete request. Required noncontiguous and stage-2-first
+  routes, skipped-stage absence, selected-only learning, belief retention,
+  seedless provenance, planning/measured and physical/observation separation,
+  and pure/Kernel parity passed.
+- No image build, kind load, download, service restart, new node, shared-
+  cluster action, resource reduction, Kubernetes MC integration, or larger
+  scale occurred. The dedicated cluster remains running.
+- Twelve focused Phase 6 tests, 191 Hybrid Phase 0--5 plus Infrastructure
+  Phase 0--6 tests, and 119 relevant frozen Exact runtime/lifecycle tests pass,
+  along with compilation, Kustomize rendering, and repository integrity checks.
+
+Infrastructure Phase 7 is next and has not started. It must collect Hybrid-
+specific processor, forwarder, flow-generator, and controller CPU/memory/
+throttling/restart/OOM/rollout evidence at the accepted persistent 3x3x2
+topology before deciding whether the candidate processor 64Mi/256Mi memory
+declaration is safe. Phase 7.5 and Phase 8 remain separately authorized later
+gates.
+
+#### Phase 6 explicit topology CLI correction
+
+Completed: 2026-08-09.
+
+- Added `--flow`/`--flows`, `--stage`/`--stages`, and
+  `--replica`/`--replicas` to align the Hybrid runner with Exact and MILP.
+- Added fail-closed tuple resolution for only `2x3x1` and `3x3x2`; omitted
+  flow/stage values are inferred from the unique approved replica profile.
+- Added resolved-topology output before execution and rejection of mismatched,
+  non-three-stage, or larger tuples before the first cluster command.
+- Focused mocked lifecycle tests prove explicit selection, aliases, inference,
+  unchanged approved execution, and pre-contact rejection. The full Hybrid
+  Phase 0--5 plus Infrastructure Phase 0--6 suite now passes 196 tests; 119
+  relevant frozen Exact tests still pass.
+- No live rerun, profile/resource mutation, image operation, cluster action,
+  Phase 7, Phase 7.5, or Phase 8 implementation occurred.
+
+Infrastructure Phase 7 remains the next step.
+
+### Infrastructure Phase 7 implementation result
+
+Completed: 2026-08-09.
+
+Phase 7 now has a baseline 3x3x2 projection, a processor-only 64Mi/256Mi
+candidate projection, a five-slot finite controller Job, and a bounded live
+resource collector. The transition validator compares complete StatefulSet
+specs, rejects replica/resource/command/probe/ownership drift, and permits
+only the private processor's two memory values to differ. Live evidence uses
+exact per-container CRI coverage, cgroup-v2 counters, Pod/events, controller
+RSS/deadline, node pressure, and explicit UID lineage; no policy or placement
+mathematics enters the resource adapter.
+
+Baseline and candidate five-slot gates both completed at exactly 3 flows x 3
+stages x 2 replicas with six observations and three measured pairs per slot,
+complete placement before traffic, both required route forms, skipped-stage
+absence, belief retention, seedless provenance, separated jitter/link inputs,
+and pure/Kernel parity. Baseline processor peak/working set were
+48,599,040/44,486,656 bytes. Candidate values were
+46,583,808/42,487,808 bytes with 221,851,648 bytes of limit headroom and zero
+processor throttling, memory events, restarts, OOM/eviction, fatal events, or
+post-Ready probe failures. The 64Mi request / 256Mi limit candidate is
+accepted; CPU remains 50m/1 CPU.
+
+The deliberate resource rollout replaced only the six stage Pods and retained
+the dedicated node and flow generator. All new stage containers have zero
+restarts. Pods became Ready five to seven seconds after creation, with a
+16-second earliest-creation-to-final-Ready window; startup-only readiness
+failures cleared before traffic. No image build/load/download, worker/topology
+scale, Phase 7.5 MC integration, Phase 8 validation, shared-cluster action,
+commit, or push occurred.
+
+Phase 7.5 is next and remains separately authorized. It must reuse this
+accepted 3x3x2 candidate service-resource boundary under `--skip-build`, keep
+lookahead as the default, expose MC only through explicit `--policy mc` plus a
+bounded worker count, and size controller MC CPU/RSS/deadline without changing
+service resources or scale.
+
+Seven focused Phase 7 tests, the complete 203-test Hybrid Phase 0--7 suite,
+and 119 relevant frozen Exact regressions pass, along with compilation,
+Kustomize, CLI, diff, frozen-tree, and process checks.
+
+### Infrastructure Phase 7.5 implementation result
+
+Completed: 2026-08-09.
+
+Phase 7.5 adds a bounded controller CLI, adapter worker-count propagation, an
+MC-aware pure/Kernel replay gate, a controller-only no-build source mount, and
+controller process/resource evidence. Omitted policy remains lookahead. MC is
+reachable only through `--policy mc --mc-workers N`, with `N` in 1--2. The
+existing pure runner supplies one process pool per slot, reuses it for all
+focal placements, and closes it before the single traffic request; no policy
+mathematics was copied into Kubernetes code.
+
+The live gate reused `--skip-build --flow 3 --stage 3 --replica 2` and the
+accepted Phase 7 candidate resources. One-worker and two-worker Jobs each ran
+two slots and produced identical placements/final loads. Every slot returned
+six observations and three pairs, exercised noncontiguous and stage-2-first
+routes, omitted skipped stages, retained beliefs, preserved selected-only
+learning and latency/jitter separation, and passed pure/Kernel replay parity.
+Both Jobs observed exactly their requested direct children and zero children
+after each slot.
+
+Both controller Jobs completed in eight seconds against the 600-second
+deadline. One/two-worker CPU use was 3,367,647/3,408,358 usec; cgroup peaks
+were 62,308,352/67,727,360 bytes; maximum process RSS was
+71,356,416/71,315,456 bytes; throttling was 0/897 usec. No resource retuning is
+required. The dedicated node, all six stage Pods, and flow generator retained
+their UIDs and zero restarts; shared `ibg` nodes stayed stopped. No build,
+load, download, service rollout, or scale change occurred.
+
+Infrastructure Phase 8 is next and has not started. It must choose one
+explicit incremental topology step from the Phase 7/7.5 node, service, and
+controller evidence, extend profiles append-only, and re-measure lookahead and
+any separately approved manual-MC variant at that scale. No final scale is
+pre-authorized.
+
+### Infrastructure Phase 8 Gate 1 implementation result
+
+Completed: 2026-08-09.
+
+Gate 1 adds only the explicitly approved 4 flows x 3 stages x 2 replicas
+lookahead boundary. The runner accepts the new tuple only with explicit
+dimensions and `--skip-build`, rejects MC and every other new tuple before
+cluster contact, and retains historical `2x3x1`/`3x3x2` operation.
+
+The new Kustomize projection preserves all six runtime profiles, admission
+capacities, planning links, candidate service resources, and StatefulSet Pod
+templates. A dedicated flow-only transition validator rejects old-profile or
+controller-input drift before apply. Mocked lifecycle tests prove that the
+equal replica target emits no scale command or service restart, reconciles
+only the authorized ConfigMaps, waits for exact 2/2 Ready coverage, and then
+recreates only the finite lookahead Job.
+
+The live persistent-cluster gate completed two slots. Each slot made four
+placements before one request and returned eight selected observations and
+four measured pairs. It covered noncontiguous and stage-2-first routing,
+excluded skipped stages, propagated final loads within admission capacity,
+retained beliefs, applied selected-only learning after complete telemetry,
+used seedless Kernel provenance, preserved jitter/link separation, and passed
+pure/Kernel lookahead parity.
+
+The dedicated node, all six stage Pods, and flow generator retained their
+UIDs and zero restarts. Serving cgroup peaks remained below the accepted
+limits with zero serving throttling or memory events. The controller completed
+in 22 seconds with 578 seconds of deadline margin, and there were no fatal
+events, post-Ready probe failures, or node pressure. Shared `ibg` nodes stayed
+stopped. No image build/load/pull/download, new ordinal, service rollout,
+resource change, MC-at-scale run, later Phase 8 topology, commit, or push
+occurred.
+
+Fourteen focused Gate 1 tests, 225 complete Hybrid tests through Gate 1, and
+122 relevant frozen Exact regressions pass, along with Python compilation,
+Kustomize rendering, diff, frozen-tree, import-safety, and process checks.
+
+The next Phase 8 gate remains separately authorized. Gate 1 evidence supports
+considering a one-flow `5x3x2` lookahead increment without changing replicas
+or nodes; alternatively, manual MC at `4x3x2` would require a separate
+controller-resource gate. No choice is pre-authorized.

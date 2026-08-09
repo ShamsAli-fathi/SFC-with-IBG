@@ -1,0 +1,32 @@
+{
+  "contract_version": "ibg-hybrid-kernel-controller-inputs-v1",
+  "source_identity": "ibg-hybrid-infrastructure-phase6-3x3x2-v1",
+  "configuration": {
+    "num_flows": 3,
+    "num_stages": 3,
+    "num_replicas": 2,
+    "stage_budget": 2
+  },
+  "admission": [
+    {"stage": 1, "replica": 1, "max_assigned_flows": 2},
+    {"stage": 1, "replica": 2, "max_assigned_flows": 2},
+    {"stage": 2, "replica": 1, "max_assigned_flows": 2},
+    {"stage": 2, "replica": 2, "max_assigned_flows": 2},
+    {"stage": 3, "replica": 1, "max_assigned_flows": 2},
+    {"stage": 3, "replica": 2, "max_assigned_flows": 2}
+  ],
+  "planning_pair_links": [
+    {"source_stage": 1, "source_replica": 1, "target_stage": 2, "target_replica": 1, "latency_ms": 5.0},
+    {"source_stage": 1, "source_replica": 1, "target_stage": 2, "target_replica": 2, "latency_ms": 5.0},
+    {"source_stage": 1, "source_replica": 1, "target_stage": 3, "target_replica": 1, "latency_ms": 0.0},
+    {"source_stage": 1, "source_replica": 1, "target_stage": 3, "target_replica": 2, "latency_ms": 0.0},
+    {"source_stage": 1, "source_replica": 2, "target_stage": 2, "target_replica": 1, "latency_ms": 5.0},
+    {"source_stage": 1, "source_replica": 2, "target_stage": 2, "target_replica": 2, "latency_ms": 5.0},
+    {"source_stage": 1, "source_replica": 2, "target_stage": 3, "target_replica": 1, "latency_ms": 0.0},
+    {"source_stage": 1, "source_replica": 2, "target_stage": 3, "target_replica": 2, "latency_ms": 0.0},
+    {"source_stage": 2, "source_replica": 1, "target_stage": 3, "target_replica": 1, "latency_ms": 0.0},
+    {"source_stage": 2, "source_replica": 1, "target_stage": 3, "target_replica": 2, "latency_ms": 0.0},
+    {"source_stage": 2, "source_replica": 2, "target_stage": 3, "target_replica": 1, "latency_ms": 0.0},
+    {"source_stage": 2, "source_replica": 2, "target_stage": 3, "target_replica": 2, "latency_ms": 0.0}
+  ]
+}
