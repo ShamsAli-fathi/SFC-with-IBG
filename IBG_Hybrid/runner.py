@@ -21,6 +21,7 @@ from IBG.outcome_latency import (
 from IBG.report import SLA_v
 
 from .contracts import GlobalLoadState, HybridConfiguration, ReplicaChoice
+from .console_output import format_hybrid_slot_metrics
 from .expected_utility import expected_stage_utility_from_belief
 from .phase0_contract import (
     DEFAULT_HYBRID_POLICY_PARAMETERS,
@@ -621,22 +622,6 @@ def run_hybrid_slot(
     )
 
 
-def format_hybrid_slot_metrics(result: HybridSlotResult) -> str:
-    """Return the only Phase 5 console line for one completed slot."""
-
-    metrics = result.metrics
-    return (
-        f"IBG-Hybrid slot={result.slot_id} "
-        f"expected={metrics.aggregate_expected_utility:.3f} "
-        f"realized={metrics.physical_realized_utility:.3f} "
-        f"sla={metrics.physical_only_sla_violations} "
-        f"jain={metrics.jain_fairness:.6f} "
-        f"max-belief-change={metrics.maximum_belief_change:.3f} "
-        f"equilibrium={int(metrics.equilibrium)} "
-        f"runtime={metrics.elapsed_seconds:.6f}s"
-    )
-
-
 def run_and_print_hybrid_slot(
     slot_input: HybridSlotInput,
     *,
@@ -644,6 +629,7 @@ def run_and_print_hybrid_slot(
     simulation_adapter: HybridSlotSimulationAdapter | None = None,
     policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
     mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
+    iteration: int = 1,
 ) -> HybridSlotResult:
     result = run_hybrid_slot(
         slot_input,
@@ -652,7 +638,7 @@ def run_and_print_hybrid_slot(
         policy_mode=policy_mode,
         mc_workers=mc_workers,
     )
-    print(format_hybrid_slot_metrics(result))
+    print(format_hybrid_slot_metrics(result, iteration=iteration))
     return result
 
 

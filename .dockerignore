@@ -20,6 +20,9 @@ deploy/hybrid-kubernetes/*
 !deploy/hybrid-kubernetes/Dockerfile.service
 !deploy/hybrid-kubernetes/requirements-controller.txt
 !deploy/hybrid-kubernetes/requirements-service.txt
+!deploy/hybrid-kubernetes/wheel-manifests/
+!deploy/hybrid-kubernetes/wheel-manifests/requirements-controller.lock
+!deploy/hybrid-kubernetes/wheel-manifests/requirements-service.lock
 !deploy/hybrid-kubernetes/controller-exact-header.py
 !deploy/hybrid-kubernetes/controller-exact-report.py
 !deploy/hybrid-kubernetes/controller-package-init.py

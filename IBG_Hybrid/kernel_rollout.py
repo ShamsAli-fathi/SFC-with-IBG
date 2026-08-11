@@ -1,4 +1,4 @@
-"""Pure rollout/count validation for Hybrid Kernel Infrastructure Phase 5.
+"""Pure direction-aware rollout/count validation for Hybrid Kernel.
 
 The module understands only Hybrid-owned Kubernetes identity, desired replica
 counts, deterministic batch targets, and Ready ordinal coverage.  It contains
@@ -17,7 +17,7 @@ from .kernel_infrastructure_contract import (
 )
 
 
-HYBRID_KERNEL_ROLLOUT_CONTRACT_VERSION = "ibg-hybrid-kernel-rollout-v1"
+HYBRID_KERNEL_ROLLOUT_CONTRACT_VERSION = "ibg-hybrid-kernel-rollout-v2"
 HYBRID_KERNEL_STAGE_COUNT = 3
 
 
@@ -82,18 +82,33 @@ class HybridExistingReplicaState:
 @dataclass(frozen=True)
 class HybridRolloutBatch:
     target_count: int
-    new_ordinals: tuple[int, ...]
+    new_ordinals: tuple[int, ...] = ()
+    removed_ordinals: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         _positive_integer(self.target_count, "target_count")
         ordinals = tuple(self.new_ordinals)
         object.__setattr__(self, "new_ordinals", ordinals)
+        removed = tuple(self.removed_ordinals)
+        object.__setattr__(self, "removed_ordinals", removed)
         if any(
             isinstance(value, bool) or not isinstance(value, Integral) or value < 0
-            for value in ordinals
+            for value in (*ordinals, *removed)
         ):
             raise HybridKernelRolloutError(
-                "new_ordinals must be nonnegative integers"
+                "rollout ordinals must be nonnegative integers"
+            )
+        if tuple(sorted(set(ordinals))) != ordinals:
+            raise HybridKernelRolloutError(
+                "new_ordinals must be unique and increasing"
+            )
+        if tuple(sorted(set(removed))) != removed:
+            raise HybridKernelRolloutError(
+                "removed_ordinals must be unique and increasing"
+            )
+        if set(ordinals) & set(removed):
+            raise HybridKernelRolloutError(
+                "a rollout batch cannot add and remove the same ordinal"
             )
 
 
@@ -113,10 +128,6 @@ class HybridRolloutPlan:
         object.__setattr__(self, "batches", batches)
         if self.contract_version != HYBRID_KERNEL_ROLLOUT_CONTRACT_VERSION:
             raise HybridKernelRolloutError("unexpected rollout contract version")
-        if requested < existing:
-            raise HybridKernelRolloutError(
-                "requested replica count must not shrink the existing count"
-            )
         targets = tuple(batch.target_count for batch in batches)
         if requested == existing and targets:
             raise HybridKernelRolloutError("equal-count rollout must be a no-op")
@@ -129,6 +140,55 @@ class HybridRolloutPlan:
                 raise HybridKernelRolloutError(
                     "rollout batch targets must increase strictly"
                 )
+            previous = existing
+            for batch in batches:
+                if batch.removed_ordinals:
+                    raise HybridKernelRolloutError(
+                        "scale-up batches cannot remove ordinals"
+                    )
+                if batch.new_ordinals != tuple(
+                    range(previous, batch.target_count)
+                ):
+                    raise HybridKernelRolloutError(
+                        "scale-up batches must add only missing ordinals"
+                    )
+                previous = batch.target_count
+        if requested < existing:
+            if len(batches) != 1 or targets != (requested,):
+                raise HybridKernelRolloutError(
+                    "scale-down must contain one deliberate final target"
+                )
+            batch = batches[0]
+            if batch.new_ordinals:
+                raise HybridKernelRolloutError(
+                    "scale-down cannot add ordinals"
+                )
+            if batch.removed_ordinals != tuple(range(requested, existing)):
+                raise HybridKernelRolloutError(
+                    "scale-down must remove only ordinals above the target"
+                )
+
+    @property
+    def direction(self) -> str:
+        if self.requested_count > self.existing_count:
+            return "up"
+        if self.requested_count < self.existing_count:
+            return "down"
+        return "unchanged"
+
+    @property
+    def added_ordinals(self) -> tuple[int, ...]:
+        return tuple(
+            ordinal for batch in self.batches for ordinal in batch.new_ordinals
+        )
+
+    @property
+    def removed_ordinals(self) -> tuple[int, ...]:
+        return tuple(
+            ordinal
+            for batch in self.batches
+            for ordinal in batch.removed_ordinals
+        )
 
 
 def discover_existing_replica_state(
@@ -224,16 +284,19 @@ def plan_bounded_rollout(
     requested_count: int,
     batch_size: int,
 ) -> HybridRolloutPlan:
-    """Return deterministic missing-ordinal batches without implicit shrink."""
+    """Return deterministic bounded additions or one explicit lower target."""
 
     existing = _positive_integer(existing_count, "existing_count")
     requested = _positive_integer(requested_count, "requested_count")
     bounded = _positive_integer(batch_size, "batch_size")
-    if requested < existing:
-        raise HybridKernelRolloutError(
-            "requested replica count must not shrink the existing count"
-        )
     batches = []
+    if requested < existing:
+        batches.append(
+            HybridRolloutBatch(
+                target_count=requested,
+                removed_ordinals=tuple(range(requested, existing)),
+            )
+        )
     current = existing
     while current < requested:
         target = min(current + bounded, requested)

@@ -325,18 +325,28 @@ def test_phase8_gate1_evidence_rejects_mc_or_incomplete_telemetry():
         validate_phase8_gate1_slots(invalid)
 
 
-def test_phase8_gate1_topology_is_explicit_and_all_other_new_tuples_fail_precontact():
-    assert runner._profile_boundary(
-        1, requested_flows=2, requested_stages=3
-    ) == runner.PHASE4_PROFILE_BOUNDARY
-    assert runner._profile_boundary(
-        2, requested_flows=3, requested_stages=3
-    ) == runner.PHASE6_PROFILE_BOUNDARY
-    assert runner._profile_boundary(
-        2, requested_flows=4, requested_stages=3
-    ) == runner.PHASE8_GATE1_PROFILE_BOUNDARY
+def test_phase8_gate1_profiles_remain_compatible_without_a_tuple_whitelist():
+    expected = (
+        (2, 3, 1, runner.PHASE4_PROFILE_BOUNDARY),
+        (3, 3, 2, runner.PHASE6_PROFILE_BOUNDARY),
+        (4, 3, 2, runner.PHASE8_GATE1_PROFILE_BOUNDARY),
+    )
+    for flows, stages, replicas, historical in expected:
+        generated = runner._profile_boundary(
+            replicas, requested_flows=flows, requested_stages=stages
+        )
+        assert generated.configuration == historical.configuration
+        assert generated.source_identity == historical.source_identity
+        assert generated.runtime_document == _mapping(historical.runtime_profiles)
+        assert generated.controller_document == _mapping(historical.controller_inputs)
 
-    for flows, stages, replicas in ((5, 3, 2), (4, 3, 3), (4, 4, 2), (3, 3, 1)):
+    arbitrary = runner._profile_boundary(
+        5, requested_flows=10, requested_stages=3
+    )
+    assert arbitrary.configuration.num_flows == 10
+    assert arbitrary.configuration.num_replicas == 5
+
+    for flows, stages, replicas in ((5, 4, 2), (0, 3, 2), (4, 3, 0)):
         commands = []
         with pytest.raises(RuntimeError):
             runner.run_small(
@@ -349,7 +359,7 @@ def test_phase8_gate1_topology_is_explicit_and_all_other_new_tuples_fail_precont
         assert commands == []
 
     commands = []
-    with pytest.raises(RuntimeError, match="lookahead only"):
+    with pytest.raises(RuntimeError, match="manual Kubernetes MC"):
         runner.run_small(
             skip_build=True,
             requested_flows=4,
@@ -414,12 +424,13 @@ def test_phase8_gate1_runner_reconciles_without_scale_restart_or_process_change(
         execute=execute,
     )
 
-    assert ("profile", runner.PHASE8_GATE1_PROFILE_BOUNDARY) in calls
+    profile = next(item[1] for item in calls if isinstance(item, tuple) and item[0] == "profile")
+    assert profile.configuration == runner.PHASE8_GATE1_PROFILE_BOUNDARY.configuration
     apply = next(item[1] for item in calls if isinstance(item, tuple) and item[0] == "apply")
     assert apply["replica_count"] == 2
     assert apply["expected_templates"] is not None
     job = next(item[1] for item in calls if isinstance(item, tuple) and item[0] == "job")
-    assert job["controller_job"] == runner.PHASE8_GATE1_CONTROLLER_JOB
+    assert job["controller_job"] == runner.DYNAMIC_CONTROLLER_JOB
     assert job["arguments"] is None
     assert "controller-source" in calls
     assert not any("scale" in command or "restart" in command for command in commands)

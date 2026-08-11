@@ -2489,3 +2489,315 @@ The next action requires a separate Phase 8 choice. Current evidence supports
 considering a `5x3x2` lookahead-only flow increment; manual MC at `4x3x2`
 would instead require its own controller-resource gate. Neither is authorized
 by this completion.
+
+## IBG-Hybrid dynamic-topology correction complete
+
+Updated: 2026-08-09.
+
+The Hybrid runner now accepts arbitrary positive flow/replica dimensions with
+exactly three stages. It no longer treats `2x3x1`, `3x3x2`, and `4x3x2` as the
+permanent topology whitelist. It generates deterministic append-only runtime
+profiles, `ceil(F/R)` admission capacities, and all `3 * R^2` planning links,
+validates deployed drift before writes, preserves StatefulSet templates, and
+uses the Phase 5 bounded rollout plus exact Ready coverage. The general-seed,
+scale-down, automatic-MC, and arbitrary-stage features remain absent.
+
+The live command used `--skip-build --flow 10 --stage 3 --replica 5
+--rollout-batch-size 2`. Resource preflight calculated 2,225m requested CPU
+against 4,000m allocatable and 3,726,639,104 requested bytes against
+16,720,244,736 allocatable. Rollout targets were four then five. Exactly these
+nine Pods were added, all with zero restarts:
+
+- `hybrid-stage-1-2`: `214a326d-1cc9-41f8-ae83-aa5b355468ef`;
+- `hybrid-stage-1-3`: `df3d0d1a-4cef-4a38-ad4d-2057f5817915`;
+- `hybrid-stage-1-4`: `99005354-cf25-4281-be5e-ebf0da189ca1`;
+- `hybrid-stage-2-2`: `33ab331b-2f47-4567-8214-039802090366`;
+- `hybrid-stage-2-3`: `eca4b593-fe15-4a4e-9340-5fe7a9a8f95e`;
+- `hybrid-stage-2-4`: `636db67d-4995-4193-a80e-e124404f032a`;
+- `hybrid-stage-3-2`: `a16bcab8-e36d-4432-90aa-0a842cee3709`;
+- `hybrid-stage-3-3`: `bb1376bf-f2ba-43ab-ad0c-c3b7eef6ac25`;
+- `hybrid-stage-3-4`: `ae37180b-3efe-49de-adcf-85b123703ff6`.
+
+All six previous stage UIDs from Phase 7/8 and flow-generator UID
+`f9b97cb9-031a-4c72-b298-2c1a85cb8562` were preserved with zero restarts.
+Docker node `d6b8e934dfd9` and Kubernetes node UID
+`11d63e26-dd1a-448d-9a14-a99c1667727a` are unchanged. All three StatefulSets
+are 5/5 Ready and the flow generator remains Ready. The final finite Job Pod
+is `ibg-hybrid-controller-dynamic-svhcp`, UID
+`939b7c13-e1cd-4b3d-9644-507ed70d3c86`, Succeeded with zero restarts.
+
+The generated ConfigMaps identify `10x3x5` and contain exactly 15 runtime
+profiles, 15 admission entries of capacity two, and 75 planning links. Both
+initial and unchanged two-slot runs completed ten placements before one
+request per slot and returned twenty selected observations and ten measured
+pairs. They passed required route coverage, skipped-stage absence,
+admission/final-load propagation, selected-only learning, belief retention,
+seedless provenance, jitter/link separation, physical-only SLA accounting, and
+pure/Kernel deterministic-lookahead parity.
+
+Final processor/forwarder/flow-generator maximum CRI working sets are
+42,639,360/126,119,936/49,430,528 bytes; cgroup peaks are
+46,899,200/130,232,320/53,907,456 bytes with zero memory events. The final
+controller completed in 16 seconds against 600 seconds, restarted zero times,
+and the collector found no unsafe resource condition. Startup-only readiness
+connection failures occurred while new containers started; there were no
+post-Ready probe failures, fatal events, serving restarts, OOM/evictions, or
+node pressure.
+
+The shared `ibg-control-plane`, `ibg-worker`, and `ibg-worker2` remain exited.
+No Docker build, kind load, image pull/download, service restart, resource
+change, worker-node addition, MC-at-scale run, Exact/MILP edit, commit, or push
+occurred. The dedicated `ibg-hybrid` cluster remains running.
+
+Validation passes 9 focused dynamic tests, 234 complete Hybrid tests, 119
+relevant frozen Exact tests, and 194 frozen MILP tests, plus Python compilation
+and all seven retained Hybrid Kustomize renders. `IBG/` and `MILP/` diffs are
+empty and no Markdown file exists under `IBG_Hybrid/`.
+
+## IBG-Hybrid per-timeslot console output complete
+
+Updated: 2026-08-09.
+
+`IBG_Hybrid/console_output.py` now prints the requested readable metrics block
+for every completed pure or Kernel Hybrid slot, including manual MC. It shows
+iteration and slot, `physical-only-v1`, per-flow processing/pair/raw/outcome
+latency, predicted/realized/physical/raw utility, SLA violations, fairness,
+time, and equilibrium with the requested precision. It prints none of the flow
+order, placements, observations, learning signals, beliefs/deltas, or CSV
+messages.
+
+The current Hybrid result contract stores predicted per-flow utility only
+after summing its selected stage-level components. The formatter therefore
+prints that stored scalar directly. Hybrid also currently supports only the
+active `physical-only-v1` outcome in slot computation, so realized and
+physical utilities intentionally match; this is stated explicitly rather than
+presented as two independently calculated outcomes.
+
+Kernel `run_small_live_gate` now calls its printer after each slot passes
+complete telemetry, route, retention, pool-cleanup, and parity validation and
+before running the next slot. Controller stdout carries the human block plus a
+prefixed evidence line. `scripts/run_hybrid_kernel_phase4.py` follows those
+logs while the Job runs, displays only the human block, returns the normalized
+JSON evidence to existing collectors, and no longer prints detailed evidence
+at Job completion.
+
+The new formatter is controller-only in deployment ownership. It is included
+in the future controller image and in the current Phase 7.5 source ConfigMap
+mounts used by Phase 7.5, Phase 8, and dynamic Jobs. Service images and Pods
+remain unchanged.
+
+Validation passes 53 focused tests, 238 complete Hybrid tests, and 119 relevant
+frozen Exact tests. Compilation, all seven retained Hybrid Kustomize renders,
+and all three affected Job parses pass. No live run, build/load/pull/download,
+cluster or serving-process mutation, MC-at-scale run, Exact/MILP edit, commit,
+or push occurred.
+
+## IBG-Hybrid production experiment lifecycle correction complete
+
+Updated: 2026-08-09.
+
+The Hybrid launcher now has a real production command:
+
+`run --skip-build --flow F --stage 3 --replica R --rollout-batch-size B
+--max-iterations N`
+
+All four numeric inputs are positive and resolved before cluster access. The
+normal controller runs one slot at a time, carries controller-private beliefs,
+streams each completed human block before the next slot, stops on the first
+existing equilibrium result, or stops exactly at `N` and prints that equilibrium
+was not reached. `run-small` remains only for historical bounded validation.
+
+The rendered production Job receives the explicit limit and lifecycle marker;
+the dynamic template no longer contains `MAX_ITERATIONS=2`. Production removes
+the historical 600-second gate deadline because the iteration limit is already
+finite. Historical Job templates and gates keep their previous bounds.
+
+Human output no longer contains a `Latency:` section or per-flow latency lines.
+The underlying physical processing, measured-pair, raw end-to-end, and selected
+outcome values remain unchanged in `HybridSlotResult` and prefixed machine
+evidence. Utility, SLA, fairness, timing, equilibrium, learning, jitter, and
+planning/measured-pair behavior are unchanged.
+
+Focused lifecycle/presentation checks pass 73 tests; the complete Hybrid suite
+passes 249 tests; 119 relevant frozen Exact regressions pass. Seven retained
+Kustomize projections render and seven controller Job templates parse. The
+PyYAML module was not locally installed, so Job parsing used offline
+`kubectl create --dry-run=client --validate=false`; nothing was downloaded.
+
+No live Kubernetes experiment, cluster mutation, serving-process change,
+image build/load/pull/download, commit, or push occurred. `IBG/` and `MILP/`
+remain unmodified. Large-topology Kubernetes MC is still unsupported: manual
+MC remains isolated to the accepted `3x3x2` candidate-resource topology with
+one or two workers, while ordinary dynamic production runs default to
+deterministic lookahead.
+
+## IBG-Hybrid intentional replica scale-down correction complete locally
+
+Updated: 2026-08-11.
+
+The no-shrink failure has been removed from the Hybrid production rollout
+contract. `5 -> 5` is a no-op, `5 -> 8` with batch two targets `7` then `8`, and
+`8 -> 5` is one deliberate target that removes only StatefulSet ordinals
+`5`, `6`, and `7`. Plans expose their direction plus added and removed ordinals.
+
+The dynamic transition validator now requires exact deterministic deployed and
+target runtime/controller documents and exposes retained/added/changed/removed
+identity and link sets. Retained runtime identities, hidden states, seeds, and
+planning links remain identical. Only removed replicas may lose runtime or
+admission entries, every removed link has a removed endpoint, and retained
+admission changes must match `ceil(flows / replicas)`.
+
+The mocked production lifecycle dry-runs the lower target without applying it,
+scales all three StatefulSets, waits for exact retained Ready coverage and
+removed-Pod absence, and only then applies the reduced ConfigMaps. Final profile,
+template, and readiness checks precede controller Job creation. Retained Pod and
+flow-generator UID/restart comparisons are separate from the declared removed
+set. A repeated unchanged five-replica run emits no scale or service restart.
+
+No live cluster command, cluster start, Kubernetes mutation, image operation,
+dependency download, Exact/MILP edit, commit, or push occurred. The last observed
+eight-replica live state was not treated as current evidence and must be
+re-snapshotted before a separately approved live gate. The relevant MILP code
+was inspected read-only; its direct lower-target planner concept was reused, but
+its scale-up-oriented existing-profile validator was intentionally not copied.
+
+Validation passes 37 focused scale-down/dynamic/production tests, 105 Hybrid
+Infrastructure Phase 5--8 and lifecycle tests, all 252 Hybrid tests split into
+memory-bounded processes, 119 relevant frozen Exact tests, and 50 frozen MILP
+Phase 5 rollout/profile tests. Python compilation, all seven retained Kustomize
+renders, and all seven controller Job parses pass.
+
+## IBG-Hybrid initial/final belief output complete locally
+
+Updated: 2026-08-11.
+
+The production controller prints `Initial replica state` before its first slot
+and `Final replica state` after the equilibrium reached/not-reached line. Each
+table is sorted by stage/replica and prints the four-state belief vector with
+three decimals. Per-timeslot metrics still print no beliefs or belief deltas.
+The Exact presentation was inspected read-only; its hidden state and legacy
+capacity/delay/gamma columns were intentionally not copied into Hybrid.
+
+Focused lifecycle/console/service-isolation validation passes 70 tests; all 253
+Hybrid tests pass in memory-bounded groups; 119 relevant frozen Exact tests
+pass. Compilation and seven Kustomize renders pass. No live cluster action,
+image operation, download, Exact/MILP edit, commit, or push occurred.
+
+## Hybrid reproducible offline image-build correction complete locally
+
+Updated: 2026-08-11.
+
+The former normal Hybrid build was only accidentally offline when Docker could
+reuse its old pip layer; clean cache builds failed because pip tried PyPI while
+Docker had `--network=none`. Normal builds now require two explicitly validated,
+project-local ignored wheelhouses, with committed exact service/controller
+manifest and lock files in `deploy/hybrid-kubernetes/wheel-manifests/`. The
+Dockerfiles use only `pip --no-index --find-links=/opt/ibg-hybrid-wheels` and
+remove those copied wheels after installation. Neither dependency set contains
+MILP/SciPy/HiGHS/OR-Tools; the service retains Uvicorn while the controller does
+not.
+
+The runner prints one unambiguous image-mode line. Without `--skip-build`, it
+validates both wheelhouses before any cluster/Docker action, then can build both
+images with `--pull=false --network=none`, load both only into `ibg-hybrid`, and
+restart only Hybrid serving workloads. With `--skip-build`, it never validates
+or requires wheel files and does no build/load/restart; it instead validates the
+existing node-local images before its existing configuration/rollout/Ready/Job
+flow. `scripts/hybrid_offline_wheelhouse.py show|validate|copy` is import-safe
+and never downloads; `copy` is explicit and accepts only a complete supplied
+wheel set.
+
+No persistent local wheelhouse is currently present, so no clean Docker image
+build was attempted or claimed. Local checks pass: 48 focused wheelhouse/Phase
+3--5 tests, 39 dynamic/lifecycle/Phase 6 tests, and 52 Phase 7.5/8/Hybrid
+regressions; Python compilation passed. No Kubernetes mutation, kind load,
+image build/load, package download, Exact/MILP edit, commit, or push occurred.
+Next: manually obtain the exact files listed by
+`python -m scripts.hybrid_offline_wheelhouse show`, explicitly stage both
+wheelhouses, validate them, and separately approve any normal-build/live gate.
+
+The user subsequently explicitly authorized this one-time setup. Pinned wheels
+were downloaded into the ignored project-local `.offline-wheels/ibg-hybrid/`
+cache; validation passed for service and controller. Clean local Docker builds
+used `--no-cache --pull=false --network=none` and produced service manifest-list
+ID `sha256:fb1245a5bcfd8c46a5e0d500aaac62d3c36b051744cad3b5604323a9bb2683f8`
+and controller ID
+`sha256:0ea07d41c9e45b74f075bdba89c532761a4d670d80452a71a24ebe5144b10daf`.
+No host package was installed, no image was loaded into kind, no container was
+started, and no Kubernetes resource was contacted or changed. Future normal
+runs may build from this persistent ignored cache; `--skip-build` continues to
+reuse only node-local images and therefore intentionally does not use it.
+
+## Hybrid seeded hidden-state profile allocation complete locally
+
+Updated: 2026-08-11.
+
+`IBG_Hybrid/kernel_profile_expansion.py` now owns
+`ibg-hybrid-profile-state-allocation-v1`. For each stage it builds deterministic
+ten-replica strata with exact Very Good/Good/Bad/Very Bad counts `3/3/2/2`.
+Hash-ranked feasible choices permute the ordinal layout by profile seed while a
+prefix constraint keeps every arbitrary replica count within one of the
+30/30/20/20 ideal. Repeated generation is byte-identical, growth is append-only,
+trim removes only high ordinals, and neither Python nor NumPy global RNG is used.
+
+The normal `run` CLI requires `--profile-seed`. Runtime source provenance records
+the allocation version/seed only on the processor side; controller inputs and
+the controller Job expose neither it nor hidden state, observation seed, or mix.
+Observation seeds retain their separate canonical/identity-derived ownership.
+Historical fixed profile JSON remains unchanged.
+
+Seed-aware drift validation recognizes exact legacy or seeded deployed runtime
+documents. A changed allocation fails before apply without
+`--refresh-runtime-profiles`. The explicit mocked refresh is `--skip-build` only,
+requires an unchanged replica count, applies no Pod-template hash, reconciles the
+validated target, and deletes only hidden-state-changed Pods stage-by-stage with
+Ready coverage before the controller Job. Unaffected stage Pods and the flow
+generator must preserve UID/restart state.
+
+Local validation passes 271 complete Hybrid tests in memory-bounded groups and
+126 relevant frozen Exact tests. No live Kubernetes read or mutation, image
+build/load/pull, dependency download, Exact/MILP edit, commit, or push occurred.
+
+The separately approved legacy `15x3x10` migration gate must re-snapshot live
+state before using:
+
+`PYTHONPATH=. ./.venv/bin/python -B scripts/run_hybrid_kernel_phase4.py run --skip-build --flow 15 --stage 3 --replica 10 --rollout-batch-size 3 --profile-seed 42 --refresh-runtime-profiles --max-iterations 6`
+
+After that explicit refresh, rerun the same command without
+`--refresh-runtime-profiles` and require every seeded serving UID/restart count
+to remain unchanged while only the finite controller Job is recreated.
+
+## Hybrid seeded-profile live migration attempt
+
+Updated: 2026-08-11.
+
+The approved dedicated-cluster migration from the legacy `15x3x10` document to
+profile seed `42` reached exact `10/10` Ready coverage at every stage and
+installed the processor-private seeded runtime document.  Each stage now has
+exactly Very Good/Good/Bad/Very Bad counts `3/3/2/2`; the controller document
+remains free of hidden state and seed data.  The staged refresh deliberately
+replaced all ten stage-1 Pods, all ten stage-2 Pods, and only stage-3 ordinals
+`0`, `1`, `5`, `6`, and `7`; stage-3 ordinals `2`, `3`, `4`, `8`, and `9` and
+the flow-generator Pod retained their identities.
+
+This first live refresh gate is not accepted as clean evidence.  During the
+stage-2 cold start, `hybrid-stage-2-1` public forwarder failed its 8080 liveness
+probe once and restarted.  The refresh guard therefore correctly aborted before
+deleting/recreating the controller Job or running traffic.  There was no OOM,
+eviction, image operation, download, or shared-cluster action.  The dedicated
+cluster remains running and all stage Pods are now Ready; the one restart remains
+recorded on that Pod.
+
+The requested unchanged seeded `--skip-build` rerun then completed its fresh
+controller Job in 68 seconds without replacing a serving Pod or changing any
+serving restart count.  It completed six lookahead slots (equilibrium not
+reached).  Every slot had 30 selected observations and 15 measured pairs, with
+complete placement before one request, skipped-stage absence, seedless Kernel
+provenance, separated-jitter validation, and pure/Kernel replay parity.  State
+selection counts (Very Good/Good/Bad/Very Bad) were respectively `5/8/7/10`,
+`10/6/8/6`, `12/12/4/2`, `12/15/3/0`, `13/14/3/0`, and `15/14/1/0` for slots
+1--6.  The shared `ibg` Docker nodes remained stopped throughout.
+
+The next action is not another refresh.  Diagnose and, if separately approved,
+correct the cold-start liveness behavior before repeating the explicit refresh
+acceptance gate with zero replacement-Pod restarts.  No commit or push occurred.

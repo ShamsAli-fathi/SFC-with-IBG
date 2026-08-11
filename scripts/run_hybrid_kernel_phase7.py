@@ -131,7 +131,7 @@ def _shared_node_states() -> Mapping[str, str]:
     return states
 
 
-def _runtime_stats() -> tuple:
+def _runtime_stats(replica_count: int = 2) -> tuple:
     document = _json(
         (
             "docker",
@@ -154,8 +154,8 @@ def _runtime_stats() -> tuple:
         for name in ("private-processor", "public-forwarder", "flow-generator")
     }
     expected = {
-        "private-processor": 6,
-        "public-forwarder": 6,
+        "private-processor": 3 * replica_count,
+        "public-forwarder": 3 * replica_count,
         "flow-generator": 1,
     }
     if counts != expected:
@@ -167,6 +167,7 @@ def _runtime_stats() -> tuple:
 
 def _serving_identities(
     document: Mapping[str, object],
+    replica_count: int = 2,
 ) -> tuple[tuple[str, str, str], ...]:
     items = document.get("items")
     if not isinstance(items, list):
@@ -197,9 +198,11 @@ def _serving_identities(
             ):
                 raise RuntimeError(f"Pod {pod_name} has invalid containers")
             identities.append((pod_name, pod_uid, container["name"]))
-    if len(identities) != 13:
+    expected = 6 * replica_count + 1
+    if len(identities) != expected:
         raise RuntimeError(
-            f"3x3x2 resource gate requires 13 serving containers, got {len(identities)}"
+            "resource gate requires exact serving-container coverage: "
+            f"expected {expected}, got {len(identities)}"
         )
     return tuple(sorted(identities))
 
@@ -226,8 +229,9 @@ def _one_cgroup(identity: tuple[str, str, str]) -> tuple[tuple[str, str], Cgroup
 
 def _serving_cgroups(
     document: Mapping[str, object],
+    replica_count: int = 2,
 ) -> Mapping[tuple[str, str], CgroupSnapshot]:
-    identities = _serving_identities(document)
+    identities = _serving_identities(document, replica_count)
     with ThreadPoolExecutor(max_workers=4) as pool:
         values = tuple(pool.map(_one_cgroup, identities))
     result = dict(values)

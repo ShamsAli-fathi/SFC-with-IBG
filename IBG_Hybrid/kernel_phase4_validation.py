@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 import json
 import multiprocessing
 import os
-from typing import Mapping
+from typing import Callable, Mapping
 
 from .contracts import GlobalLoadState, ReplicaChoice
+from .console_output import (
+    HYBRID_SLOT_EVIDENCE_PREFIX,
+    format_hybrid_slot_metrics,
+)
 from .kernel_controller import (
     HybridKernelControllerAdapter,
     HybridKernelFlowGeneratorHttpClient,
@@ -35,12 +39,42 @@ from .slot_contracts import (
     HybridReplica,
     HybridSimulationResult,
     HybridSlotInput,
+    HybridSlotResult,
 )
 
 
 HYBRID_KERNEL_PHASE4_VALIDATION_VERSION = (
     "ibg-hybrid-kernel-phase4-small-validation-v1"
 )
+HYBRID_KERNEL_EXPERIMENT_LIFECYCLE_VERSION = (
+    "ibg-hybrid-kernel-experiment-lifecycle-v1"
+)
+
+CompletedSlotCallback = Callable[
+    [int, HybridSlotResult, dict[str, object]], None
+]
+
+
+@dataclass(frozen=True)
+class HybridKernelExperimentResult:
+    """Finite production-loop outcome without exposing controller beliefs."""
+
+    iterations_completed: int
+    reached_equilibrium: bool
+    first_slot: int
+    last_slot: int
+    evidence: tuple[dict[str, object], ...]
+    contract_version: str = HYBRID_KERNEL_EXPERIMENT_LIFECYCLE_VERSION
+
+    def __post_init__(self) -> None:
+        if self.iterations_completed < 1:
+            raise ValueError("an experiment result requires a completed iteration")
+        if self.first_slot < 1 or self.last_slot < self.first_slot:
+            raise ValueError("experiment slot bounds are invalid")
+        if self.last_slot - self.first_slot + 1 != self.iterations_completed:
+            raise ValueError("experiment slot bounds do not match iteration count")
+        if len(self.evidence) != self.iterations_completed:
+            raise ValueError("experiment evidence does not cover every iteration")
 
 
 class _KernelTelemetryReplayAdapter:
@@ -257,12 +291,15 @@ def run_small_live_gate(
     iterations: int = 2,
     policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
     mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
+    on_slot_completed: CompletedSlotCallback | None = None,
 ) -> tuple[dict[str, object], ...]:
     if first_slot < 1 or iterations < 2:
         raise ValueError("Phase 4 requires a positive slot and at least two slots")
     evidence = []
     previous_beliefs = None
-    for slot_id in range(first_slot, first_slot + iterations):
+    for iteration, slot_id in enumerate(
+        range(first_slot, first_slot + iterations), start=1
+    ):
         outcome = controller.run_slot(slot_id)
         retained = (
             previous_beliefs is None
@@ -300,17 +337,106 @@ def run_small_live_gate(
         )
         if set(item["placement_paths"]) != {expected_path}:
             raise RuntimeError("Hybrid controller used an unexpected policy path")
+        if iteration == 1:
+            first_routes = {
+                tuple(placement["selected_stages"])
+                for placement in item["placements"]
+            }
+            if not {(1, 3), (2, 3)}.issubset(first_routes):
+                raise RuntimeError(
+                    "Phase 4 first slot must exercise noncontiguous and "
+                    "stage-2-first routes"
+                )
         evidence.append(item)
+        if on_slot_completed is not None:
+            on_slot_completed(iteration, outcome.slot, item)
         previous_beliefs = outcome.slot.beliefs_after
-    first_routes = {
-        tuple(item["selected_stages"])
-        for item in evidence[0]["placements"]
-    }
-    if not {(1, 3), (2, 3)}.issubset(first_routes):
-        raise RuntimeError(
-            "Phase 4 first slot must exercise noncontiguous and stage-2-first routes"
-        )
     return tuple(evidence)
+
+
+def run_kernel_experiment(
+    controller: HybridKernelControllerAdapter,
+    inputs: HybridKernelControllerInputDocument,
+    *,
+    first_slot: int = 1,
+    max_iterations: int,
+    policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
+    mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
+    on_slot_completed: CompletedSlotCallback | None = None,
+) -> HybridKernelExperimentResult:
+    """Run sequential slots until frozen equilibrium or the explicit limit.
+
+    Unlike ``run_small_live_gate``, this production lifecycle does not require
+    particular route shapes or a minimum slot count.  The controller adapter
+    remains responsible for complete Ready discovery, placement-before-traffic,
+    exactly one complete request, telemetry validation, learning, and belief
+    retention.
+    """
+
+    for value, field in (
+        (first_slot, "first_slot"),
+        (max_iterations, "max_iterations"),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{field} must be a positive integer")
+
+    evidence: list[dict[str, object]] = []
+    previous_beliefs = None
+    for iteration, slot_id in enumerate(
+        range(first_slot, first_slot + max_iterations), start=1
+    ):
+        outcome = controller.run_slot(slot_id)
+        retained = (
+            previous_beliefs is None
+            or outcome.slot.beliefs_before == previous_beliefs
+        )
+        if not retained:
+            raise RuntimeError(
+                "Hybrid production controller did not retain beliefs between slots"
+            )
+        item = _slot_evidence(
+            outcome=outcome,
+            inputs=inputs,
+            retained_from_previous=retained,
+            policy_mode=policy_mode,
+            mc_workers=mc_workers,
+        )
+        item["experiment_contract_version"] = (
+            HYBRID_KERNEL_EXPERIMENT_LIFECYCLE_VERSION
+        )
+        evidence.append(item)
+        if on_slot_completed is not None:
+            on_slot_completed(iteration, outcome.slot, item)
+        previous_beliefs = outcome.slot.beliefs_after
+        if outcome.slot.metrics.equilibrium:
+            return HybridKernelExperimentResult(
+                iterations_completed=iteration,
+                reached_equilibrium=True,
+                first_slot=first_slot,
+                last_slot=slot_id,
+                evidence=tuple(evidence),
+            )
+
+    return HybridKernelExperimentResult(
+        iterations_completed=max_iterations,
+        reached_equilibrium=False,
+        first_slot=first_slot,
+        last_slot=first_slot + max_iterations - 1,
+        evidence=tuple(evidence),
+    )
+
+
+def _print_completed_slot(
+    iteration: int,
+    slot: HybridSlotResult,
+    evidence: dict[str, object],
+) -> None:
+    print(format_hybrid_slot_metrics(slot, iteration=iteration), flush=True)
+    print(
+        HYBRID_SLOT_EVIDENCE_PREFIX
+        + json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+        flush=True,
+    )
 
 
 def _controller_from_environment(
@@ -355,16 +481,15 @@ def _controller_from_environment(
 
 def main() -> None:
     controller, inputs = _controller_from_environment()
-    evidence = run_small_live_gate(
+    run_small_live_gate(
         controller,
         inputs,
         first_slot=int(os.environ.get("SLOT_ID", "1")),
         iterations=int(os.environ.get("MAX_ITERATIONS", "2")),
         policy_mode=HYBRID_SLOT_POLICY_LOOKAHEAD,
         mc_workers=DEFAULT_HYBRID_MC_WORKERS,
+        on_slot_completed=_print_completed_slot,
     )
-    for item in evidence:
-        print(json.dumps(item, sort_keys=True, separators=(",", ":")), flush=True)
 
 
 if __name__ == "__main__":

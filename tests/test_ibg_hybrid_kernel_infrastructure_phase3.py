@@ -68,6 +68,7 @@ CONTROLLER_COPY_MAP = {
     "IBG_Hybrid/slot_contracts.py": "IBG_Hybrid/slot_contracts.py",
     "IBG_Hybrid/simulation.py": "IBG_Hybrid/simulation.py",
     "IBG_Hybrid/runner.py": "IBG_Hybrid/runner.py",
+    "IBG_Hybrid/console_output.py": "IBG_Hybrid/console_output.py",
     "IBG_Hybrid/kernel_infrastructure_contract.py": (
         "IBG_Hybrid/kernel_infrastructure_contract.py"
     ),
@@ -173,7 +174,9 @@ def test_service_dependency_and_source_inventory_is_lean():
     }
     sources = docker_copy_sources("Dockerfile.service")
     assert sources == set(SERVICE_COPY_MAP) | {
-        "deploy/hybrid-kubernetes/requirements-service.txt"
+        "deploy/hybrid-kubernetes/requirements-service.txt",
+        "deploy/hybrid-kubernetes/wheel-manifests/requirements-service.lock",
+        ".offline-wheels/ibg-hybrid/service/",
     }
     forbidden = {
         "IBG_Hybrid/policy.py",
@@ -205,7 +208,9 @@ def test_controller_dependency_and_source_inventory_owns_policy_learning_and_mc(
     }
     sources = docker_copy_sources("Dockerfile.controller")
     assert sources == set(CONTROLLER_COPY_MAP) | {
-        "deploy/hybrid-kubernetes/requirements-controller.txt"
+        "deploy/hybrid-kubernetes/requirements-controller.txt",
+        "deploy/hybrid-kubernetes/wheel-manifests/requirements-controller.lock",
+        ".offline-wheels/ibg-hybrid/controller/",
     }
     assert {
         "IBG_Hybrid/policy.py",
@@ -231,6 +236,20 @@ def test_controller_dependency_and_source_inventory_owns_policy_learning_and_mc(
     assert "highs" not in dependencies
     assert "ortools" not in dependencies
     assert "ibg_hybrid.kernel_controller_service" in dockerfile
+
+
+def test_hybrid_dockerfiles_install_only_from_the_local_wheelhouse():
+    for name, image in (
+        ("Dockerfile.service", "service"),
+        ("Dockerfile.controller", "controller"),
+    ):
+        dockerfile = (DEPLOY / name).read_text(encoding="utf-8").lower()
+        assert "--no-index" in dockerfile
+        assert "--find-links=/opt/ibg-hybrid-wheels" in dockerfile
+        assert f".offline-wheels/ibg-hybrid/{image}/" in dockerfile
+        assert "curl" not in dockerfile
+        assert "wget" not in dockerfile
+        assert "pip install --no-cache-dir -r" not in dockerfile
 
 
 def test_service_image_package_imports_are_isolated_safe_and_file_free(tmp_path):

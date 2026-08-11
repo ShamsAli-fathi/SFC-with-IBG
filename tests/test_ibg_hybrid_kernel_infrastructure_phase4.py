@@ -1,3 +1,4 @@
+import io
 import json
 import os
 from pathlib import Path
@@ -135,16 +136,25 @@ def test_phase4_validator_proves_retention_skips_and_replay_parity():
         )
     )
 
+    lifecycle = []
+
     class FakeController:
         def __init__(self):
             self.outcomes = [kernelized_outcome(first), kernelized_outcome(second)]
 
         def run_slot(self, slot_id):
+            lifecycle.append(f"run-{slot_id}")
             outcome = self.outcomes.pop(0)
             assert outcome.slot.slot_id == slot_id
             return outcome
 
-    evidence = run_small_live_gate(FakeController(), inputs)
+    evidence = run_small_live_gate(
+        FakeController(),
+        inputs,
+        on_slot_completed=lambda iteration, slot, item: lifecycle.append(
+            f"print-{iteration}-{slot.slot_id}-{item['slot_id']}"
+        ),
+    )
 
     assert len(evidence) == 2
     assert all(
@@ -155,7 +165,17 @@ def test_phase4_validator_proves_retention_skips_and_replay_parity():
     assert all(item["measured_pair_count"] == 2 for item in evidence)
     assert all(item["skipped_stage_absent"] for item in evidence)
     assert all(item["pure_kernel_replay_parity"] for item in evidence)
+    assert evidence[0]["metrics"][
+        "physical_processing_latency_ms_per_flow"
+    ] == first.metrics.physical_processing_latency_ms_per_flow
+    assert evidence[0]["metrics"][
+        "measured_pair_latency_ms_per_flow"
+    ] == first.metrics.measured_pair_latency_ms_per_flow
+    assert evidence[0]["metrics"][
+        "raw_end_to_end_latency_ms_per_flow"
+    ] == first.metrics.raw_end_to_end_latency_ms_per_flow
     assert evidence[1]["beliefs_before"] == evidence[0]["beliefs_after"]
+    assert lifecycle == ["run-1", "print-1-1-1", "run-2", "print-2-2-2"]
 
 
 def test_small_kustomize_boundary_keeps_base_resources_and_one_replica():
@@ -343,7 +363,10 @@ def test_phase4_cluster_inventory_rejects_shared_or_foreign_workloads():
         )
 
 
-def test_phase4_runner_retains_dedicated_cluster_after_failed_run():
+def test_phase4_runner_retains_dedicated_cluster_after_failed_run(monkeypatch):
+    monkeypatch.setattr(
+        cluster_runner, "_validate_offline_wheelhouses", lambda: None
+    )
     commands = []
     cluster_exists = False
 
@@ -404,7 +427,17 @@ def test_phase4_cleanup_is_explicit_and_hybrid_only():
     ]
 
 
-def test_phase4_runner_reuses_cluster_and_recreates_only_controller_job(capsys):
+def test_phase4_runner_reuses_cluster_and_recreates_only_controller_job(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        cluster_runner, "_validate_offline_wheelhouses", lambda: None
+    )
+    monkeypatch.setattr(
+        cluster_runner,
+        "_reconcile_phase75_controller_sources",
+        lambda execute: None,
+    )
     commands = []
     serving = _inventory(
         [
@@ -501,7 +534,14 @@ def test_phase4_runner_reuses_cluster_and_recreates_only_controller_job(capsys):
             return '{"slot_id":1}\n'
         return ""
 
-    cluster_runner.run_small(execute=fake_execute)
+    def fake_stream(controller_job_name):
+        commands.append((("stream", controller_job_name), True))
+        return '{"slot_id":1}\n'
+
+    output = cluster_runner.run_small(
+        execute=fake_execute,
+        stream_controller_logs=fake_stream,
+    )
 
     command_values = [command for command, _capture in commands]
     assert not any(
@@ -526,12 +566,82 @@ def test_phase4_runner_reuses_cluster_and_recreates_only_controller_job(capsys):
     apply_job = next(
         index
         for index, command in enumerate(command_values)
-        if "apply" in command and str(cluster_runner.CONTROLLER_JOB) in command
+        if "apply" in command
+        and str(cluster_runner.DYNAMIC_CONTROLLER_JOB) in command
     )
     assert delete_job < apply_job
+    stream_job = next(
+        index
+        for index, command in enumerate(command_values)
+        if command == ("stream", cluster_runner.DYNAMIC_CONTROLLER_JOB_NAME)
+    )
+    wait_job = next(
+        index
+        for index, command in enumerate(command_values)
+        if "wait" in command and "job" in " ".join(command)
+    )
+    assert apply_job < stream_job < wait_job
+    assert not any("logs" in command for command in command_values)
     assert capsys.readouterr().out == (
         "Selected Hybrid topology: 2 flows x 3 stages x 1 replica per stage\n"
-        '{"slot_id":1}\n'
+        "Hybrid image mode: build offline from validated local wheelhouses\n"
+    )
+    assert output == '{"slot_id":1}\n'
+
+
+def test_phase4_log_projection_hides_machine_evidence_and_keeps_human_output():
+    emitted = []
+    evidence = cluster_runner._project_controller_log_output(
+        "Iteration 2 (slot 9)\n"
+        "  Outcome mode: physical-only-v1\n"
+        "HYBRID_SLOT_EVIDENCE="
+        '{"flow_order":[2,1],"observations":[{"flow_id":1}],"slot_id":9}\n',
+        emit=emitted.append,
+    )
+
+    assert emitted == [
+        "Iteration 2 (slot 9)",
+        "  Outcome mode: physical-only-v1",
+    ]
+    assert "flow_order" not in "\n".join(emitted)
+    assert "observations" not in "\n".join(emitted)
+    assert json.loads(evidence) == {
+        "flow_order": [2, 1],
+        "observations": [{"flow_id": 1}],
+        "slot_id": 9,
+    }
+
+
+def test_phase4_default_log_follower_streams_human_lines_and_returns_evidence(
+    monkeypatch, capsys
+):
+    captured = {}
+
+    class FakeProcess:
+        stdout = io.StringIO(
+            "Iteration 1 (slot 4)\n"
+            "  Outcome mode: physical-only-v1\n"
+            'HYBRID_SLOT_EVIDENCE={"slot_id":4}\n'
+        )
+        stderr = io.StringIO("")
+
+        def wait(self):
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(cluster_runner.subprocess, "Popen", fake_popen)
+    evidence = cluster_runner._stream_controller_job_logs("controller-job")
+
+    assert "--follow" in captured["command"]
+    assert "--pod-running-timeout=180s" in captured["command"]
+    assert evidence == '{"slot_id":4}\n'
+    assert capsys.readouterr().out == (
+        "Iteration 1 (slot 4)\n"
+        "  Outcome mode: physical-only-v1\n"
     )
 
 

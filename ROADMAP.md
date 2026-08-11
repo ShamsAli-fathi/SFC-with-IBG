@@ -2305,3 +2305,186 @@ The next Phase 8 gate remains separately authorized. Gate 1 evidence supports
 considering a one-flow `5x3x2` lookahead increment without changing replicas
 or nodes; alternatively, manual MC at `4x3x2` would require a separate
 controller-resource gate. No choice is pre-authorized.
+
+### Dynamic-topology correction complete
+
+Completed: 2026-08-09.
+
+The hardcoded Phase 8 Gate 1 tuple selector has been replaced by the intended
+dimension-driven Hybrid experiment launcher. Positive flow and replica values
+are now general inputs while the frozen stage count remains three. Historical
+`2x3x1`, `3x3x2`, and `4x3x2` documents remain compatible projections, not a
+whitelist. The runner deterministically generates complete append-only runtime
+profiles, formula-derived admission inputs, and the complete three-stage-pair
+planning-link cross-product before reconciliation.
+
+The correction preserves drift rejection, fixed-name ConfigMaps, unchanged
+StatefulSet templates, no implicit shrink, Phase 5 bounded equal-stage rollout,
+exact Ready coverage at each target, and controller-after-final-readiness. The
+live acceptance scaled the persistent cluster from two to five replicas per
+stage through targets four and five, then ran two ten-flow lookahead slots. A
+second unchanged run preserved all fifteen stage Pods and the flow generator
+and recreated only the controller Job.
+
+At `10x3x5`, both live runs passed twenty-observation/ten-pair telemetry,
+skipped-stage absence, noncontiguous/stage-2-first routes, admission/final-load
+checks, selected-only learning, belief retention, seedless provenance,
+physical/observation and planning/measured separation, and pure/Kernel parity.
+The existing one-node resource envelope remained safe without resource or
+image changes. Shared `ibg` nodes stayed stopped.
+
+Validation passes 9 focused dynamic-topology tests, 234 complete Hybrid tests,
+119 relevant frozen Exact tests, and 194 frozen MILP launcher/profile/rollout
+tests. Python compilation, seven historical Kustomize renders, diff checks,
+frozen-tree checks, and process checks pass. No commit or push occurred.
+
+The dynamic lookahead interface is now usable for further positive flow and
+replica requests subject to no-shrink, deterministic profile validation,
+exact Ready coverage, and the current node resource preflight. Larger requests
+are not pre-certified: each must fit and complete its live evidence gate.
+MC remains manual-only and was not run at `10x3x5`.
+
+### Hybrid per-timeslot console presentation complete
+
+Completed: 2026-08-09.
+
+Pure Hybrid and Kernel controller entry points now share a human-readable
+completed-slot formatter. Both deterministic lookahead and explicit MC use the
+same output fields and precision. Kernel slots flush through a completion
+callback before the next slot starts, and the persistent host runner follows
+the Job logs live instead of waiting to display output until the entire Job is
+finished. Detailed JSON evidence is retained for validation but hidden from
+the human console.
+
+The implementation is presentation-only. Predicted per-flow utility was
+already summed from the two stage contributions before entering
+`HybridSlotMetrics`; the active outcome mode remains `physical-only-v1`, and
+all solver, latency, pair, jitter, learning, utility, SLA, fairness,
+equilibrium, adapter, and storage behavior is unchanged.
+
+Validation passes 53 focused presentation/Phase 5/Phase 4/Phase 7.5 tests,
+238 complete Hybrid tests, and 119 relevant frozen Exact tests. Python
+compilation, seven retained Kustomize renders, and three controller-Job parses
+pass. No live experiment, cluster mutation, image operation, Exact/MILP edit,
+commit, or push occurred.
+
+### Hybrid production experiment lifecycle correction complete
+
+Completed: 2026-08-09.
+
+The normal dynamic launcher command is now `run`, with required positive
+topology dimensions and `--max-iterations`. The controller runs sequential
+slots with retained beliefs, prints each completed result before the next slot,
+stops immediately on the existing equilibrium result, and otherwise completes
+exactly the requested maximum with an explicit not-reached status. The
+historical `run-small` gate and its bounded evidence assertions remain
+compatible but are no longer the ordinary experiment lifecycle.
+
+The requested iteration count is injected into the rendered dynamic Job; its
+template no longer hardcodes two slots. Production rendering is finite by the
+positive iteration bound and omits the historical gate deadline so the latter
+cannot stop a valid experiment early. All dynamic profile, no-shrink, rollout,
+Ready, `--skip-build`, process-preservation, and one-request-per-slot contracts
+remain unchanged.
+
+The human completed-slot block no longer includes per-flow latency. All
+physical, pair, raw end-to-end, and selected-outcome latency fields remain in
+the immutable result and hidden machine evidence. Lookahead remains default;
+manual MC remains restricted to the previously accepted `3x3x2`, one-or-two-
+worker Kubernetes boundary.
+
+Validation passes 73 focused lifecycle/presentation/infrastructure tests, 249
+complete Hybrid tests, and 119 relevant frozen Exact tests. All seven retained
+Hybrid Kustomize projections and seven controller Job templates parse. No live
+experiment, cluster mutation, image operation, dependency download, Exact/MILP
+edit, commit, or push occurred.
+
+### Hybrid intentional replica scale-down correction complete locally
+
+Completed locally: 2026-08-11. The live acceptance gate is not yet run.
+
+The dynamic production launcher now models rollout direction explicitly. It
+keeps equal targets unchanged, preserves bounded scale-up, and accepts one
+deliberate lower all-stage target. Mocked `8 -> 5` coverage removes only
+zero-based ordinals `5--7`, keeps old complete ConfigMaps through Pod removal,
+then reconciles exact reduced documents and requires final Ready coverage before
+the controller Job. Retained stage and flow-generator process identities are
+checked separately from intentionally removed Pods.
+
+Profile validation now regenerates exact deployed and target documents and
+reports retained/added/changed/removed runtime, admission, and planning-link
+sets. Retained identity/state/seed and links cannot drift; admission changes are
+formula-bound, and removed links must contain a removed endpoint. Scale-down
+resource preflight has zero added Pods. Scale-up, equal reuse, production
+iterations, console presentation, and frozen Hybrid semantics remain unchanged.
+
+The next action is a separately approved read-only pre-snapshot followed by the
+live `--skip-build --flow 10 --stage 3 --replica 5 --rollout-batch-size 2`
+acceptance gate if the deployed topology is still exactly eight replicas per
+stage. It must prove retained UID/restart preservation, absence of only the nine
+high-ordinal Pods, controller completion, and an unchanged five-replica rerun.
+
+Local validation passes 37 focused tests, 105 Phase 5--8/lifecycle tests, all
+252 Hybrid tests in memory-bounded groups, 119 relevant frozen Exact tests, and
+50 frozen MILP Phase 5 tests, plus compilation, seven Kustomize renders, and
+seven controller Job parses. No live Kubernetes or image action occurred.
+
+### Hybrid initial/final belief snapshots complete
+
+Completed locally: 2026-08-11.
+
+Production `run` now prints the sorted four-state belief vector for every
+replica once before the first slot and once after equilibrium or the configured
+maximum. It uses Exact's aligned table and three-decimal vector style without
+copying Exact's hidden-state or legacy runtime columns. Per-slot metrics remain
+belief-free, and lookahead/MC selection, learning, retention, equilibrium, and
+all Kernel behavior remain unchanged.
+
+Validation passes 70 focused tests, all 253 Hybrid tests in memory-bounded
+groups, and 119 relevant frozen Exact tests, plus compilation and seven
+Kustomize renders. No live or image action occurred.
+
+### Hybrid reproducible offline image-build correction complete locally
+
+Completed locally: 2026-08-11. The cache-dependent normal image path is
+replaced with separately manifested service/controller local wheelhouses.
+Normal execution validates both sets before Docker and then builds both images
+with offline-only pip, `--pull=false`, and `--network=none`; skip-build neither
+requires nor reads those wheelhouses and continues its node-image reuse path.
+The helper can list, validate, and explicitly stage pre-supplied wheels, but
+does not download.
+
+Focused wheelhouse/Phase 3--5 tests (48), dynamic/lifecycle/Phase 6 tests (39),
+and Phase 7.5/8/Hybrid regressions (52) pass locally. No complete project-local
+wheelhouse was present, so no fresh Docker build was claimed; no cluster,
+kind-load, image load, dependency download, commit, or push occurred. The next
+normal-build gate requires an operator to populate both local wheelhouses using
+the committed manifests, validate them, then separately approve any live run.
+
+The one-time wheel acquisition was subsequently explicitly authorized. Both
+wheelhouses validated and the clean local service/controller builds completed
+with no cache and no network. No kind load, deployment, or live experiment was
+performed; a normal runner invocation remains the separately chosen step that
+would load the rebuilt images and reconcile serving workloads.
+
+### Hybrid seeded hidden-state profile allocation complete locally
+
+Completed: 2026-08-11. Production `run` now has a required independent
+`--profile-seed` and generates balanced, seed-permuted, append-only per-stage
+state sequences. The fixed v1 distribution is Very Good/Good/Bad/Very Bad at
+30/30/20/20. Ten replicas therefore produce exact 3/3/2/2 coverage in every
+stage, while arbitrary prefixes stay within one replica of ideal. Historical
+fixed profiles remain unchanged compatibility fixtures.
+
+Seeded provenance and true state remain processor-private. Controller inputs
+and mounts contain no seed/state allocation information, discovery continues to
+construct policy replicas with `hidden_state=None`, and initial beliefs remain
+uniform. Same-seed growth/trim preserves retained identities. A legacy-to-seeded
+or reseeded deployment requires explicit `--refresh-runtime-profiles`; its mocked
+path validates before write and replaces only changed Pods stage-by-stage after
+ConfigMap reconciliation and before controller traffic.
+
+No live migration is part of this completion. The next separately approved gate
+must first re-snapshot the dedicated cluster, verify the expected legacy
+15-flow/3-stage/10-replica profile, then run one explicit seeded refresh and an
+unchanged seeded rerun to prove affected-versus-unaffected UID lineage.

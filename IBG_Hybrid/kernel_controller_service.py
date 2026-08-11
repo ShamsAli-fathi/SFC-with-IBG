@@ -14,7 +14,7 @@ from .kernel_kubernetes_discovery import (
     HybridKubernetesApi,
     HybridKubernetesReplicaDiscovery,
 )
-from .runner import format_hybrid_slot_metrics
+from .console_output import format_hybrid_slot_metrics
 
 
 def main() -> None:
@@ -49,11 +49,15 @@ def main() -> None:
     iterations = int(os.environ.get("MAX_ITERATIONS", "1"))
     if first_slot < 1 or iterations < 1:
         raise ValueError("SLOT_ID and MAX_ITERATIONS must be positive")
-    for slot_id in range(first_slot, first_slot + iterations):
+    for iteration, slot_id in enumerate(
+        range(first_slot, first_slot + iterations), start=1
+    ):
         outcome = controller.run_slot(slot_id)
-        print(format_hybrid_slot_metrics(outcome.slot), flush=True)
+        print(
+            format_hybrid_slot_metrics(outcome.slot, iteration=iteration),
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
     main()
-

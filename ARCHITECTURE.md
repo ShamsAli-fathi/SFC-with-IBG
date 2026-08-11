@@ -2530,3 +2530,300 @@ seconds with 578 seconds of deadline margin. There were no serving restarts,
 fatal events, post-Ready probe failures, or node pressure. No image operation,
 service resource change, MC-at-scale run, later Phase 8 topology, or shared-
 cluster operation occurred.
+
+## IBG-Hybrid dynamic-topology launcher boundary
+
+Completed: 2026-08-09.
+
+The Phase 8 Gate 1 tuple table was an incremental validation mechanism, not
+the final experiment interface. `scripts/run_hybrid_kernel_phase4.py` now
+accepts any positive flow count and replica count, keeps the frozen stage
+count exactly three, and resolves those dimensions before any cluster
+command. The singular and plural flags are retained. `--skip-build` controls
+only image build/load/restart behavior; it no longer selects an approved
+topology. Replica shrink remains fail-closed.
+
+`IBG_Hybrid/kernel_profile_expansion.py` owns deterministic dimension-driven
+generation. It preserves every canonical existing runtime identity, hidden
+state, and observation seed. Later replicas cycle the accepted hidden-state
+templates within their stage and receive an identity-derived Cantor-pair seed
+in a reserved one-billion-plus range. Repeating a dimension request is byte
+stable, and extending a replica count is append-only. Runtime ConfigMaps still
+contain only stage, replica, hidden state, and observation seed; beliefs stay
+controller-private and hidden state never enters controller inputs.
+
+Every generated replica receives `ceil(num_flows / num_replicas)` admission
+capacity, giving each stage aggregate capacity for all flows. Planning inputs
+contain the complete directed increasing-stage cross-product: three stage
+pairs times `R^2` replica pairs. Existing link values are copied exactly; new
+links use the canonical versioned value for their stage pair. At `10x3x5`
+this produces exactly 15 runtime profiles, 15 admission entries of capacity
+two, and 75 planning links. Measured pairs remain post-traffic outcomes.
+
+Before a ConfigMap write, the runner reads the deployed documents and requires
+them to equal the versioned rule for their deployed dimensions. It then
+requires the proposed documents to equal the generated target and preserves
+all old runtime and link entries; admission changes are allowed only when the
+dimension formula requires them. A server-side dry run must preserve every
+StatefulSet Pod template. Fixed ConfigMap names have no profile hash, so
+existing processors retain their startup-loaded identity while new ordinal
+Pods consume the expanded document.
+
+The existing Phase 5 rollout planner applies one count to all three
+StatefulSets and waits for exact Ready ordinal coverage at each batch before
+the finite dynamic controller Job. The accepted `2 -> 5` rollout with batch
+size two used targets four and five, creating only ordinals 2, 3, and 4. The
+generic Job remains outside every long-running Kustomize boundary and runs
+two deterministic-lookahead slots after final readiness. Completed dynamic
+Job Pods are recognized as Hybrid-owned during the next isolation preflight,
+then the Job alone is deleted and recreated.
+
+The live `10x3x5` gate preserved the dedicated node, all ordinal-0/1 Pods, and
+the flow generator; every serving restart count remained zero. Each of two
+slots completed ten placements before one request and returned twenty selected
+observations and ten measured pairs, with noncontiguous and stage-2-first
+routes, skipped-stage absence, selected-only learning, belief retention,
+seedless provenance, separated jitter/link boundaries, and pure/Kernel
+lookahead parity. A second unchanged `--skip-build` run preserved all fifteen
+stage Pods and the flow generator and replaced only the finite Job.
+
+The one-node resource preflight admitted 2,225m CPU of 4,000m and
+3,726,639,104 of 16,720,244,736 allocatable bytes. Final processor,
+forwarder, and flow-generator maximum working sets were 42,639,360,
+126,119,936, and 49,430,528 bytes; cgroup peaks were 46,899,200,
+130,232,320, and 53,907,456 bytes, with no memory events. The controller
+completed in 16 seconds with 584 seconds of deadline margin. There were no
+serving restarts, OOM/eviction/fatal events, post-Ready probe failures, or
+node pressure. No image build/load/pull/download, worker-node addition,
+resource change, MC-at-scale execution, or shared-cluster operation occurred.
+
+## IBG-Hybrid completed-slot console presentation
+
+Completed: 2026-08-09.
+
+`IBG_Hybrid/console_output.py` is the presentation-only boundary for both
+lookahead and explicitly selected MC slots. After a complete `HybridSlotResult`
+exists, it renders the iteration/slot identity, active outcome mode, per-flow
+physical/pair/raw/outcome latency, predicted/realized/physical/raw utility,
+SLA count, Jain fairness, elapsed time, and equilibrium. Latency is shown in
+milliseconds, utility and fairness use six decimals, and time uses three
+decimals. The formatter omits flow order, placements, observations, learning
+signals, beliefs/deltas, and storage messages.
+
+Hybrid metrics already sum the two selected stage-utility components into
+`aggregate_expected_utility_per_flow` inside `_compute_metrics`; presentation
+reads that completed scalar rather than recomputing policy mathematics. The
+active Hybrid outcome contract remains `physical-only-v1`, so outcome latency
+equals selected physical processing latency and realized utility equals the
+physical utility view. Pair latency and its raw end-to-end reference remain
+separately visible. No latency, utility, SLA, fairness, learning, equilibrium,
+or persistence calculation changed.
+
+The Kernel validation loop now invokes an optional completion callback only
+after one slot and all of its semantic checks succeed, and before the next slot
+starts. Controller entry points use that callback to flush the human block
+immediately. Complete machine evidence remains a prefixed controller-log line.
+The host runner follows the finite Job log while it is running, displays only
+human lines, privately collects and normalizes the evidence lines for existing
+validators, then still waits for Job completion and applies the unchanged
+process-preservation checks. It no longer dumps detailed evidence JSON after
+the Job finishes.
+
+The controller image includes the formatter. The existing controller-only
+no-build source ConfigMap also carries and mounts that single module for the
+Phase 7.5, Phase 8, and dynamic Jobs; service Pods do not mount or import it.
+
+## IBG-Hybrid production experiment lifecycle
+
+Completed: 2026-08-09.
+
+The dynamic launcher now exposes `run` as the normal experiment command and
+retains `run-small` only as the historical bounded infrastructure gate. `run`
+requires explicit positive flow, stage, replica, and maximum-iteration values;
+stages remain exactly three. Dimension-driven profiles, drift checks, bounded
+rollout, Ready coverage, `--skip-build`, and serving-process preservation are
+shared with the completed dynamic-topology path and are not duplicated in the
+experiment controller.
+
+`run_kernel_experiment` is separate from `run_small_live_gate`. It invokes the
+stateful controller adapter once per sequential slot, verifies belief continuity,
+emits the completed human block and prefixed machine evidence before the next
+slot, then checks the existing `HybridSlotMetrics.equilibrium` result. It returns
+immediately on equilibrium or after exactly the configured maximum, with a final
+reached/not-reached status. The adapter still owns complete Ready discovery,
+all placement before traffic, one complete flow-generator request, telemetry
+validation before learning, and controller-private belief retention.
+
+The host renders the dynamic controller Job with
+`HYBRID_CONTROLLER_LIFECYCLE=experiment` and the requested `MAX_ITERATIONS`.
+The dynamic Job template no longer embeds a two-slot limit. Historical gate
+templates retain their bounded counts. The production rendering removes the
+historical 600-second gate deadline because the positive iteration bound itself
+makes the Job finite and a gate deadline could truncate a valid long experiment.
+Host log following and hidden prefixed-evidence collection remain unchanged.
+
+The completed-slot formatter now omits the entire human `Latency:` section.
+Physical processing, measured-pair, raw end-to-end, and outcome latency remain
+unchanged in `HybridSlotResult` and prefixed evidence; only their console
+projection was removed. The human block retains outcome mode, the four utility
+views, SLA count, fairness, elapsed time, and equilibrium.
+
+Kubernetes MC remains manual-only and is still limited to the accepted `3x3x2`
+candidate-resource boundary with one or two workers. The general dynamic `run`
+interface does not authorize large-topology MC or automatic activation.
+
+## IBG-Hybrid intentional replica scale-down boundary
+
+Completed locally: 2026-08-11. Live acceptance remains separately gated.
+
+The Hybrid rollout contract is now direction-aware. Equal replica counts remain
+a no-op, scale-up retains bounded missing-ordinal batches, and an explicit lower
+target produces one deliberate all-stage batch. The plan records added and
+removed zero-based ordinals separately; an `8 -> 5` transition removes only
+ordinals `5`, `6`, and `7` from each StatefulSet. Exact three-stage ownership,
+one consistent deployed count, and exact Ready ordinal coverage remain
+prerequisites.
+
+Dynamic profile validation independently regenerates both the deployed and
+target runtime/controller documents from the versioned Hybrid rule before any
+write. It returns explicit retained, added, changed, and removed runtime,
+admission, and planning-link sets. Retained runtime identity, hidden state, and
+observation seed and retained planning links must be identical. Only profiles
+and admission entries above the target may disappear; every removed planning
+link must have a removed endpoint. A retained admission value may change only
+to the target `ceil(flows / replicas)` value. Beliefs remain controller-private.
+
+Scale-down deliberately reverses the scale-up ConfigMap order. The runner first
+server-dry-runs the exact lower projection and proves StatefulSet Pod templates
+unchanged while leaving the complete deployed ConfigMaps intact. It then scales
+all three StatefulSets to the one lower target, waits for exact retained Ready
+coverage and absence of higher ordinals, and only then reconciles the reduced
+runtime/controller ConfigMaps. It revalidates the exact documents, unchanged
+Pod templates, and Ready coverage before replacing the finite controller Job.
+This prevents a terminating high-ordinal processor from restarting after its
+profile has already been removed.
+
+`--skip-build` process evidence compares the retained subset: every retained
+stage Pod and the flow generator must keep the same UID and restart counts, and
+only the declared higher ordinals may disappear. Scale-down resource preflight
+uses zero added Pods and conservatively validates the existing serving envelope
+plus the finite controller; it never fabricates negative resource demand.
+
+The read-only MILP reference supplied the useful direct-lower-target rollout
+concept. Its current existing-profile validator was not copied because it loops
+over all pre-scale identities and can misclassify intentional high-ordinal
+removal as drift. Hybrid validates complete deterministic source and target
+documents and uses the safe scale-before-profile-removal ordering instead.
+
+Local validation passes 37 focused scale-down/dynamic/production tests, 105
+Infrastructure Phase 5--8 plus lifecycle tests, all 252 Hybrid tests (split
+into memory-bounded processes), 119 relevant frozen Exact tests, and 50 frozen
+MILP Phase 5 rollout/profile tests. Compilation, seven Kustomize renders, and
+seven controller Job parses also pass without contacting a live cluster.
+
+## IBG-Hybrid initial/final belief presentation
+
+Completed locally: 2026-08-11.
+
+The production `run` lifecycle now prints exactly two human belief snapshots:
+`Initial replica state` immediately before the first controller slot and
+`Final replica state` after the equilibrium reached/not-reached status. Both
+lookahead and explicit MC use this same lifecycle. The table follows Exact's
+sorted, aligned `Stage  Replica  Belief` presentation and formats each four-state
+vector in brackets to three decimals. Exact's additional hidden state and
+legacy capacity/delay/gamma columns are deliberately excluded because the
+Hybrid controller must not expose processor true state.
+
+Completed per-slot metric blocks remain belief-free, and prefixed machine
+evidence, belief retention, learning, equilibrium, traffic, metrics, and
+latency behavior are unchanged. Historical `run-small` validation output is
+unchanged.
+
+Validation passes 70 focused lifecycle/console/service-isolation tests, all 253
+Hybrid tests in memory-bounded groups, and 119 relevant frozen Exact tests.
+Compilation and all seven retained Kustomize renders pass.
+
+## IBG-Hybrid reproducible offline image-build boundary
+
+Implemented locally: 2026-08-11. No Kubernetes resource, kind image, or
+serving process was changed.
+
+Normal Hybrid image construction now has two explicit project-local inputs:
+`.offline-wheels/ibg-hybrid/service/` and
+`.offline-wheels/ibg-hybrid/controller/`. Their ignored wheel binaries are
+described by committed versioned manifests and complete transitive lock files
+under `deploy/hybrid-kubernetes/wheel-manifests/`. The manifests pin filenames,
+versions, Python `cp312` ABI, and linux/amd64 wheel platforms; neither image
+allows solver/MILP dependencies. `scripts/hybrid_offline_wheelhouse.py` is an
+import-safe operator helper that lists requirements, validates a supplied
+wheelhouse, or explicitly copies a complete validated supplied set into the
+project-local cache. It never downloads.
+
+Before a normal runner invocation can inspect or create a cluster, it prints
+`Hybrid image mode: build offline from validated local wheelhouses` and validates
+both image wheelhouses. A missing, extra, ABI/platform, lock, or recorded-digest
+mismatch aborts before either Docker build. Each Dockerfile then copies only its
+image-specific cache and uses pip `--no-index --find-links` with
+`--network=none`; the wheels are removed from the completed image layer.
+
+Conversely, `--skip-build` prints `Hybrid image mode: --skip-build; reuse
+validated node-local images`, does not inspect local wheelhouses, and retains
+its previous node-image identity, topology/configuration, Ready, and finite-Job
+lifecycle. It does no Docker build, kind load, or serving-workload restart.
+The Phase 7.5 controller-source ConfigMap bridge remains available to that path,
+while the normal controller Dockerfile still copies the current controller code
+permanently.
+
+### Offline image-build evidence
+
+On 2026-08-11, after an explicitly authorized operator wheel download, both
+project-local wheelhouses passed validation and clean `--no-cache --pull=false
+--network=none` local Docker builds completed. The resulting local manifest-list
+IDs are service `sha256:fb1245a5bcfd8c46a5e0d500aaac62d3c36b051744cad3b5604323a9bb2683f8`
+and controller `sha256:0ea07d41c9e45b74f075bdba89c532761a4d670d80452a71a24ebe5144b10daf`.
+No image was loaded into kind, no container was started, and Kubernetes was not
+contacted.
+
+## IBG-Hybrid seeded hidden-state profile allocation
+
+Implemented locally: 2026-08-11. No live cluster or image operation occurred.
+
+The production launcher now requires a nonnegative `--profile-seed`. Its only
+effect is processor hidden-state allocation. The versioned
+`ibg-hybrid-profile-state-allocation-v1` allocator uses the public state order
+Very Good/Good/Bad/Very Bad with integer weights `3/3/2/2`. Each stage is an
+append-only sequence of ten-replica strata. Every stratum has exactly those
+counts; within a stratum, domain-separated BLAKE2b ranks over allocation
+version, seed, stage, stratum, ordinal, and state select among choices whose
+prefix discrepancy remains at most one replica. A bounded deterministic
+backtrack enforces that invariant without Python or NumPy global RNG state.
+Consequently every ten-replica stage has exact 30/30/20/20 coverage, arbitrary
+prefixes remain within one replica of their ideal quotas, and changing the seed
+permutes identities without changing counts.
+
+The runtime ConfigMap alone records seeded allocation provenance in its
+processor-side source identity. Its individual entries remain exactly stage,
+replica, hidden state, and observation seed. Canonical observation seeds and all
+retained identity seeds remain unchanged; new ordinal seeds keep the separate
+identity-derived rule. The controller document remains generated solely from
+topology, admission, and planning links and contains no hidden state, profile
+seed, observation seed, mix, or equivalent allocation data. The controller Job
+still does not mount runtime profiles, and discovered policy replicas still use
+`hidden_state=None` with uniform initial beliefs.
+
+Historical profile documents continue to use the legacy fixed allocator and
+remain byte-identical fixtures. Seed-aware transition validation regenerates
+the exact deployed provenance and exact target before mutation. Same-seed
+scale-up preserves every existing runtime entry and appends only missing
+ordinals; same-seed scale-down retains lower ordinals and removes only higher
+ones. A legacy-to-seeded or seed-to-seed change fails unless
+`--refresh-runtime-profiles` is explicit.
+
+The refresh path is deliberately restricted to `--skip-build`, an unchanged
+replica count, and no simultaneous resource-template rollout. After complete
+source/target and Pod-template validation, it reconciles the exact ConfigMaps,
+records the identities whose hidden state differs, then deletes only those
+StatefulSet Pods one stage at a time. Exact Ready coverage follows every stage
+before the finite controller Job. Unaffected stage Pods and the flow generator
+must preserve UID/restart state; deliberately changed Pods must receive new UIDs
+with zero restarts. No profile hash or accidental rollout is used.

@@ -1,12 +1,12 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: ibg-hybrid-controller-phase8-gate1
+  name: ibg-hybrid-controller-dynamic
   namespace: ibg-hybrid-testbed
   labels:
     app.kubernetes.io/name: ibg-hybrid-controller
     app.kubernetes.io/part-of: ibg-hybrid-testbed
-    ibg-hybrid.phase: infrastructure-phase8-gate1
+    ibg-hybrid.phase: dynamic-topology-v1
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 600
@@ -15,7 +15,7 @@ spec:
       labels:
         app.kubernetes.io/name: ibg-hybrid-controller
         app.kubernetes.io/part-of: ibg-hybrid-testbed
-        ibg-hybrid.phase: infrastructure-phase8-gate1
+        ibg-hybrid.phase: dynamic-topology-v1
     spec:
       restartPolicy: Never
       serviceAccountName: ibg-hybrid-controller
@@ -31,8 +31,6 @@ spec:
               value: http://ibg-hybrid-flow-generator.ibg-hybrid-testbed.svc.cluster.local.:8080
             - name: SLOT_ID
               value: "1"
-            - name: MAX_ITERATIONS
-              value: "2"
           volumeMounts:
             - name: controller-inputs
               mountPath: /etc/ibg-hybrid-controller

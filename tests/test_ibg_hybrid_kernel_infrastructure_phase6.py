@@ -459,6 +459,9 @@ def test_phase6_runner_reconciles_profiles_before_only_missing_ordinals(
             SERVICE_ID if image == runner.SERVICE_IMAGE else CONTROLLER_ID
         ),
     )
+    monkeypatch.setattr(
+        runner, "_reconcile_phase75_controller_sources", lambda execute: None
+    )
 
     runner.run_small(
         skip_build=True,
@@ -478,7 +481,7 @@ def test_phase6_runner_reconciles_profiles_before_only_missing_ordinals(
     job = next(
         index
         for index, command in enumerate(commands)
-        if "apply" in command and str(runner.PHASE6_CONTROLLER_JOB) in command
+        if "apply" in command and str(runner.DYNAMIC_CONTROLLER_JOB) in command
     )
 
     assert actual_apply < scale < job
@@ -501,6 +504,9 @@ def test_phase6_template_drift_fails_before_configmap_apply_or_scale(monkeypatch
         lambda execute, image: (
             SERVICE_ID if image == runner.SERVICE_IMAGE else CONTROLLER_ID
         ),
+    )
+    monkeypatch.setattr(
+        runner, "_reconcile_phase75_controller_sources", lambda execute: None
     )
 
     with pytest.raises(RuntimeError, match="changes a StatefulSet Pod template"):
@@ -550,14 +556,17 @@ def test_phase6_overlay_and_job_preserve_runtime_resource_boundaries():
     assert "--policy" not in job
 
 
-def test_phase6_requires_skip_build_and_rejects_later_scale():
-    with pytest.raises(RuntimeError, match="requires --skip-build"):
-        runner.run_small(requested_replicas=2, execute=lambda command, capture: "ibg-hybrid\n")
-    with pytest.raises(RuntimeError, match="no approved complete profile"):
+def test_phase6_requires_explicit_flow_for_later_replica_counts():
+    boundary = runner._profile_boundary(
+        3, requested_flows=5, requested_stages=3
+    )
+    assert boundary.configuration.num_flows == 5
+    assert boundary.configuration.num_replicas == 3
+    with pytest.raises(RuntimeError, match="--flow is required"):
         runner._profile_boundary(3)
 
 
-def test_phase6_dimension_cli_matches_exact_and_milp_without_new_scale():
+def test_phase6_dimension_cli_matches_exact_and_milp_and_preserves_profiles():
     parsed = runner.parse_args(
         [
             "run-small",
@@ -573,21 +582,27 @@ def test_phase6_dimension_cli_matches_exact_and_milp_without_new_scale():
     assert parsed.requested_flows == 3
     assert parsed.requested_stages == 3
     assert parsed.requested_replicas == 2
-    assert runner._profile_boundary(
+    phase6 = runner._profile_boundary(
         2, requested_flows=3, requested_stages=3
-    ) == runner.PHASE6_PROFILE_BOUNDARY
-    assert runner._profile_boundary(1) == runner.PHASE4_PROFILE_BOUNDARY
+    )
+    phase4 = runner._profile_boundary(1)
+    assert phase6.configuration == runner.PHASE6_PROFILE_BOUNDARY.configuration
+    assert phase4.configuration == runner.PHASE4_PROFILE_BOUNDARY.configuration
+    assert phase6.runtime_document == _mapping(PHASE6 / "runtime-profiles.json")
+    assert phase6.controller_document == _mapping(PHASE6 / "controller-inputs.json")
+    assert phase4.runtime_document == _mapping(PHASE4 / "runtime-profiles.json")
+    assert phase4.controller_document == _mapping(PHASE4 / "controller-inputs.json")
 
 
 @pytest.mark.parametrize(
     ("flows", "stages", "replicas", "message"),
     (
-        (2, 3, 2, "no approved complete profile"),
-        (3, 3, 1, "no approved complete profile"),
+        (0, 3, 2, "flow count must be a positive integer"),
+        (3, 3, 0, "replica count must be a positive integer"),
         (3, 4, 2, "exactly three stages"),
     ),
 )
-def test_phase6_unapproved_dimension_tuple_fails_before_cluster_access(
+def test_phase6_invalid_dimensions_fail_before_cluster_access(
     flows, stages, replicas, message
 ):
     commands = []

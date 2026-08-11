@@ -9,7 +9,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY deploy/hybrid-kubernetes/requirements-service.txt ./
-RUN python3 -m pip install --no-cache-dir -r requirements-service.txt
+COPY deploy/hybrid-kubernetes/wheel-manifests/requirements-service.lock ./
+COPY .offline-wheels/ibg-hybrid/service/ /opt/ibg-hybrid-wheels/
+RUN python3 -m pip install --no-cache-dir --no-index \
+    --find-links=/opt/ibg-hybrid-wheels \
+    -r requirements-service.lock \
+    && rm -rf /opt/ibg-hybrid-wheels
 
 # Frozen Exact private processor and public-forwarder runtime dependencies.
 COPY IBG/datapath.py IBG/latency_model.py /app/IBG/

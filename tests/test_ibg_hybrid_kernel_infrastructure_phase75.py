@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+from IBG_Hybrid import kernel_controller_cli
 from IBG_Hybrid.contracts import GlobalLoadState
 from IBG_Hybrid.kernel_controller import HybridKernelControllerAdapter
 from IBG_Hybrid.kernel_controller_cli import (
@@ -119,6 +120,45 @@ def test_phase75_cli_is_manual_only_bounded_and_defaults_to_lookahead():
     ):
         with pytest.raises(SystemExit):
             parse_policy_arguments(arguments)
+
+
+def test_phase75_mc_cli_prints_each_completed_slot_before_return(
+    monkeypatch, capsys
+):
+    result = run_hybrid_slot(_phase6_input())
+    inputs = load_controller_input_document(PHASE6 / "controller-inputs.json")
+    lifecycle = []
+
+    monkeypatch.setattr(
+        kernel_controller_cli,
+        "_controller_from_environment",
+        lambda **kwargs: (object(), inputs),
+    )
+
+    def fake_live_gate(controller, document, **kwargs):
+        assert document is inputs
+        assert kwargs["policy_mode"] == "mc"
+        assert kwargs["mc_workers"] == 2
+        lifecycle.append("gate-started")
+        kwargs["on_slot_completed"](1, result, {"slot_id": result.slot_id})
+        lifecycle.append("slot-printed")
+        return ({"slot_id": result.slot_id},)
+
+    monkeypatch.setattr(
+        kernel_controller_cli,
+        "run_small_live_gate",
+        fake_live_gate,
+    )
+    assert kernel_controller_cli.main(["--policy", "mc", "--mc-workers", "2"]) == 0
+
+    output = capsys.readouterr().out
+    assert output.startswith("Iteration 1 (slot 1)\n")
+    machine_line = output.splitlines()[-1]
+    assert machine_line.startswith("HYBRID_SLOT_EVIDENCE=")
+    evidence = json.loads(machine_line.split("=", 1)[1])
+    assert evidence["controller_contract_version"]
+    assert evidence["explicit_policy"] is True
+    assert lifecycle == ["gate-started", "slot-printed"]
 
 
 def test_kernel_controller_passes_explicit_mc_workers_without_hidden_state(monkeypatch):
@@ -357,6 +397,7 @@ def test_phase75_job_patch_and_source_configmap_are_controller_only():
         arguments=("--policy", "mc", "--mc-workers", "2"),
     )
     assert set(captured["ConfigMap"]["data"]) == {
+        "console_output.py",
         "kernel_controller.py",
         "kernel_phase4_validation.py",
         "kernel_controller_cli.py",

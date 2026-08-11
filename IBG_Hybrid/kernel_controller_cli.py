@@ -8,8 +8,14 @@ import json
 import os
 from typing import Sequence
 
+from .console_output import (
+    HYBRID_SLOT_EVIDENCE_PREFIX,
+    format_hybrid_replica_beliefs,
+    format_hybrid_slot_metrics,
+)
 from .kernel_phase4_validation import (
     _controller_from_environment,
+    run_kernel_experiment,
     run_small_live_gate,
 )
 from .runner import HYBRID_SLOT_POLICY_LOOKAHEAD, HYBRID_SLOT_POLICY_MC
@@ -19,6 +25,9 @@ HYBRID_KERNEL_MC_CONTROLLER_VERSION = (
     "ibg-hybrid-kernel-mc-controller-v1"
 )
 MAX_HYBRID_KERNEL_MC_WORKERS = 2
+HYBRID_CONTROLLER_LIFECYCLE_ENV = "HYBRID_CONTROLLER_LIFECYCLE"
+HYBRID_CONTROLLER_LIFECYCLE_EXPERIMENT = "experiment"
+HYBRID_CONTROLLER_LIFECYCLE_VALIDATION = "validation"
 
 
 @dataclass(frozen=True)
@@ -78,20 +87,71 @@ def main(arguments: Sequence[str] | None = None) -> int:
         policy_mode=selection.policy_mode,
         mc_workers=selection.effective_workers,
     )
-    evidence = run_small_live_gate(
-        controller,
-        inputs,
-        first_slot=int(os.environ.get("SLOT_ID", "1")),
-        iterations=int(os.environ.get("MAX_ITERATIONS", "2")),
-        policy_mode=selection.policy_mode,
-        mc_workers=selection.effective_workers,
-    )
-    for item in evidence:
+    def print_completed_slot(iteration, slot, item) -> None:
         item["controller_contract_version"] = (
             HYBRID_KERNEL_MC_CONTROLLER_VERSION
         )
         item["explicit_policy"] = selection.explicit_policy
-        print(json.dumps(item, sort_keys=True, separators=(",", ":")), flush=True)
+        print(
+            format_hybrid_slot_metrics(slot, iteration=iteration),
+            flush=True,
+        )
+        print(
+            HYBRID_SLOT_EVIDENCE_PREFIX
+            + json.dumps(item, sort_keys=True, separators=(",", ":")),
+            flush=True,
+        )
+
+    lifecycle = os.environ.get(
+        HYBRID_CONTROLLER_LIFECYCLE_ENV,
+        HYBRID_CONTROLLER_LIFECYCLE_VALIDATION,
+    )
+    first_slot = int(os.environ.get("SLOT_ID", "1"))
+    max_iterations = int(os.environ.get("MAX_ITERATIONS", "2"))
+    if lifecycle == HYBRID_CONTROLLER_LIFECYCLE_EXPERIMENT:
+        print(
+            "\n"
+            + format_hybrid_replica_beliefs(
+                "Initial replica state", controller.beliefs
+            ),
+            flush=True,
+        )
+        outcome = run_kernel_experiment(
+            controller,
+            inputs,
+            first_slot=first_slot,
+            max_iterations=max_iterations,
+            policy_mode=selection.policy_mode,
+            mc_workers=selection.effective_workers,
+            on_slot_completed=print_completed_slot,
+        )
+        status = "reached" if outcome.reached_equilibrium else "not reached"
+        print(
+            f"Equilibrium {status} after "
+            f"{outcome.iterations_completed} iteration(s).",
+            flush=True,
+        )
+        print(
+            "\n"
+            + format_hybrid_replica_beliefs(
+                "Final replica state", controller.beliefs
+            ),
+            flush=True,
+        )
+    elif lifecycle == HYBRID_CONTROLLER_LIFECYCLE_VALIDATION:
+        run_small_live_gate(
+            controller,
+            inputs,
+            first_slot=first_slot,
+            iterations=max_iterations,
+            policy_mode=selection.policy_mode,
+            mc_workers=selection.effective_workers,
+            on_slot_completed=print_completed_slot,
+        )
+    else:
+        raise ValueError(
+            f"{HYBRID_CONTROLLER_LIFECYCLE_ENV} must be experiment or validation"
+        )
     return 0
 
 

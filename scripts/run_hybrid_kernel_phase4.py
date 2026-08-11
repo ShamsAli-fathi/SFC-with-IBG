@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Run the small Hybrid Kernel gate in a persistent Hybrid-only kind cluster."""
+"""Run Hybrid Kernel experiments or historical gates in its persistent cluster."""
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
 import subprocess
@@ -13,9 +14,18 @@ import tarfile
 import tempfile
 from typing import Callable, Mapping, Sequence
 
-from IBG_Hybrid.contracts import HybridConfiguration
+from scripts.hybrid_offline_wheelhouse import validate_all_wheelhouses
+
+from IBG_Hybrid.contracts import HybridConfiguration, ReplicaChoice
+from IBG_Hybrid.console_output import HYBRID_SLOT_EVIDENCE_PREFIX
 from IBG_Hybrid.kernel_profile_expansion import (
+    HYBRID_PROFILE_STATE_ALLOCATION_VERSION,
+    HYBRID_PROFILE_STATE_ORDER,
+    HybridKernelDynamicTopologyTransition,
     HybridKernelProfileExpansionError,
+    generate_dynamic_topology_documents,
+    seeded_profile_state_counts,
+    validate_dynamic_topology_transition,
     validate_append_only_profile_expansion,
     validate_flow_only_profile_expansion,
 )
@@ -62,6 +72,10 @@ PHASE8_GATE1_OVERLAY = (
 )
 PHASE8_GATE1_CONTROLLER_JOB = PHASE8_GATE1_OVERLAY / "controller-job.yaml"
 PHASE8_GATE1_CONTROLLER_JOB_NAME = "ibg-hybrid-controller-phase8-gate1"
+DYNAMIC_CONTROLLER_JOB = (
+    ROOT / "deploy" / "hybrid-kubernetes" / "dynamic-controller-job.yaml"
+)
+DYNAMIC_CONTROLLER_JOB_NAME = "ibg-hybrid-controller-dynamic"
 PHASE75_CONTROLLER_SOURCE_CONFIGMAP = (
     "ibg-hybrid-controller-phase75-source"
 )
@@ -69,6 +83,7 @@ PHASE75_CONTROLLER_SOURCES = (
     ROOT / "IBG_Hybrid" / "kernel_controller.py",
     ROOT / "IBG_Hybrid" / "kernel_phase4_validation.py",
     ROOT / "IBG_Hybrid" / "kernel_controller_cli.py",
+    ROOT / "IBG_Hybrid" / "console_output.py",
 )
 MAX_HYBRID_KERNEL_MC_WORKERS = 2
 SERVICE_IMAGE = "ibg-hybrid-testbed:kernel-service-v1"
@@ -99,6 +114,7 @@ CONTROLLER_DOCKERFILE = (
 Command = tuple[str, ...]
 Executor = Callable[[Command, bool], str]
 RunHook = Callable[[], None]
+ControllerLogStreamer = Callable[[str], str]
 
 
 @dataclass(frozen=True, order=True)
@@ -115,6 +131,15 @@ class StatefulSetPodTemplateSnapshot:
 
 
 @dataclass(frozen=True)
+class HybridNodeResourcePreflight:
+    requested_cpu_milli: int
+    allocatable_cpu_milli: int
+    requested_memory_bytes: int
+    allocatable_memory_bytes: int
+    added_stage_pods: int
+
+
+@dataclass(frozen=True)
 class HybridProfileBoundary:
     configuration: HybridConfiguration
     source_identity: str
@@ -124,6 +149,9 @@ class HybridProfileBoundary:
     controller_job: Path
     controller_job_name: str
     replaced_job_names: tuple[str, ...]
+    runtime_document: Mapping[str, object] | None = None
+    controller_document: Mapping[str, object] | None = None
+    profile_seed: int | None = None
 
 
 PHASE4_PROFILE_BOUNDARY = HybridProfileBoundary(
@@ -273,6 +301,7 @@ def validate_cluster_inventory(
                     "ibg-hybrid-controller-phase7-",
                     "ibg-hybrid-controller-phase75-",
                     "ibg-hybrid-controller-phase8-gate1-",
+                    "ibg-hybrid-controller-dynamic-",
                 )
             ):
                 owned = (
@@ -305,9 +334,19 @@ def _require_local_image(execute: Executor, image: str) -> None:
     execute(("docker", "image", "inspect", image), True)
 
 
-def _build_images_offline(execute: Executor) -> None:
+def _validate_offline_wheelhouses() -> None:
+    """Fail before Docker if either Hybrid image lacks its local wheel set."""
+
+    validate_all_wheelhouses(root=ROOT)
+
+
+def _build_images_offline(
+    execute: Executor, *, wheelhouses_validated: bool = False
+) -> None:
     """Build both images without pulls or build-step network access."""
 
+    if not wheelhouses_validated:
+        _validate_offline_wheelhouses()
     _require_local_image(execute, PYTHON_BASE_IMAGE)
     for dockerfile, image in (
         (SERVICE_DOCKERFILE, SERVICE_IMAGE),
@@ -586,6 +625,52 @@ def _validate_process_preservation(
         )
 
 
+def _validate_scale_down_process_preservation(
+    before: tuple[ServingPodProcessSnapshot, ...],
+    after: tuple[ServingPodProcessSnapshot, ...],
+    *,
+    existing_count: int,
+    requested_count: int,
+) -> None:
+    """Preserve retained processes and require only high ordinals to disappear."""
+
+    if requested_count >= existing_count:
+        raise RuntimeError("scale-down process validation requires a lower target")
+    before_by_name = {item.pod_name: item for item in before}
+    after_by_name = {item.pod_name: item for item in after}
+    flow_generators = {
+        name for name in before_by_name if name.startswith("ibg-hybrid-flow-generator-")
+    }
+    if len(flow_generators) != 1:
+        raise RuntimeError("scale-down process snapshot has no unique flow generator")
+    retained_names = flow_generators | {
+        f"hybrid-stage-{stage}-{ordinal}"
+        for stage in range(1, 4)
+        for ordinal in range(requested_count)
+    }
+    removed_names = {
+        f"hybrid-stage-{stage}-{ordinal}"
+        for stage in range(1, 4)
+        for ordinal in range(requested_count, existing_count)
+    }
+    if set(before_by_name) != retained_names | removed_names:
+        raise RuntimeError("scale-down pre-snapshot has unexpected serving Pods")
+    if set(after_by_name) != retained_names:
+        lingering = sorted(set(after_by_name) & removed_names)
+        raise RuntimeError(
+            "scale-down serving Pod set is not the exact retained subset"
+            + (f"; removed Pods still present: {lingering}" if lingering else "")
+        )
+    changed = sorted(
+        name for name in retained_names if before_by_name[name] != after_by_name[name]
+    )
+    if changed:
+        raise RuntimeError(
+            "scale-down changed a retained serving Pod UID or restart count: "
+            + ", ".join(changed)
+        )
+
+
 def _validate_deliberate_processor_rollout(
     before: tuple[ServingPodProcessSnapshot, ...],
     after: tuple[ServingPodProcessSnapshot, ...],
@@ -613,6 +698,85 @@ def _validate_deliberate_processor_rollout(
             )
 
 
+def _runtime_profile_refresh_pod_names(
+    choices: Sequence[ReplicaChoice],
+) -> tuple[str, ...]:
+    return tuple(
+        f"hybrid-stage-{choice.stage}-{choice.replica - 1}"
+        for choice in sorted(choices)
+    )
+
+
+def _validate_runtime_profile_refresh_processes(
+    before: tuple[ServingPodProcessSnapshot, ...],
+    after: tuple[ServingPodProcessSnapshot, ...],
+    *,
+    changed_identities: Sequence[ReplicaChoice],
+) -> None:
+    """Require only explicitly changed runtime identities to receive new Pods."""
+
+    before_by_name = {item.pod_name: item for item in before}
+    after_by_name = {item.pod_name: item for item in after}
+    if set(before_by_name) != set(after_by_name):
+        raise RuntimeError("runtime-profile refresh changed the serving Pod set")
+    changed_names = set(_runtime_profile_refresh_pod_names(changed_identities))
+    unknown = changed_names - set(before_by_name)
+    if unknown:
+        raise RuntimeError(
+            "runtime-profile refresh names an absent serving Pod: "
+            + ", ".join(sorted(unknown))
+        )
+    for name in sorted(before_by_name):
+        old = before_by_name[name]
+        new = after_by_name[name]
+        if name in changed_names:
+            if new.pod_uid == old.pod_uid:
+                raise RuntimeError(
+                    f"runtime-profile refresh did not replace affected Pod {name}"
+                )
+            if any(restarts for _container, restarts in new.container_restarts):
+                raise RuntimeError(
+                    f"runtime-profile refresh produced restarts in {name}"
+                )
+        elif new != old:
+            raise RuntimeError(
+                f"runtime-profile refresh changed unaffected Pod {name}"
+            )
+
+
+def _refresh_runtime_profile_pods(
+    execute: Executor,
+    *,
+    changed_identities: Sequence[ReplicaChoice],
+    replica_count: int,
+) -> None:
+    """Replace affected StatefulSet Pods stage by stage with a Ready gate."""
+
+    by_stage = {
+        stage: tuple(
+            choice
+            for choice in sorted(changed_identities)
+            if choice.stage == stage
+        )
+        for stage in range(1, 4)
+    }
+    for stage in range(1, 4):
+        choices = by_stage[stage]
+        if not choices:
+            continue
+        execute(
+            _kubectl(
+                "delete",
+                *(f"pod/{name}" for name in _runtime_profile_refresh_pod_names(choices)),
+                "-n",
+                HYBRID_NAMESPACE,
+                "--wait=true",
+            ),
+            False,
+        )
+        _wait_for_target(execute, replica_count=replica_count)
+
+
 def _pod_inventory(execute: Executor) -> Mapping[str, object]:
     return _json_output(
         execute,
@@ -629,18 +793,154 @@ def _statefulset_inventory(execute: Executor) -> Mapping[str, object]:
     )
 
 
-APPROVED_PROFILE_BOUNDARIES = {
-    (
-        boundary.configuration.num_flows,
-        boundary.configuration.num_stages,
-        boundary.configuration.num_replicas,
-    ): boundary
-    for boundary in (
-        PHASE4_PROFILE_BOUNDARY,
-        PHASE6_PROFILE_BOUNDARY,
-        PHASE8_GATE1_PROFILE_BOUNDARY,
+def _cpu_milli(value: object) -> int:
+    if not isinstance(value, str) or not value:
+        raise RuntimeError("Kubernetes CPU quantity must be a nonempty string")
+    multipliers = {"m": Decimal(1), "u": Decimal("0.001"), "n": Decimal("0.000001")}
+    suffix = value[-1]
+    try:
+        if suffix in multipliers:
+            amount = Decimal(value[:-1]) * multipliers[suffix]
+        else:
+            amount = Decimal(value) * Decimal(1000)
+    except InvalidOperation as error:
+        raise RuntimeError(f"invalid Kubernetes CPU quantity: {value}") from error
+    if amount < 0 or amount != amount.to_integral_value():
+        raise RuntimeError(f"unsupported Kubernetes CPU quantity: {value}")
+    return int(amount)
+
+
+def _memory_bytes(value: object) -> int:
+    if not isinstance(value, str) or not value:
+        raise RuntimeError("Kubernetes memory quantity must be a nonempty string")
+    binary = {
+        "Ki": 1024,
+        "Mi": 1024**2,
+        "Gi": 1024**3,
+        "Ti": 1024**4,
+    }
+    decimal = {"K": 1000, "M": 1000**2, "G": 1000**3, "T": 1000**4}
+    multiplier = 1
+    number = value
+    for suffix, candidate in (*binary.items(), *decimal.items()):
+        if value.endswith(suffix):
+            multiplier = candidate
+            number = value[: -len(suffix)]
+            break
+    try:
+        amount = Decimal(number) * multiplier
+    except InvalidOperation as error:
+        raise RuntimeError(f"invalid Kubernetes memory quantity: {value}") from error
+    if amount < 0 or amount != amount.to_integral_value():
+        raise RuntimeError(f"unsupported Kubernetes memory quantity: {value}")
+    return int(amount)
+
+
+def _container_request(container: Mapping[str, object]) -> tuple[int, int]:
+    resources = container.get("resources")
+    requests = resources.get("requests") if isinstance(resources, Mapping) else None
+    if not isinstance(requests, Mapping):
+        return 0, 0
+    return (
+        _cpu_milli(requests.get("cpu", "0")),
+        _memory_bytes(requests.get("memory", "0")),
     )
-}
+
+
+def _pod_request(pod: Mapping[str, object]) -> tuple[int, int]:
+    spec = pod.get("spec")
+    if not isinstance(spec, Mapping):
+        raise RuntimeError("Kubernetes Pod has no resource spec")
+    containers = spec.get("containers")
+    if not isinstance(containers, list):
+        raise RuntimeError("Kubernetes Pod has no container list")
+    regular = [_container_request(item) for item in containers if isinstance(item, Mapping)]
+    if len(regular) != len(containers):
+        raise RuntimeError("Kubernetes Pod container resource entry is invalid")
+    cpu = sum(item[0] for item in regular)
+    memory = sum(item[1] for item in regular)
+    init_containers = spec.get("initContainers", [])
+    if not isinstance(init_containers, list):
+        raise RuntimeError("Kubernetes Pod init-container list is invalid")
+    init = [
+        _container_request(item)
+        for item in init_containers
+        if isinstance(item, Mapping)
+    ]
+    if len(init) != len(init_containers):
+        raise RuntimeError("Kubernetes Pod init-container resource entry is invalid")
+    if init:
+        cpu = max(cpu, max(item[0] for item in init))
+        memory = max(memory, max(item[1] for item in init))
+    overhead = spec.get("overhead")
+    if isinstance(overhead, Mapping):
+        cpu += _cpu_milli(overhead.get("cpu", "0"))
+        memory += _memory_bytes(overhead.get("memory", "0"))
+    return cpu, memory
+
+
+def _validate_node_resource_capacity(
+    execute: Executor,
+    *,
+    existing_replica_count: int,
+    requested_replica_count: int,
+) -> HybridNodeResourcePreflight:
+    """Fail before mutation when the one-node scheduler envelope is too small."""
+
+    nodes = _json_output(execute, _kubectl("get", "nodes", "-o", "json"))
+    node_items = nodes.get("items")
+    if not isinstance(node_items, list) or len(node_items) != 1:
+        raise RuntimeError("Hybrid resource preflight requires exactly one node")
+    node = node_items[0]
+    status = node.get("status") if isinstance(node, Mapping) else None
+    allocatable = status.get("allocatable") if isinstance(status, Mapping) else None
+    if not isinstance(allocatable, Mapping):
+        raise RuntimeError("Hybrid node has no allocatable resource inventory")
+    allocatable_cpu = _cpu_milli(allocatable.get("cpu"))
+    allocatable_memory = _memory_bytes(allocatable.get("memory"))
+
+    pods = _json_output(execute, _kubectl("get", "pods", "-A", "-o", "json"))
+    pod_items = pods.get("items")
+    if not isinstance(pod_items, list):
+        raise RuntimeError("Hybrid resource preflight has no Pod inventory")
+    requested_cpu = 0
+    requested_memory = 0
+    for pod in pod_items:
+        if not isinstance(pod, Mapping):
+            raise RuntimeError("Hybrid resource preflight Pod is invalid")
+        status = pod.get("status")
+        if isinstance(status, Mapping) and status.get("phase") in {
+            "Succeeded",
+            "Failed",
+        }:
+            continue
+        pod_cpu, pod_memory = _pod_request(pod)
+        requested_cpu += pod_cpu
+        requested_memory += pod_memory
+
+    added_stage_pods = 3 * max(
+        0, requested_replica_count - existing_replica_count
+    )
+    # Accepted Phase 7 candidate requests: processor 50m with 64 binary MiB,
+    # plus forwarder 25m with 128 binary MiB.  The finite controller adds
+    # 100m/256 binary MiB after old Jobs are deleted.  Current Running Pods are
+    # already included above.
+    requested_cpu += added_stage_pods * 75 + 100
+    requested_memory += added_stage_pods * (64 + 128) * 1024**2 + 256 * 1024**2
+    result = HybridNodeResourcePreflight(
+        requested_cpu_milli=requested_cpu,
+        allocatable_cpu_milli=allocatable_cpu,
+        requested_memory_bytes=requested_memory,
+        allocatable_memory_bytes=allocatable_memory,
+        added_stage_pods=added_stage_pods,
+    )
+    if requested_cpu > allocatable_cpu or requested_memory > allocatable_memory:
+        raise RuntimeError(
+            "requested Hybrid topology exceeds node allocatable resources: "
+            f"cpu={requested_cpu}m/{allocatable_cpu}m, "
+            f"memory={requested_memory}/{allocatable_memory} bytes"
+        )
+    return result
 
 
 def _profile_boundary(
@@ -648,6 +948,7 @@ def _profile_boundary(
     *,
     requested_flows: int | None = None,
     requested_stages: int | None = None,
+    profile_seed: int | None = None,
 ) -> HybridProfileBoundary:
     for value, field in (
         (requested_replicas, "replica count"),
@@ -658,35 +959,50 @@ def _profile_boundary(
             isinstance(value, bool) or not isinstance(value, int) or value < 1
         ):
             raise RuntimeError(f"{field} must be a positive integer")
-    if requested_stages is not None and requested_stages != 3:
+    resolved_stages = 3 if requested_stages is None else requested_stages
+    if resolved_stages != 3:
         raise RuntimeError(
             "the frozen Hybrid L=2 model requires exactly three stages"
         )
-    candidates = [
-        boundary
-        for (flows, stages, replicas), boundary in APPROVED_PROFILE_BOUNDARIES.items()
-        if replicas == requested_replicas
-        and (requested_flows is None or flows == requested_flows)
-        and (requested_stages is None or stages == requested_stages)
-    ]
-    if (
-        requested_flows is None
-        and requested_stages is None
-        and requested_replicas == 2
-    ):
-        return PHASE6_PROFILE_BOUNDARY
-    if len(candidates) == 1:
-        return candidates[0]
-    requested = (
-        "inferred" if requested_flows is None else str(requested_flows),
-        "inferred" if requested_stages is None else str(requested_stages),
-        str(requested_replicas),
+    if requested_flows is None:
+        historical_flows = {1: 2, 2: 3}
+        if requested_replicas not in historical_flows:
+            raise RuntimeError(
+                "--flow is required when requesting more than two replicas"
+            )
+        requested_flows = historical_flows[requested_replicas]
+    configuration = HybridConfiguration(
+        requested_flows,
+        resolved_stages,
+        requested_replicas,
+        2,
     )
-    raise RuntimeError(
-        "requested Hybrid topology has no approved complete profile: "
-        f"flow={requested[0]}, stage={requested[1]}, replica={requested[2]}; "
-        "approved tuples are 2x3x1, 3x3x2, and Phase 8 Gate 1 4x3x2; "
-        "all additional scale is deferred to Infrastructure Phase 8"
+    runtime, controller = generate_dynamic_topology_documents(
+        canonical_runtime=_load_json_mapping(
+            PHASE6_PROFILE_BOUNDARY.runtime_profiles
+        ),
+        canonical_controller=_load_json_mapping(
+            PHASE6_PROFILE_BOUNDARY.controller_inputs
+        ),
+        configuration=configuration,
+        profile_seed=profile_seed,
+    )
+    source_identity = str(controller["source_identity"])
+    return HybridProfileBoundary(
+        configuration=configuration,
+        source_identity=source_identity,
+        overlay=PHASE7_CANDIDATE_OVERLAY,
+        runtime_profiles=PHASE6_PROFILE_BOUNDARY.runtime_profiles,
+        controller_inputs=PHASE6_PROFILE_BOUNDARY.controller_inputs,
+        controller_job=DYNAMIC_CONTROLLER_JOB,
+        controller_job_name=DYNAMIC_CONTROLLER_JOB_NAME,
+        replaced_job_names=(
+            *PHASE8_GATE1_PROFILE_BOUNDARY.replaced_job_names,
+            DYNAMIC_CONTROLLER_JOB_NAME,
+        ),
+        runtime_document=runtime,
+        controller_document=controller,
+        profile_seed=profile_seed,
     )
 
 
@@ -697,44 +1013,55 @@ def _load_json_mapping(path: Path) -> Mapping[str, object]:
     return payload
 
 
+def _boundary_runtime_document(
+    boundary: HybridProfileBoundary,
+) -> Mapping[str, object]:
+    return (
+        boundary.runtime_document
+        if boundary.runtime_document is not None
+        else _load_json_mapping(boundary.runtime_profiles)
+    )
+
+
+def _boundary_controller_document(
+    boundary: HybridProfileBoundary,
+) -> Mapping[str, object]:
+    return (
+        boundary.controller_document
+        if boundary.controller_document is not None
+        else _load_json_mapping(boundary.controller_inputs)
+    )
+
+
 def _validate_static_profile_boundary(
     requested_replicas: int,
     *,
     requested_flows: int | None = None,
     requested_stages: int | None = None,
+    profile_seed: int | None = None,
 ) -> HybridProfileBoundary:
     boundary = _profile_boundary(
         requested_replicas,
         requested_flows=requested_flows,
         requested_stages=requested_stages,
+        profile_seed=profile_seed,
     )
-    runtime = _load_json_mapping(boundary.runtime_profiles)
-    controller = _load_json_mapping(boundary.controller_inputs)
-    if boundary == PHASE8_GATE1_PROFILE_BOUNDARY:
-        validate_flow_only_profile_expansion(
-            deployed_runtime=_load_json_mapping(
-                PHASE6_PROFILE_BOUNDARY.runtime_profiles
-            ),
-            deployed_controller=_load_json_mapping(
-                PHASE6_PROFILE_BOUNDARY.controller_inputs
-            ),
-            proposed_runtime=runtime,
-            proposed_controller=controller,
-            deployed_configuration=PHASE6_PROFILE_BOUNDARY.configuration,
-            target_configuration=boundary.configuration,
-            deployed_source_identity=PHASE6_PROFILE_BOUNDARY.source_identity,
-            target_source_identity=boundary.source_identity,
-        )
-    else:
-        validate_append_only_profile_expansion(
-            deployed_runtime=runtime,
-            deployed_controller=controller,
-            proposed_runtime=runtime,
-            proposed_controller=controller,
-            existing_replica_count=requested_replicas,
-            expected_configuration=boundary.configuration,
-            expected_source_identity=boundary.source_identity,
-        )
+    runtime = _boundary_runtime_document(boundary)
+    controller = _boundary_controller_document(boundary)
+    # Generation parses and validates both complete canonical documents.  Keep
+    # one explicit parse here so callers cannot substitute a malformed boundary.
+    generate_dynamic_topology_documents(
+        canonical_runtime=_load_json_mapping(
+            PHASE6_PROFILE_BOUNDARY.runtime_profiles
+        ),
+        canonical_controller=_load_json_mapping(
+            PHASE6_PROFILE_BOUNDARY.controller_inputs
+        ),
+        configuration=boundary.configuration,
+        profile_seed=profile_seed,
+    )
+    if runtime != boundary.runtime_document or controller != boundary.controller_document:
+        raise RuntimeError("dynamic Hybrid topology documents are inconsistent")
     return boundary
 
 
@@ -794,59 +1121,46 @@ def _validate_live_profile_expansion(
     *,
     existing_replica_count: int,
     boundary: HybridProfileBoundary,
-) -> None:
+    refresh_runtime_profiles: bool = False,
+) -> HybridKernelDynamicTopologyTransition | None:
     deployed_runtime, deployed_controller = _deployed_profile_documents(execute)
-    if boundary == PHASE8_GATE1_PROFILE_BOUNDARY:
-        if existing_replica_count != boundary.configuration.num_replicas:
-            raise RuntimeError(
-                "Phase 8 Gate 1 requires the existing exact two-replica topology"
-            )
-        proposed_runtime = _load_json_mapping(boundary.runtime_profiles)
-        proposed_controller = _load_json_mapping(boundary.controller_inputs)
-        if (
-            deployed_runtime == proposed_runtime
-            and deployed_controller == proposed_controller
-        ):
-            validate_append_only_profile_expansion(
-                deployed_runtime=deployed_runtime,
-                deployed_controller=deployed_controller,
-                proposed_runtime=proposed_runtime,
-                proposed_controller=proposed_controller,
-                existing_replica_count=existing_replica_count,
-                expected_configuration=boundary.configuration,
-                expected_source_identity=boundary.source_identity,
-            )
-        else:
-            validate_flow_only_profile_expansion(
-                deployed_runtime=deployed_runtime,
-                deployed_controller=deployed_controller,
-                proposed_runtime=proposed_runtime,
-                proposed_controller=proposed_controller,
-                deployed_configuration=PHASE6_PROFILE_BOUNDARY.configuration,
-                target_configuration=boundary.configuration,
-                deployed_source_identity=PHASE6_PROFILE_BOUNDARY.source_identity,
-                target_source_identity=boundary.source_identity,
-            )
-    else:
+    if boundary.runtime_document is None:
         validate_append_only_profile_expansion(
             deployed_runtime=deployed_runtime,
             deployed_controller=deployed_controller,
-            proposed_runtime=_load_json_mapping(boundary.runtime_profiles),
-            proposed_controller=_load_json_mapping(boundary.controller_inputs),
+            proposed_runtime=_boundary_runtime_document(boundary),
+            proposed_controller=_boundary_controller_document(boundary),
             existing_replica_count=existing_replica_count,
             expected_configuration=boundary.configuration,
             expected_source_identity=boundary.source_identity,
         )
+        return None
+    return validate_dynamic_topology_transition(
+        deployed_runtime=deployed_runtime,
+        deployed_controller=deployed_controller,
+        proposed_runtime=_boundary_runtime_document(boundary),
+        proposed_controller=_boundary_controller_document(boundary),
+        canonical_runtime=_load_json_mapping(
+            PHASE6_PROFILE_BOUNDARY.runtime_profiles
+        ),
+        canonical_controller=_load_json_mapping(
+            PHASE6_PROFILE_BOUNDARY.controller_inputs
+        ),
+        existing_replica_count=existing_replica_count,
+        target_configuration=boundary.configuration,
+        profile_seed=boundary.profile_seed,
+        allow_runtime_profile_refresh=refresh_runtime_profiles,
+    )
 
 
 def _validate_reconciled_profiles(
     execute: Executor, *, boundary: HybridProfileBoundary
 ) -> None:
     runtime, controller = _deployed_profile_documents(execute)
-    if runtime != _load_json_mapping(boundary.runtime_profiles):
-        raise RuntimeError("reconciled runtime profile does not match Phase target")
-    if controller != _load_json_mapping(boundary.controller_inputs):
-        raise RuntimeError("reconciled controller input does not match Phase target")
+    if runtime != _boundary_runtime_document(boundary):
+        raise RuntimeError("reconciled runtime profile does not match target")
+    if controller != _boundary_controller_document(boundary):
+        raise RuntimeError("reconciled controller input does not match target")
 
 
 def _statefulset_template_snapshot(
@@ -891,23 +1205,59 @@ def _apply_reconciled_boundary(
     expected_templates: tuple[StatefulSetPodTemplateSnapshot, ...] | None = None,
     existing_statefulsets: Mapping[str, object] | None = None,
     processor_memory_profile: ProcessorMemoryProfile | None = None,
+    apply_resources: bool = True,
 ) -> None:
     deploy_root = ROOT / "deploy"
     with tempfile.TemporaryDirectory(
         prefix=".ibg-hybrid-phase5-", dir=deploy_root
     ) as directory:
-        kustomization = Path(directory) / "kustomization.yaml"
+        temporary_root = Path(directory)
+        kustomization = temporary_root / "kustomization.yaml"
         replica_lines = "\n".join(
             f"  - name: hybrid-stage-{stage}\n    count: {replica_count}"
             for stage in range(1, 4)
         )
+        dynamic_config_maps = ""
+        if boundary.runtime_document is not None:
+            (temporary_root / "runtime-profiles.json").write_text(
+                json.dumps(
+                    _boundary_runtime_document(boundary),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            (temporary_root / "controller-inputs.json").write_text(
+                json.dumps(
+                    _boundary_controller_document(boundary),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            dynamic_config_maps = (
+                "configMapGenerator:\n"
+                "  - name: ibg-hybrid-runtime-profiles\n"
+                "    namespace: ibg-hybrid-testbed\n"
+                "    behavior: replace\n"
+                "    files:\n"
+                "      - runtime-profiles.json\n"
+                "  - name: ibg-hybrid-planning-links\n"
+                "    namespace: ibg-hybrid-testbed\n"
+                "    behavior: replace\n"
+                "    files:\n"
+                "      - controller-inputs.json\n"
+                "generatorOptions:\n"
+                "  disableNameSuffixHash: true\n"
+            )
         kustomization.write_text(
             "apiVersion: kustomize.config.k8s.io/v1beta1\n"
             "kind: Kustomization\n"
             "resources:\n"
             f"  - ../{(deployment_overlay or boundary.overlay).relative_to(deploy_root)}\n"
             "replicas:\n"
-            f"{replica_lines}\n",
+            f"{replica_lines}\n"
+            f"{dynamic_config_maps}",
             encoding="utf-8",
         )
         dry_run = _json_output(
@@ -938,7 +1288,8 @@ def _apply_reconciled_boundary(
                 "refusing ConfigMap reconciliation that changes a StatefulSet "
                 "Pod template"
             )
-        execute(_kubectl("apply", "-k", str(Path(directory))), False)
+        if apply_resources:
+            execute(_kubectl("apply", "-k", str(Path(directory))), False)
 
 
 def _wait_for_target(execute: Executor, *, replica_count: int) -> None:
@@ -960,6 +1311,29 @@ def _wait_for_target(execute: Executor, *, replica_count: int) -> None:
             "Hybrid StatefulSets did not retain the requested rollout target"
         )
     _validate_serving_pods(_pod_inventory(execute), replica_count=replica_count)
+
+
+def _wait_for_removed_ordinals(
+    execute: Executor, *, removed_ordinals: tuple[int, ...]
+) -> None:
+    if not removed_ordinals:
+        return
+    resources = tuple(
+        f"pod/hybrid-stage-{stage}-{ordinal}"
+        for stage in range(1, 4)
+        for ordinal in removed_ordinals
+    )
+    execute(
+        _kubectl(
+            "wait",
+            "-n",
+            HYBRID_NAMESPACE,
+            "--for=delete",
+            *resources,
+            "--timeout=180s",
+        ),
+        False,
+    )
 
 
 def _phase75_controller_arguments(
@@ -1037,8 +1411,10 @@ def _apply_controller_job(
     controller_job: Path,
     controller_job_name: str,
     arguments: tuple[str, ...] | None,
+    environment: Mapping[str, str] | None = None,
+    remove_active_deadline: bool = False,
 ) -> None:
-    if arguments is None:
+    if arguments is None and environment is None and not remove_active_deadline:
         execute(_kubectl("apply", "-f", str(controller_job)), False)
         return
     document = _json_output(
@@ -1073,7 +1449,29 @@ def _apply_controller_job(
         or containers[0].get("name") != "controller"
     ):
         raise RuntimeError("Phase 7.5 Job must contain one controller container")
-    containers[0]["args"] = list(arguments)
+    if arguments is not None:
+        containers[0]["args"] = list(arguments)
+    if environment is not None:
+        env = containers[0].setdefault("env", [])
+        if not isinstance(env, list) or any(not isinstance(item, dict) for item in env):
+            raise RuntimeError("Hybrid controller Job environment is invalid")
+        by_name = {
+            item.get("name"): item
+            for item in env
+            if isinstance(item.get("name"), str)
+        }
+        for name, value in environment.items():
+            if not isinstance(name, str) or not name or not isinstance(value, str):
+                raise RuntimeError("Hybrid controller environment override is invalid")
+            item = by_name.get(name)
+            if item is None:
+                item = {"name": name}
+                env.append(item)
+                by_name[name] = item
+            item.clear()
+            item.update({"name": name, "value": value})
+    if remove_active_deadline:
+        spec.pop("activeDeadlineSeconds", None)
     with tempfile.TemporaryDirectory(
         prefix=".ibg-hybrid-phase75-job-", dir=ROOT / "deploy"
     ) as directory:
@@ -1083,6 +1481,74 @@ def _apply_controller_job(
             encoding="utf-8",
         )
         execute(_kubectl("apply", "-f", str(manifest)), False)
+
+
+def _project_controller_log_output(
+    output: str,
+    *,
+    emit: Callable[[str], None],
+) -> str:
+    """Show human lines and retain full machine evidence without displaying it."""
+
+    evidence = []
+    for line in output.splitlines():
+        if line.startswith(HYBRID_SLOT_EVIDENCE_PREFIX):
+            payload = line.removeprefix(HYBRID_SLOT_EVIDENCE_PREFIX)
+        elif line.startswith("{"):
+            # Backward-compatible ingestion for older controller images. Raw
+            # evidence remains hidden from the human-facing console.
+            payload = line
+        else:
+            emit(line)
+            continue
+        document = json.loads(payload)
+        if not isinstance(document, dict):
+            raise RuntimeError("Hybrid controller evidence line is not an object")
+        evidence.append(
+            json.dumps(document, sort_keys=True, separators=(",", ":"))
+        )
+    return "" if not evidence else "\n".join(evidence) + "\n"
+
+
+def _stream_controller_job_logs(controller_job_name: str) -> str:
+    """Stream completed-slot presentation while privately collecting evidence."""
+
+    command = _kubectl(
+        "logs",
+        "-n",
+        HYBRID_NAMESPACE,
+        f"job/{controller_job_name}",
+        "--container=controller",
+        "--follow",
+        "--pod-running-timeout=180s",
+    )
+    process = subprocess.Popen(
+        command,
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=1,
+    )
+    if process.stdout is None or process.stderr is None:
+        process.kill()
+        raise RuntimeError("unable to capture Hybrid controller logs")
+    evidence = []
+    for raw_line in process.stdout:
+        projected = _project_controller_log_output(
+            raw_line,
+            emit=lambda line: print(line, flush=True),
+        )
+        if projected:
+            evidence.extend(projected.splitlines())
+    stderr = process.stderr.read()
+    return_code = process.wait()
+    if return_code != 0:
+        raise RuntimeError(
+            "Hybrid controller log stream failed"
+            + (f": {stderr.strip()}" if stderr.strip() else "")
+        )
+    return "" if not evidence else "\n".join(evidence) + "\n"
 
 
 def run_small(
@@ -1098,8 +1564,33 @@ def run_small(
     before_controller_job: RunHook | None = None,
     controller_job_started: RunHook | None = None,
     after_controller_job: RunHook | None = None,
+    stream_controller_logs: ControllerLogStreamer | None = None,
+    production_experiment: bool = False,
+    max_iterations: int | None = None,
+    profile_seed: int | None = None,
+    refresh_runtime_profiles: bool = False,
     execute: Executor = _execute,
 ) -> str:
+    if production_experiment:
+        if (
+            isinstance(max_iterations, bool)
+            or not isinstance(max_iterations, int)
+            or max_iterations < 1
+        ):
+            raise RuntimeError("--max-iterations must be a positive integer")
+    elif max_iterations is not None:
+        raise RuntimeError("max iterations belong to the production run command")
+    if not production_experiment and (
+        profile_seed is not None or refresh_runtime_profiles
+    ):
+        raise RuntimeError(
+            "seeded runtime profiles belong to the production run command"
+        )
+    if refresh_runtime_profiles and not skip_build:
+        raise RuntimeError(
+            "--refresh-runtime-profiles requires --skip-build so only affected "
+            "runtime Pods are replaced"
+        )
     controller_arguments = _phase75_controller_arguments(
         controller_policy,
         mc_workers,
@@ -1108,6 +1599,7 @@ def run_small(
         requested_replicas,
         requested_flows=requested_flows,
         requested_stages=requested_stages,
+        profile_seed=profile_seed,
     )
     configuration = boundary.configuration
     resource_profile = None
@@ -1115,23 +1607,8 @@ def run_small(
     controller_job = boundary.controller_job
     controller_job_name = boundary.controller_job_name
     replaced_job_names = boundary.replaced_job_names
-    phase8_gate1 = boundary == PHASE8_GATE1_PROFILE_BOUNDARY
-    if phase8_gate1:
-        if not skip_build:
-            raise RuntimeError(
-                "Phase 8 Gate 1 requires --skip-build to preserve every "
-                "serving process"
-            )
-        if controller_policy == "mc" or mc_workers is not None:
-            raise RuntimeError(
-                "Phase 8 Gate 1 is deterministic-lookahead only; MC at 4x3x2 "
-                "requires separate approval"
-            )
-        controller_job = PHASE8_GATE1_CONTROLLER_JOB
-        controller_job_name = PHASE8_GATE1_CONTROLLER_JOB_NAME
-        replaced_job_names = boundary.replaced_job_names
     if processor_memory_profile is not None:
-        if boundary != PHASE6_PROFILE_BOUNDARY or not skip_build:
+        if configuration != PHASE6_PROFILE_BOUNDARY.configuration or not skip_build:
             raise RuntimeError(
                 "Phase 7 resource evidence requires the approved 3x3x2 "
                 "topology with --skip-build"
@@ -1149,50 +1626,85 @@ def run_small(
             controller_job_name,
         )
     if controller_arguments is not None:
-        if phase8_gate1:
-            if controller_arguments != ("--policy", "lookahead"):
-                raise RuntimeError(
-                    "Phase 8 Gate 1 accepts only explicit --policy lookahead"
-                )
-        elif (
-            boundary != PHASE6_PROFILE_BOUNDARY
+        if controller_policy == "mc" and (
+            configuration != PHASE6_PROFILE_BOUNDARY.configuration
             or not skip_build
             or resource_profile is None
             or resource_profile.name != "candidate"
         ):
             raise RuntimeError(
-                "Phase 7.5 controller policy selection requires --skip-build, "
+                "manual Kubernetes MC remains limited to --skip-build, "
                 "the approved 3x3x2 topology, and the accepted candidate "
                 "processor memory profile"
             )
-        deployment_overlay = PHASE75_OVERLAY
-        controller_job = PHASE75_CONTROLLER_JOB
-        controller_job_name = PHASE75_CONTROLLER_JOB_NAME
-        replaced_job_names = (
-            *PHASE6_PROFILE_BOUNDARY.replaced_job_names,
-            "ibg-hybrid-controller-phase7",
-            PHASE75_CONTROLLER_JOB_NAME,
-        )
+        if controller_policy == "mc":
+            deployment_overlay = PHASE75_OVERLAY
+            controller_job = PHASE75_CONTROLLER_JOB
+            controller_job_name = PHASE75_CONTROLLER_JOB_NAME
+            replaced_job_names = (
+                *PHASE6_PROFILE_BOUNDARY.replaced_job_names,
+                "ibg-hybrid-controller-phase7",
+                PHASE75_CONTROLLER_JOB_NAME,
+                DYNAMIC_CONTROLLER_JOB_NAME,
+            )
     replica_unit = "replica" if configuration.num_replicas == 1 else "replicas"
     print(
         "Selected Hybrid topology: "
         f"{configuration.num_flows} flows x {configuration.num_stages} stages "
         f"x {configuration.num_replicas} {replica_unit} per stage"
     )
+    if profile_seed is not None:
+        counts = seeded_profile_state_counts(
+            replica_count=configuration.num_replicas,
+            profile_seed=profile_seed,
+        )
+        state_names = {4: "Very Good", 3: "Good", 2: "Bad", 1: "Very Bad"}
+        stage_counts = "; ".join(
+            f"stage{stage}("
+            + ", ".join(
+                f"{state_names[state]}={counts[stage][state]}"
+                for state in HYBRID_PROFILE_STATE_ORDER
+            )
+            + ")"
+            for stage in range(1, 4)
+        )
+        print(
+            "Hybrid runtime profile allocation: "
+            f"version={HYBRID_PROFILE_STATE_ALLOCATION_VERSION}, "
+            f"profile-seed={profile_seed}, per-stage={stage_counts}"
+        )
+    if skip_build:
+        print(
+            "Hybrid image mode: --skip-build; reuse validated node-local images"
+        )
+    else:
+        print(
+            "Hybrid image mode: build offline from validated local wheelhouses"
+        )
+        # Validate both image inputs before even inspecting/creating a cluster.
+        # A normal run must never build one image and discover later that the
+        # other image cannot be reproduced offline.
+        _validate_offline_wheelhouses()
+    plan_bounded_rollout(
+        existing_count=requested_replicas,
+        requested_count=requested_replicas,
+        batch_size=rollout_batch_size,
+    )
     cluster_exists = CLUSTER_NAME in _kind_clusters(execute)
+    if refresh_runtime_profiles and not cluster_exists:
+        raise RuntimeError(
+            "--refresh-runtime-profiles requires an existing validated Hybrid cluster"
+        )
     if skip_build and not cluster_exists:
         raise RuntimeError(
             "--skip-build requires the existing persistent ibg-hybrid cluster"
-        )
-    if boundary in (PHASE6_PROFILE_BOUNDARY, PHASE8_GATE1_PROFILE_BOUNDARY) and not skip_build:
-        raise RuntimeError(
-            "profile reconciliation requires --skip-build to preserve "
-            "existing serving processes"
         )
     existing_count = None
     existing_templates = None
     existing_statefulsets = None
     deliberate_resource_rollout = False
+    rollout = None
+    profile_transition = None
     if cluster_exists:
         preflight(execute=execute)
         statefulsets = _statefulset_inventory(execute)
@@ -1204,17 +1716,32 @@ def run_small(
             deliberate_resource_rollout = (
                 detect_resource_profile(statefulsets) != resource_profile
             )
-        plan_bounded_rollout(
+        rollout = plan_bounded_rollout(
             existing_count=existing_count,
             requested_count=requested_replicas,
             batch_size=rollout_batch_size,
         )
-        if boundary in (PHASE6_PROFILE_BOUNDARY, PHASE8_GATE1_PROFILE_BOUNDARY):
-            _validate_live_profile_expansion(
+        profile_transition = _validate_live_profile_expansion(
+            execute,
+            existing_replica_count=existing_count,
+            boundary=boundary,
+            refresh_runtime_profiles=refresh_runtime_profiles,
+        )
+        if configuration.num_flows > 4 or configuration.num_replicas > 2:
+            resource_preflight = _validate_node_resource_capacity(
                 execute,
                 existing_replica_count=existing_count,
-                boundary=boundary,
+                requested_replica_count=requested_replicas,
             )
+            print(
+                "Hybrid resource preflight: "
+                f"cpu={resource_preflight.requested_cpu_milli}m/"
+                f"{resource_preflight.allocatable_cpu_milli}m, memory="
+                f"{resource_preflight.requested_memory_bytes}/"
+                f"{resource_preflight.allocatable_memory_bytes} bytes, "
+                f"new-stage-pods={resource_preflight.added_stage_pods}"
+            )
+
     else:
         _require_local_image(execute, KIND_NODE_IMAGE)
         execute(
@@ -1234,6 +1761,45 @@ def run_small(
             False,
         )
         preflight(execute=execute)
+        if configuration.num_flows > 4 or configuration.num_replicas > 2:
+            resource_preflight = _validate_node_resource_capacity(
+                execute,
+                existing_replica_count=0,
+                requested_replica_count=requested_replicas,
+            )
+            print(
+                "Hybrid resource preflight: "
+                f"cpu={resource_preflight.requested_cpu_milli}m/"
+                f"{resource_preflight.allocatable_cpu_milli}m, memory="
+                f"{resource_preflight.requested_memory_bytes}/"
+                f"{resource_preflight.allocatable_memory_bytes} bytes, "
+                f"new-stage-pods={resource_preflight.added_stage_pods}"
+            )
+
+    scale_down = (
+        existing_count is not None and requested_replicas < existing_count
+    )
+    profile_refresh = bool(
+        profile_transition is not None
+        and profile_transition.profile_refresh_required
+    )
+    if refresh_runtime_profiles and not profile_refresh:
+        raise RuntimeError(
+            "--refresh-runtime-profiles was supplied but the deployed profile "
+            "already uses the requested allocation"
+        )
+    if profile_refresh and (
+        existing_count != requested_replicas or deliberate_resource_rollout
+    ):
+        raise RuntimeError(
+            "runtime-profile refresh requires an unchanged replica count and "
+            "cannot be combined with a resource-template rollout"
+        )
+    if scale_down and deliberate_resource_rollout:
+        raise RuntimeError(
+            "intentional replica scale-down cannot be combined with a processor "
+            "resource-template rollout"
+        )
 
     before_processes = None
     if skip_build:
@@ -1242,7 +1808,7 @@ def run_small(
             _pod_inventory(execute), replica_count=existing_count
         )
     else:
-        _build_images_offline(execute)
+        _build_images_offline(execute, wheelhouses_validated=True)
         execute(
             (
                 "kind",
@@ -1267,6 +1833,20 @@ def run_small(
             processor_memory_profile=resource_profile,
         )
         existing_count = initial_count
+    elif scale_down:
+        # Validate the exact lower projection and unchanged Pod templates, but
+        # keep the complete deployed ConfigMaps until the high-ordinal Pods are
+        # gone.  Applying the reduced profiles first would create a restart race.
+        _apply_reconciled_boundary(
+            execute,
+            replica_count=requested_replicas,
+            boundary=boundary,
+            deployment_overlay=deployment_overlay,
+            expected_templates=existing_templates,
+            existing_statefulsets=existing_statefulsets,
+            processor_memory_profile=resource_profile,
+            apply_resources=False,
+        )
     else:
         _apply_reconciled_boundary(
             execute,
@@ -1278,7 +1858,34 @@ def run_small(
             processor_memory_profile=resource_profile,
         )
 
-    _validate_reconciled_profiles(execute, boundary=boundary)
+    if not scale_down:
+        _validate_reconciled_profiles(execute, boundary=boundary)
+
+    refreshed_processes = None
+    if profile_refresh:
+        changed_identities = profile_transition.changed_runtime_identities
+        print(
+            "Hybrid runtime profile refresh: affected serving Pods="
+            + (
+                ", ".join(_runtime_profile_refresh_pod_names(changed_identities))
+                if changed_identities
+                else "none"
+            )
+        )
+        _refresh_runtime_profile_pods(
+            execute,
+            changed_identities=changed_identities,
+            replica_count=requested_replicas,
+        )
+        refreshed_processes = _serving_process_snapshot(
+            _pod_inventory(execute), replica_count=requested_replicas
+        )
+        if before_processes is not None:
+            _validate_runtime_profile_refresh_processes(
+                before_processes,
+                refreshed_processes,
+                changed_identities=changed_identities,
+            )
 
     if not skip_build:
         execute(
@@ -1294,11 +1901,12 @@ def run_small(
         )
     _wait_for_target(execute, replica_count=existing_count)
 
-    rollout = plan_bounded_rollout(
-        existing_count=existing_count,
-        requested_count=requested_replicas,
-        batch_size=rollout_batch_size,
-    )
+    if rollout is None:
+        rollout = plan_bounded_rollout(
+            existing_count=existing_count,
+            requested_count=requested_replicas,
+            batch_size=rollout_batch_size,
+        )
     for batch in rollout.batches:
         execute(
             _kubectl(
@@ -1310,10 +1918,36 @@ def run_small(
             ),
             False,
         )
+        _wait_for_removed_ordinals(
+            execute, removed_ordinals=batch.removed_ordinals
+        )
         _wait_for_target(execute, replica_count=batch.target_count)
 
+    if scale_down:
+        scaled_processes = _serving_process_snapshot(
+            _pod_inventory(execute), replica_count=requested_replicas
+        )
+        if before_processes is not None:
+            _validate_scale_down_process_preservation(
+                before_processes,
+                scaled_processes,
+                existing_count=existing_count,
+                requested_count=requested_replicas,
+            )
+        _apply_reconciled_boundary(
+            execute,
+            replica_count=requested_replicas,
+            boundary=boundary,
+            deployment_overlay=deployment_overlay,
+            expected_templates=existing_templates,
+            existing_statefulsets=existing_statefulsets,
+            processor_memory_profile=resource_profile,
+        )
+        _validate_reconciled_profiles(execute, boundary=boundary)
+        _wait_for_target(execute, replica_count=requested_replicas)
+
     preflight(execute=execute)
-    if controller_arguments is not None or phase8_gate1:
+    if boundary.runtime_document is not None or controller_arguments is not None:
         _reconcile_phase75_controller_sources(execute)
     if before_controller_job is not None:
         before_controller_job()
@@ -1334,9 +1968,25 @@ def run_small(
         controller_job=controller_job,
         controller_job_name=controller_job_name,
         arguments=controller_arguments,
+        environment=(
+            {
+                "HYBRID_CONTROLLER_LIFECYCLE": "experiment",
+                "MAX_ITERATIONS": str(max_iterations),
+            }
+            if production_experiment
+            else None
+        ),
+        # The positive iteration bound makes the production Job finite.  Do
+        # not let a historical 600-second gate deadline truncate that bound.
+        remove_active_deadline=production_experiment,
     )
     if controller_job_started is not None:
         controller_job_started()
+    output = None
+    if stream_controller_logs is not None:
+        output = stream_controller_logs(controller_job_name)
+    elif execute is _execute:
+        output = _stream_controller_job_logs(controller_job_name)
     execute(
         _kubectl(
             "wait",
@@ -1350,27 +2000,91 @@ def run_small(
     )
     if after_controller_job is not None:
         after_controller_job()
-    output = execute(
-        _kubectl(
-            "logs",
-            "-n",
-            HYBRID_NAMESPACE,
-            f"job/{controller_job_name}",
-        ),
-        True,
-    )
+    if output is None:
+        output = _project_controller_log_output(
+            execute(
+                _kubectl(
+                    "logs",
+                    "-n",
+                    HYBRID_NAMESPACE,
+                    f"job/{controller_job_name}",
+                ),
+                True,
+            ),
+            emit=lambda line: print(line, flush=True),
+        )
     if before_processes is not None:
         after_processes = _serving_process_snapshot(
             _pod_inventory(execute), replica_count=requested_replicas
         )
-        if deliberate_resource_rollout:
+        if scale_down:
+            _validate_scale_down_process_preservation(
+                before_processes,
+                after_processes,
+                existing_count=existing_count,
+                requested_count=requested_replicas,
+            )
+        elif profile_refresh:
+            _validate_runtime_profile_refresh_processes(
+                before_processes,
+                after_processes,
+                changed_identities=profile_transition.changed_runtime_identities,
+            )
+        elif deliberate_resource_rollout:
             _validate_deliberate_processor_rollout(
                 before_processes, after_processes
             )
         else:
             _validate_process_preservation(before_processes, after_processes)
-    print(output, end="" if output.endswith("\n") else "\n")
     return output
+
+
+def run_experiment(
+    *,
+    skip_build: bool = False,
+    requested_flows: int,
+    requested_stages: int,
+    requested_replicas: int,
+    rollout_batch_size: int = 1,
+    max_iterations: int,
+    profile_seed: int | None = None,
+    refresh_runtime_profiles: bool = False,
+    processor_memory_profile: str | None = None,
+    controller_policy: str | None = None,
+    mc_workers: int | None = None,
+    before_controller_job: RunHook | None = None,
+    controller_job_started: RunHook | None = None,
+    after_controller_job: RunHook | None = None,
+    stream_controller_logs: ControllerLogStreamer | None = None,
+    execute: Executor = _execute,
+) -> str:
+    """Run the normal equilibrium-aware lifecycle through the shared launcher."""
+
+    if (
+        isinstance(max_iterations, bool)
+        or not isinstance(max_iterations, int)
+        or max_iterations < 1
+    ):
+        raise RuntimeError("--max-iterations must be a positive integer")
+    return run_small(
+        skip_build=skip_build,
+        requested_flows=requested_flows,
+        requested_stages=requested_stages,
+        requested_replicas=requested_replicas,
+        rollout_batch_size=rollout_batch_size,
+        processor_memory_profile=processor_memory_profile,
+        controller_policy=controller_policy,
+        mc_workers=mc_workers,
+        before_controller_job=before_controller_job,
+        controller_job_started=controller_job_started,
+        after_controller_job=after_controller_job,
+        stream_controller_logs=stream_controller_logs,
+        production_experiment=True,
+        max_iterations=max_iterations,
+        profile_seed=profile_seed,
+        refresh_runtime_profiles=refresh_runtime_profiles,
+        execute=execute,
+    )
 
 
 def cleanup(*, execute: Executor = _execute) -> None:
@@ -1385,6 +2099,114 @@ def _positive_integer(value: str) -> int:
     return parsed
 
 
+def _nonnegative_integer(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be a nonnegative integer")
+    return parsed
+
+
+def _add_run_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    production: bool,
+) -> None:
+    parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help=(
+            "reuse matching node-local Hybrid images without building, "
+            "loading, or restarting serving workloads"
+        ),
+    )
+    parser.add_argument(
+        "--flow",
+        "--flows",
+        dest="requested_flows",
+        type=_positive_integer,
+        required=production,
+        default=None,
+        help=(
+            "positive logical-flow count"
+            if production
+            else "positive logical-flow count; omitted only for the historical "
+            "one- or two-replica defaults"
+        ),
+    )
+    parser.add_argument(
+        "--stage",
+        "--stages",
+        dest="requested_stages",
+        type=_positive_integer,
+        required=production,
+        default=None,
+        help="stage count; the frozen Hybrid model requires exactly three",
+    )
+    parser.add_argument(
+        "--replica",
+        "--replicas",
+        dest="requested_replicas",
+        type=_positive_integer,
+        required=production,
+        default=None if production else 1,
+        help="explicit final replica count for each of the three stages",
+    )
+    parser.add_argument(
+        "--rollout-batch-size",
+        type=_positive_integer,
+        default=1,
+        help="maximum missing ordinals added to every stage per Ready gate",
+    )
+    parser.add_argument(
+        "--processor-memory-profile",
+        choices=tuple(PROCESSOR_MEMORY_PROFILES),
+        default=None,
+        help=(
+            "historical Phase 7 resource profile; ordinary production "
+            "lookahead uses the currently reconciled resource boundary"
+        ),
+    )
+    parser.add_argument(
+        "--policy",
+        choices=("lookahead", "mc"),
+        default=None,
+        help=(
+            "select the controller policy; omission retains deterministic "
+            "lookahead and MC remains explicitly restricted"
+        ),
+    )
+    parser.add_argument(
+        "--mc-workers",
+        type=int,
+        default=None,
+        help="explicit bounded controller workers for --policy mc",
+    )
+    if production:
+        parser.add_argument(
+            "--profile-seed",
+            type=_nonnegative_integer,
+            required=True,
+            help=(
+                "nonnegative seed used only for balanced hidden-state profile "
+                "allocation"
+            ),
+        )
+        parser.add_argument(
+            "--refresh-runtime-profiles",
+            action="store_true",
+            help=(
+                "explicitly confirm controlled replacement of Pods whose true "
+                "runtime state changes"
+            ),
+        )
+        parser.add_argument(
+            "--max-iterations",
+            type=_positive_integer,
+            required=True,
+            help="positive slot limit when equilibrium is not reached earlier",
+        )
+
+
 def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -1393,77 +2215,16 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
         )
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
-    run_parser = subparsers.add_parser("run-small")
-    run_parser.add_argument(
-        "--skip-build",
-        action="store_true",
-        help=(
-            "reuse matching node-local Hybrid images without building, "
-            "loading, or restarting serving workloads"
-        ),
+    production_parser = subparsers.add_parser(
+        "run",
+        help="run sequential slots until equilibrium or the explicit limit",
     )
-    run_parser.add_argument(
-        "--flow",
-        "--flows",
-        dest="requested_flows",
-        type=_positive_integer,
-        default=None,
-        help=(
-            "logical flows in the approved topology; inferred from --replica "
-            "when omitted"
-        ),
+    _add_run_arguments(production_parser, production=True)
+    validation_parser = subparsers.add_parser(
+        "run-small",
+        help="run the historical bounded infrastructure validation gate",
     )
-    run_parser.add_argument(
-        "--stage",
-        "--stages",
-        dest="requested_stages",
-        type=_positive_integer,
-        default=None,
-        help=(
-            "stages in the approved topology; currently must be exactly three"
-        ),
-    )
-    run_parser.add_argument(
-        "--replica",
-        "--replicas",
-        dest="requested_replicas",
-        type=_positive_integer,
-        default=1,
-        help="explicit final replica count for each of the three stages",
-    )
-    run_parser.add_argument(
-        "--rollout-batch-size",
-        type=int,
-        default=1,
-        help="maximum missing ordinals added to every stage per Ready gate",
-    )
-    run_parser.add_argument(
-        "--processor-memory-profile",
-        choices=tuple(PROCESSOR_MEMORY_PROFILES),
-        default=None,
-        help=(
-            "Phase 7 only: run the baseline or processor-only candidate "
-            "resource gate at the approved 3x3x2 topology"
-        ),
-    )
-    run_parser.add_argument(
-        "--policy",
-        choices=("lookahead", "mc"),
-        default=None,
-        help=(
-            "Phase 7.5 only: select the finite controller policy; omission "
-            "retains deterministic lookahead"
-        ),
-    )
-    run_parser.add_argument(
-        "--mc-workers",
-        type=int,
-        default=None,
-        help=(
-            "Phase 7.5 only: explicit bounded controller workers for "
-            "--policy mc"
-        ),
-    )
+    _add_run_arguments(validation_parser, production=False)
     subparsers.add_parser("preflight")
     subparsers.add_parser("cleanup")
     return parser.parse_args(arguments)
@@ -1472,7 +2233,21 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
 def main(arguments: Sequence[str] | None = None) -> int:
     args = parse_args(arguments)
     try:
-        if args.action == "run-small":
+        if args.action == "run":
+            run_experiment(
+                skip_build=args.skip_build,
+                requested_flows=args.requested_flows,
+                requested_stages=args.requested_stages,
+                requested_replicas=args.requested_replicas,
+                rollout_batch_size=args.rollout_batch_size,
+                max_iterations=args.max_iterations,
+                profile_seed=args.profile_seed,
+                refresh_runtime_profiles=args.refresh_runtime_profiles,
+                processor_memory_profile=args.processor_memory_profile,
+                controller_policy=args.policy,
+                mc_workers=args.mc_workers,
+            )
+        elif args.action == "run-small":
             run_small(
                 skip_build=args.skip_build,
                 requested_flows=args.requested_flows,

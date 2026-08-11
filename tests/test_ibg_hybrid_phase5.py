@@ -604,7 +604,9 @@ def test_missing_selected_pair_outcome_fails_explicitly():
         run_hybrid_slot(slot_input)
 
 
-def test_compact_output_is_one_line_and_slot_has_no_file_side_effects(tmp_path):
+def test_completed_slot_output_is_human_readable_and_has_no_file_side_effects(
+    tmp_path,
+):
     slot_input = make_input(flows=1)
     before = set(tmp_path.iterdir())
     output = io.StringIO()
@@ -617,8 +619,57 @@ def test_compact_output_is_one_line_and_slot_has_no_file_side_effects(tmp_path):
         os.chdir(previous)
 
     assert output.getvalue() == format_hybrid_slot_metrics(result) + "\n"
-    assert len(output.getvalue().splitlines()) == 1
+    rendered = output.getvalue()
+    assert rendered.startswith(
+        "Iteration 1 (slot 1)\n  Outcome mode: physical-only-v1\n"
+    )
+    assert "  Latency:" not in rendered
+    assert "processing=" not in rendered
+    assert "raw-e2e=" not in rendered
+    assert "  Predicted utility:\n    total=" in rendered
+    assert "  Realized utility:\n    total=" in rendered
+    assert "  Physical utility:\n    total=" in rendered
+    assert "  Raw end-to-end utility:\n    total=" in rendered
+    assert "SLA violations=" in rendered
+    assert "fairness=" in rendered and "time=" in rendered
+    assert "equilibrium=" in rendered
+    for forbidden in (
+        "Flow order",
+        "Placements",
+        "Observations",
+        "learning signal",
+        "belief",
+        "CSV",
+    ):
+        assert forbidden.lower() not in rendered.lower()
     assert set(tmp_path.iterdir()) == before
+
+
+def test_completed_slot_output_uses_requested_iteration_and_actual_metrics():
+    result = run_hybrid_slot(make_input(flows=3))
+    rendered = format_hybrid_slot_metrics(result, iteration=7)
+    metrics = result.metrics
+    predicted = dict(metrics.aggregate_expected_utility_per_flow)
+    processing = dict(metrics.physical_processing_latency_ms_per_flow)
+    pair = dict(metrics.measured_pair_latency_ms_per_flow)
+    raw = dict(metrics.raw_end_to_end_latency_ms_per_flow)
+    latency_snapshot = (processing.copy(), pair.copy(), raw.copy())
+
+    assert rendered.splitlines()[0] == "Iteration 7 (slot 1)"
+    for flow_id in (1, 2, 3):
+        assert f"f{flow_id}={predicted[flow_id]:.6f}" in rendered
+    assert "Latency:" not in rendered
+    assert "processing=" not in rendered
+    assert "pair=" not in rendered
+    assert "raw-e2e=" not in rendered
+    assert latency_snapshot == (
+        dict(metrics.physical_processing_latency_ms_per_flow),
+        dict(metrics.measured_pair_latency_ms_per_flow),
+        dict(metrics.raw_end_to_end_latency_ms_per_flow),
+    )
+    assert f"total={metrics.aggregate_expected_utility:.6f}" in rendered
+    assert f"fairness={metrics.jain_fairness:.6f}" in rendered
+    assert f"time={metrics.elapsed_seconds:.3f}s" in rendered
 
 
 def test_importing_phase5_is_silent_and_does_not_run_a_slot(tmp_path):

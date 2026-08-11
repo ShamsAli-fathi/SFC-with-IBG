@@ -1824,3 +1824,212 @@ Accepted: 2026-08-09.
   present headroom supports considering a `5x3x2` lookahead-only flow step,
   while MC at `4x3x2` remains an independent alternative requiring its own
   controller measurement. Neither path is automatically approved by Gate 1.
+
+## Hybrid dynamic-topology correction decisions
+
+Accepted: 2026-08-09.
+
+- Treat the `2x3x1`, `3x3x2`, and `4x3x2` tuple whitelist as historical
+  incremental-gate evidence only. The final Hybrid launcher accepts any
+  positive flow and replica counts, fixes stages at exactly three, resolves
+  dimensions before cluster contact, and continues to reject implicit shrink.
+  `--skip-build` means image reuse, not topology selection.
+- Accept `ibg-hybrid-kernel-dynamic-topology-v1` as the generation rule.
+  Preserve canonical profiles exactly; cycle same-stage canonical hidden-state
+  templates only for missing ordinals; derive new observation seeds solely
+  from stage/replica identity using the reserved Cantor-pair rule. Do not add a
+  general seed flag, beliefs, or hidden state to controller inputs.
+- Set each replica's admission capacity to
+  `ceil(num_flows / num_replicas)`. This guarantees enough aggregate capacity
+  in every stage for all flows. Capacity changes are legal only when this
+  formula changes; arbitrary deployed admission drift remains an error.
+- Require all three increasing stage pairs and the complete `R x R` replica
+  cross-product. Preserve accepted links exactly and assign new pairs their
+  canonical stage-pair value. Planning links remain pre-placement metadata and
+  measured pairs remain post-traffic telemetry.
+- Require deployed documents to match the deterministic rule before mutation,
+  proposed documents to match the exact generated target, and every old
+  runtime/link entry to remain unchanged. Reconcile fixed-name ConfigMaps only
+  after a server-side dry run proves no StatefulSet Pod-template mutation.
+- Reuse the Phase 5 equal-stage bounded rollout and exact Ready checks. At the
+  accepted `10x3x5` gate, targets were four then five and only ordinals 2--4
+  were created. The controller Job remains forbidden before final complete
+  Ready coverage.
+- Accept the live two-slot lookahead gate and its unchanged rerun as the first
+  proof of the corrected interface. Each slot produced twenty observations and
+  ten measured pairs after ten complete placements; route, learning, belief,
+  provenance, jitter/link, admission, final-load, and parity checks passed.
+- Retain all Phase 7/7.5 resource declarations. The resource preflight fit the
+  one-node allocatable envelope, sampled serving peaks remained below limits,
+  the controller retained 584 seconds of deadline margin, and no memory event,
+  serving restart, OOM/eviction, post-Ready probe failure, or node pressure
+  occurred. Do not add a node or retune resources automatically.
+- Recognize a correctly labelled completed dynamic controller Pod as
+  Hybrid-owned during reuse preflight. It is finite rollout state, not a
+  foreign workload; delete/recreate only its Job after isolation validation.
+- Keep MC manual-only. This correction does not authorize MC at `10x3x5`, an
+  automatic policy switch, scale-down, new stages, resource changes, or edits
+  to the frozen Exact/MILP trees.
+
+## Hybrid completed-slot console decisions
+
+Accepted: 2026-08-09.
+
+- Use one Hybrid-owned formatter for pure lookahead, pure MC, Kernel
+  lookahead, and manual Kernel MC. Formatting begins only from a completed
+  immutable `HybridSlotResult` and may not affect solver, traffic, learning,
+  metrics, equilibrium, or storage.
+- Print one structured human block immediately after each validated slot and
+  before the next slot begins. Include only iteration/slot, active outcome
+  mode, per-flow latency, predicted/realized/physical/raw utility, SLA count,
+  fairness, execution time, and equilibrium.
+- Do not display flow order, placements, observations, learning signals,
+  beliefs or belief changes, detailed machine evidence, or CSV-writing text in
+  the experiment console.
+- Treat `aggregate_expected_utility_per_flow` as the already-summed result of
+  the selected stage components. Do not reconstruct it from placement details
+  or add presentation data to the solver contract.
+- Keep `physical-only-v1` as the active Hybrid outcome mode. Therefore the
+  displayed outcome latency and realized utility intentionally match the
+  physical view; pair and raw end-to-end values remain separate references.
+- Preserve complete Kernel validation evidence as prefixed controller output,
+  but filter it from the human host console. The host follows logs live,
+  retains normalized JSON privately for current evidence consumers, and still
+  performs the existing finite-Job and serving-process checks.
+- Carry the formatter in the controller image and the existing controller-only
+  no-build source ConfigMap. Do not add it to or mount it in service Pods.
+- This presentation change authorizes no Exact edit, CSV behavior change,
+  image build/load, deployment, live traffic, topology/resource change, or
+  automatic MC activation.
+
+## Hybrid production experiment lifecycle decisions
+
+Accepted: 2026-08-09.
+
+- Make `run` the normal Hybrid Kubernetes experiment interface. Require
+  explicit positive `--flow`, `--stage`, `--replica`, and `--max-iterations`;
+  keep stages fixed at three and retain plural topology aliases.
+- Keep `run-small` as a compatibility boundary for historical infrastructure
+  evidence. It may retain fixed slot counts and route assertions, but the
+  production controller must not call `run_small_live_gate`.
+- Accept `ibg-hybrid-kernel-experiment-lifecycle-v1` as a thin sequential loop
+  over the existing stateful controller adapter. Emit each completed slot before
+  the next call, stop on the first frozen equilibrium result, otherwise stop at
+  the exact positive maximum, and report reached/not reached plus the completed
+  iteration count.
+- Preserve beliefs only inside the controller adapter across slots. The loop
+  rejects belief discontinuity and does not introduce a ConfigMap, service,
+  policy-input, or hidden-state channel.
+- Propagate the requested limit into the rendered dynamic Job rather than a
+  manifest constant. Remove the historical 600-second active deadline only for
+  production rendering so it cannot pre-empt the explicit iteration bound;
+  historical gate deadlines remain unchanged.
+- Supersede the earlier decision to show per-flow latency in the human console.
+  Show no `Latency:` section or per-flow latency text. Preserve every latency
+  calculation and field in `HybridSlotResult` and machine evidence unchanged.
+- Retain immediate host log following and hide prefixed JSON from the human
+  console. Do not print placements, flow order, observations, learning signals,
+  beliefs, CSV messages, or raw evidence.
+- Keep lookahead as the omitted-policy default. Keep MC explicit and preserve
+  the existing Kubernetes restriction to accepted `3x3x2` candidate resources
+  and one or two workers; do not infer general dynamic-topology MC support.
+
+## Hybrid intentional replica scale-down decisions
+
+Accepted locally: 2026-08-11. Live `8 -> 5` evidence requires separate approval.
+
+- Supersede the Phase 5 prohibition on explicit scale-down. A positive
+  user-supplied `--replica` is an intentional target: equality is a no-op,
+  increases use bounded batches, and decreases use one exact all-stage target.
+- Version the rollout result as a direction-aware contract with separate added
+  and removed ordinals. For `8 -> 5`, permit only zero-based ordinals `5--7` to
+  disappear; never remove a retained ordinal or recreate the cluster.
+- Require deterministic source and target profile generation before mutation.
+  Preserve retained runtime identity/state/seed and planning links exactly;
+  permit only high-ordinal profile/admission removal and links with a removed
+  endpoint. Admission changes remain limited to `ceil(flows / replicas)`.
+- During scale-down, keep the old complete ConfigMaps until the higher Pods are
+  absent. Dry-run the target, scale and wait first, then reconcile reduced
+  ConfigMaps, revalidate templates/documents/readiness, and only then start the
+  finite controller Job.
+- Under `--skip-build`, preserve retained Pod and flow-generator UIDs/restarts
+  and explicitly prove removed Pods absent. Do not claim preservation for an
+  intentionally removed Pod.
+- Treat scale-down as zero added Pods in resource preflight. Preserve all
+  resources, images, workers, ports, clients, probes, keep-alive, algorithms,
+  telemetry, learning, utility, SLA, jitter, and production-loop behavior.
+- Reuse only the MILP direct-target rollout concept. Do not copy its current
+  scale-up-oriented profile validator, which is not a correct complete
+  scale-down validation path.
+
+## Hybrid initial/final belief-console decision
+
+Accepted: 2026-08-11.
+
+- Supersede the blanket human-console belief omission only at production-run
+  boundaries: print one initial snapshot before slot one and one final snapshot
+  after equilibrium or maximum-iteration termination.
+- Retain belief-free per-timeslot metric blocks; do not print belief deltas,
+  learning signals, observations, placements, or flow order.
+- Reuse Exact's title, alignment, ordering, bracket, and three-decimal vector
+  style, but omit its state/capacity/delay/gamma columns. Hidden processor state
+  remains unavailable to and undisclosed by the Hybrid controller.
+- Apply the snapshots equally to default lookahead and explicit MC production
+  runs. Do not change the historical `run-small` gate or any mathematics.
+
+## Hybrid reproducible offline image-build decision
+
+Accepted locally: 2026-08-11.
+
+- Replace cache-dependent Hybrid Docker pip installation with versioned local
+  service/controller wheelhouses. Keep wheel binaries ignored and local; commit
+  their exact manifests and transitive lock files rather than ephemeral `/tmp`
+  paths.
+- A normal run validates both complete wheelhouses before any cluster action or
+  Docker build, then builds with `--pull=false --network=none`, kind-loads both
+  Hybrid images, and restarts only Hybrid serving workloads. It must fail closed
+  on missing, unexpected, incompatible, lock, or recorded-digest wheel data.
+- `--skip-build` deliberately bypasses wheelhouse validation as well as build,
+  kind-load, and serving restart. It remains bound to local node-image tag/config
+  validation and the existing topology/reconciliation/Job boundary.
+- Require Dockerfiles to install only from their matching copied wheel cache
+  using pip `--no-index --find-links`; no downloader, package-manager network
+  installation, Python index configuration, MILP source, SciPy/HiGHS, or
+  OR-Tools is permitted.
+- Permit the explicit helper to copy already supplied wheels only after it has
+  validated the complete source set. Do not add an automatic download path.
+
+### Offline build evidence
+
+- The user explicitly authorized the one-time pinned wheel acquisition on
+  2026-08-11. Both wheelhouses validated and clean network-disabled local builds
+  succeeded. This is local image evidence only: no kind load, deployment,
+  container start, or Kubernetes mutation was authorized or performed.
+
+## Hybrid seeded hidden-state allocation decision
+
+Accepted locally: 2026-08-11.
+
+- Require `--profile-seed` on the normal production `run` CLI. Keep it separate
+  from policy root, flow ordering, MC rollout, physical jitter, observation
+  jitter, and observation-seed domains. It controls hidden-state placement only.
+- Accept `ibg-hybrid-profile-state-allocation-v1` with the fixed public
+  Very Good/Good/Bad/Very Bad mix `30/30/20/20`. Use deterministic ten-replica
+  strata with exact `3/3/2/2` counts and hash-ranked feasible prefix choices.
+  Every arbitrary prefix must remain within one replica of its ideal quota.
+- Require the allocator to be a stable infinite per-stage prefix: same seed and
+  dimensions are byte-identical, scale-up never changes an existing identity,
+  and scale-down removes only higher ordinals. Retain the independent stable
+  observation-seed rule.
+- Keep seeded provenance only on the processor runtime side. Do not place the
+  profile seed, state mix, hidden state, observation seed, or reconstructable
+  allocation information in controller inputs or controller mounts.
+- Preserve legacy fixed documents as historical fixtures. Treat the legacy
+  generator as compatibility behavior, not the production seeded interface.
+- Require explicit `--refresh-runtime-profiles` for any existing allocation-seed
+  transition. Restrict refresh to `--skip-build`, equal replica counts, and no
+  resource-template rollout; replace only identities whose hidden state changes,
+  stage by stage with exact Ready gates. UID preservation does not apply to those
+  deliberate replacements.
+- Do not change policy, lookahead, MC, learning, utility, SLA, equilibrium,
+  latency/jitter, routing, metrics, console output, or belief initialization.

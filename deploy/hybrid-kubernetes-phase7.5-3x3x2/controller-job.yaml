@@ -49,6 +49,10 @@ spec:
               mountPath: /app/IBG_Hybrid/kernel_controller_cli.py
               subPath: kernel_controller_cli.py
               readOnly: true
+            - name: controller-phase75-source
+              mountPath: /app/IBG_Hybrid/console_output.py
+              subPath: console_output.py
+              readOnly: true
           resources:
             requests: {cpu: 100m, memory: 256Mi}
             limits: {cpu: "2", memory: 1Gi}

@@ -305,7 +305,7 @@ def test_phase5_exact_three_stage_count_discovery_and_rejections():
         )
 
 
-def test_phase5_rollout_plan_is_bounded_deterministic_and_never_shrinks():
+def test_phase5_rollout_plan_is_direction_aware_and_deterministic():
     plan = plan_bounded_rollout(
         existing_count=2, requested_count=7, batch_size=2
     )
@@ -316,12 +316,21 @@ def test_phase5_rollout_plan_is_bounded_deterministic_and_never_shrinks():
         (6,),
     )
     assert plan_bounded_rollout(
-        existing_count=3, requested_count=3, batch_size=2
+        existing_count=5, requested_count=5, batch_size=2
     ).batches == ()
-    with pytest.raises(HybridKernelRolloutError, match="must not shrink"):
-        plan_bounded_rollout(
-            existing_count=3, requested_count=2, batch_size=1
-        )
+    up = plan_bounded_rollout(
+        existing_count=5, requested_count=8, batch_size=2
+    )
+    assert tuple(batch.target_count for batch in up.batches) == (7, 8)
+    assert up.added_ordinals == (5, 6, 7)
+    assert up.removed_ordinals == ()
+    down = plan_bounded_rollout(
+        existing_count=8, requested_count=5, batch_size=2
+    )
+    assert down.direction == "down"
+    assert tuple(batch.target_count for batch in down.batches) == (5,)
+    assert down.added_ordinals == ()
+    assert down.removed_ordinals == (5, 6, 7)
 
 
 def test_phase5_ready_coverage_is_exact_at_each_target():
@@ -381,6 +390,9 @@ def test_phase5_skip_build_reconciles_waits_and_replaces_only_job(
     monkeypatch, capsys
 ):
     monkeypatch.setattr(
+        runner, "_reconcile_phase75_controller_sources", lambda execute: None
+    )
+    monkeypatch.setattr(
         runner,
         "_local_platform_image_id",
         lambda execute, image: (
@@ -408,12 +420,12 @@ def test_phase5_skip_build_reconciles_waits_and_replaces_only_job(
     apply_job = next(
         index
         for index, command in enumerate(commands)
-        if "apply" in command and str(runner.CONTROLLER_JOB) in command
+        if "apply" in command and str(runner.DYNAMIC_CONTROLLER_JOB) in command
     )
     assert delete_job < apply_job
     assert capsys.readouterr().out == (
         "Selected Hybrid topology: 2 flows x 3 stages x 1 replica per stage\n"
-        '{"slot_id":1}\n'
+        "Hybrid image mode: --skip-build; reuse validated node-local images\n"
     )
 
 
@@ -476,7 +488,56 @@ def test_phase5_process_preservation_rejects_changes_and_allows_new_ordinals():
         )
 
 
-def test_phase5_normal_path_builds_offline_loads_and_restarts(capsys):
+def test_phase5_scale_down_process_preservation_is_retained_subset_only():
+    before = runner._serving_process_snapshot(
+        serving_pods(3), replica_count=3
+    )
+    after = runner._serving_process_snapshot(
+        serving_pods(2), replica_count=2
+    )
+    runner._validate_scale_down_process_preservation(
+        before,
+        after,
+        existing_count=3,
+        requested_count=2,
+    )
+
+    changed = list(after)
+    retained = changed[0]
+    changed[0] = runner.ServingPodProcessSnapshot(
+        retained.pod_name,
+        retained.pod_uid + "-changed",
+        retained.container_restarts,
+    )
+    with pytest.raises(RuntimeError, match="retained serving Pod UID"):
+        runner._validate_scale_down_process_preservation(
+            before,
+            tuple(changed),
+            existing_count=3,
+            requested_count=2,
+        )
+
+    with pytest.raises(RuntimeError, match="exact retained subset"):
+        runner._validate_scale_down_process_preservation(
+            before,
+            after
+            + (
+                runner.ServingPodProcessSnapshot(
+                    "hybrid-stage-1-2",
+                    "uid-hybrid-stage-1-2",
+                    (("private-processor", 0), ("public-forwarder", 0)),
+                ),
+            ),
+            existing_count=3,
+            requested_count=2,
+        )
+
+
+def test_phase5_normal_path_builds_offline_loads_and_restarts(monkeypatch, capsys):
+    monkeypatch.setattr(runner, "_validate_offline_wheelhouses", lambda: None)
+    monkeypatch.setattr(
+        runner, "_reconcile_phase75_controller_sources", lambda execute: None
+    )
     cluster = FakeCluster()
     runner.run_small(execute=cluster.execute)
     commands = [command for command, _capture in cluster.commands]
@@ -492,7 +553,7 @@ def test_phase5_normal_path_builds_offline_loads_and_restarts(capsys):
     assert sum("restart" in command for command in commands) == 1
     assert capsys.readouterr().out == (
         "Selected Hybrid topology: 2 flows x 3 stages x 1 replica per stage\n"
-        '{"slot_id":1}\n'
+        "Hybrid image mode: build offline from validated local wheelhouses\n"
     )
 
 
@@ -500,6 +561,7 @@ def test_phase5_mocked_multibatch_applies_same_target_and_waits_before_job(
     monkeypatch, capsys
 ):
     cluster = FakeCluster(replicas=1)
+    monkeypatch.setattr(runner, "_validate_offline_wheelhouses", lambda: None)
     monkeypatch.setattr(
         runner,
         "_validate_static_profile_boundary",
@@ -534,7 +596,7 @@ def test_phase5_mocked_multibatch_applies_same_target_and_waits_before_job(
     assert cluster.replicas == 5
     assert capsys.readouterr().out == (
         "Selected Hybrid topology: 2 flows x 3 stages x 1 replica per stage\n"
-        '{"slot_id":1}\n'
+        "Hybrid image mode: build offline from validated local wheelhouses\n"
     )
 
 
@@ -551,8 +613,13 @@ def test_phase5_rejects_skip_build_without_cluster_and_unapproved_scale():
         runner.run_small(skip_build=True, execute=no_cluster)
     assert commands == [("kind", "get", "clusters")]
 
-    with pytest.raises(RuntimeError, match="deferred to Infrastructure Phase 8"):
-        runner.run_small(requested_replicas=3, execute=FakeCluster().execute)
+    commands = []
+    with pytest.raises(RuntimeError, match="--flow is required"):
+        runner.run_small(
+            requested_replicas=3,
+            execute=lambda command, capture: commands.append(command) or "",
+        )
+    assert commands == []
 
 
 def test_phase5_cli_and_scope_keep_later_phases_absent():
