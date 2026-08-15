@@ -56,6 +56,9 @@ KIND_CONFIG = (
     ROOT / "deploy" / "hybrid-kubernetes-phase4-small" / "kind-config.yaml"
 )
 OVERLAY = ROOT / "deploy" / "hybrid-kubernetes-phase4-small"
+HYBRID_NAMESPACE_MANIFEST = (
+    ROOT / "deploy" / "hybrid-kubernetes" / "namespace.yaml"
+)
 CONTROLLER_JOB = OVERLAY / "controller-job.yaml"
 PHASE6_OVERLAY = ROOT / "deploy" / "hybrid-kubernetes-phase6-3x3x2"
 PHASE6_CONTROLLER_JOB = PHASE6_OVERLAY / "controller-job.yaml"
@@ -95,7 +98,11 @@ NORMALIZED_CONTROLLER_IMAGE = (
     "docker.io/library/ibg-hybrid-testbed:kernel-controller-v1"
 )
 PYTHON_BASE_IMAGE = "mcr.microsoft.com/azurelinux/base/python:3.12"
-EXPECTED_NODE_NAMES = frozenset({"ibg-hybrid-control-plane"})
+CONTROL_PLANE_NODE_NAME = "ibg-hybrid-control-plane"
+WORKER_NODE_NAME = "ibg-hybrid-worker"
+WORKLOAD_NODE_LABEL = "ibg-hybrid.workload-node"
+WORKLOAD_NODE_LABEL_VALUE = "true"
+EXPECTED_NODE_NAMES = frozenset({CONTROL_PLANE_NODE_NAME, WORKER_NODE_NAME})
 SYSTEM_POD_NAMESPACES = frozenset({"kube-system", "local-path-storage"})
 FORBIDDEN_NAMESPACES = frozenset({"ibg-testbed", "milp-testbed"})
 STATEFULSET_RESOURCES = tuple(
@@ -238,18 +245,88 @@ def _item_names(document: Mapping[str, object]) -> frozenset[str]:
     return frozenset(names)
 
 
+def _node_items_by_name(
+    document: Mapping[str, object],
+) -> Mapping[str, Mapping[str, object]]:
+    items = document.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("Kubernetes node inventory has no item list")
+    by_name: dict[str, Mapping[str, object]] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise RuntimeError("Kubernetes node inventory item is not an object")
+        metadata = item.get("metadata")
+        name = metadata.get("name") if isinstance(metadata, Mapping) else None
+        if not isinstance(name, str) or not name or name in by_name:
+            raise RuntimeError("Kubernetes node inventory has invalid identities")
+        by_name[name] = item
+    return by_name
+
+
+def _node_ready(item: Mapping[str, object]) -> bool:
+    status = item.get("status")
+    conditions = status.get("conditions") if isinstance(status, Mapping) else None
+    return isinstance(conditions, list) and any(
+        isinstance(condition, Mapping)
+        and condition.get("type") == "Ready"
+        and condition.get("status") == "True"
+        for condition in conditions
+    )
+
+
+def _validate_node_topology(
+    nodes: Mapping[str, object],
+) -> Mapping[str, Mapping[str, object]]:
+    by_name = _node_items_by_name(nodes)
+    if frozenset(by_name) != EXPECTED_NODE_NAMES:
+        raise RuntimeError(
+            "refusing non-dedicated cluster nodes: "
+            f"expected {sorted(EXPECTED_NODE_NAMES)}, got {sorted(by_name)}"
+        )
+    control_plane = by_name[CONTROL_PLANE_NODE_NAME]
+    worker = by_name[WORKER_NODE_NAME]
+    control_metadata = control_plane.get("metadata")
+    worker_metadata = worker.get("metadata")
+    control_labels = (
+        control_metadata.get("labels")
+        if isinstance(control_metadata, Mapping)
+        else None
+    )
+    worker_labels = (
+        worker_metadata.get("labels")
+        if isinstance(worker_metadata, Mapping)
+        else None
+    )
+    control_plane_label = "node-role.kubernetes.io/control-plane"
+    if (
+        not isinstance(control_labels, Mapping)
+        or control_plane_label not in control_labels
+        or WORKLOAD_NODE_LABEL in control_labels
+        or not isinstance(worker_labels, Mapping)
+        or worker_labels.get(WORKLOAD_NODE_LABEL) != WORKLOAD_NODE_LABEL_VALUE
+        or control_plane_label in worker_labels
+        or not _node_ready(control_plane)
+        or not _node_ready(worker)
+    ):
+        raise RuntimeError(
+            "Hybrid node roles, workload label, or Ready state are invalid"
+        )
+    return by_name
+
+
+def _pod_node_name(item: Mapping[str, object]) -> str | None:
+    spec = item.get("spec")
+    value = spec.get("nodeName") if isinstance(spec, Mapping) else None
+    return value if isinstance(value, str) and value else None
+
+
 def validate_cluster_inventory(
     *,
     nodes: Mapping[str, object],
     namespaces: Mapping[str, object],
     pods: Mapping[str, object],
 ) -> None:
-    node_names = _item_names(nodes)
-    if node_names != EXPECTED_NODE_NAMES:
-        raise RuntimeError(
-            "refusing non-dedicated cluster nodes: "
-            f"expected {sorted(EXPECTED_NODE_NAMES)}, got {sorted(node_names)}"
-        )
+    _validate_node_topology(nodes)
 
     namespace_names = _item_names(namespaces)
     forbidden = namespace_names & FORBIDDEN_NAMESPACES
@@ -263,6 +340,7 @@ def validate_cluster_inventory(
     if not isinstance(items, list):
         raise RuntimeError("Kubernetes Pod inventory has no item list")
     foreign_pods = []
+    misplaced_workloads = []
     for item in items:
         if not isinstance(item, dict):
             raise RuntimeError("Kubernetes Pod inventory item is not an object")
@@ -313,10 +391,17 @@ def validate_cluster_inventory(
                 owned = False
             if not owned:
                 foreign_pods.append(f"{namespace}/{name}")
+            elif _pod_node_name(item) != WORKER_NODE_NAME:
+                misplaced_workloads.append(f"{namespace}/{name}")
     if foreign_pods:
         raise RuntimeError(
             "refusing cluster with foreign workload Pods: "
             + ", ".join(sorted(foreign_pods))
+        )
+    if misplaced_workloads:
+        raise RuntimeError(
+            "refusing Hybrid workloads outside the dedicated worker: "
+            + ", ".join(sorted(misplaced_workloads))
         )
 
 
@@ -560,6 +645,26 @@ def _validate_serving_pods(
         or not _pod_ready(flow_generator)
     ):
         raise RuntimeError("Hybrid serving Pods are not all Running and Ready")
+    misplaced = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        item_metadata = item.get("metadata")
+        name = (
+            item_metadata.get("name")
+            if isinstance(item_metadata, Mapping)
+            else None
+        )
+        if isinstance(name, str) and (
+            name.startswith("hybrid-stage-")
+            or name.startswith("ibg-hybrid-flow-generator-")
+        ) and _pod_node_name(item) != WORKER_NODE_NAME:
+            misplaced.append(name)
+    if misplaced:
+        raise RuntimeError(
+            "Hybrid serving Pods are not all placed on the dedicated worker: "
+            + ", ".join(sorted(misplaced))
+        )
 
 
 def _serving_process_snapshot(
@@ -885,17 +990,14 @@ def _validate_node_resource_capacity(
     existing_replica_count: int,
     requested_replica_count: int,
 ) -> HybridNodeResourcePreflight:
-    """Fail before mutation when the one-node scheduler envelope is too small."""
+    """Fail before mutation when the worker scheduler envelope is too small."""
 
     nodes = _json_output(execute, _kubectl("get", "nodes", "-o", "json"))
-    node_items = nodes.get("items")
-    if not isinstance(node_items, list) or len(node_items) != 1:
-        raise RuntimeError("Hybrid resource preflight requires exactly one node")
-    node = node_items[0]
-    status = node.get("status") if isinstance(node, Mapping) else None
+    worker = _validate_node_topology(nodes)[WORKER_NODE_NAME]
+    status = worker.get("status")
     allocatable = status.get("allocatable") if isinstance(status, Mapping) else None
     if not isinstance(allocatable, Mapping):
-        raise RuntimeError("Hybrid node has no allocatable resource inventory")
+        raise RuntimeError("Hybrid worker has no allocatable resource inventory")
     allocatable_cpu = _cpu_milli(allocatable.get("cpu"))
     allocatable_memory = _memory_bytes(allocatable.get("memory"))
 
@@ -914,6 +1016,8 @@ def _validate_node_resource_capacity(
             "Failed",
         }:
             continue
+        if _pod_node_name(pod) != WORKER_NODE_NAME:
+            continue
         pod_cpu, pod_memory = _pod_request(pod)
         requested_cpu += pod_cpu
         requested_memory += pod_memory
@@ -922,11 +1026,17 @@ def _validate_node_resource_capacity(
         0, requested_replica_count - existing_replica_count
     )
     # Accepted Phase 7 candidate requests: processor 50m with 64 binary MiB,
-    # plus forwarder 25m with 128 binary MiB.  The finite controller adds
-    # 100m/256 binary MiB after old Jobs are deleted.  Current Running Pods are
+    # plus forwarder 25m with 128 binary MiB. A fresh cluster also adds the
+    # flow generator at 50m/128 binary MiB. The finite controller adds
+    # 100m/256 binary MiB after old Jobs are deleted. Current Running Pods are
     # already included above.
-    requested_cpu += added_stage_pods * 75 + 100
-    requested_memory += added_stage_pods * (64 + 128) * 1024**2 + 256 * 1024**2
+    added_flow_generators = 1 if existing_replica_count == 0 else 0
+    requested_cpu += added_stage_pods * 75 + added_flow_generators * 50 + 100
+    requested_memory += (
+        added_stage_pods * (64 + 128) * 1024**2
+        + added_flow_generators * 128 * 1024**2
+        + 256 * 1024**2
+    )
     result = HybridNodeResourcePreflight(
         requested_cpu_milli=requested_cpu,
         allocatable_cpu_milli=allocatable_cpu,
@@ -936,7 +1046,7 @@ def _validate_node_resource_capacity(
     )
     if requested_cpu > allocatable_cpu or requested_memory > allocatable_memory:
         raise RuntimeError(
-            "requested Hybrid topology exceeds node allocatable resources: "
+            "requested Hybrid topology exceeds worker allocatable resources: "
             f"cpu={requested_cpu}m/{allocatable_cpu}m, "
             f"memory={requested_memory}/{allocatable_memory} bytes"
         )
@@ -1206,6 +1316,7 @@ def _apply_reconciled_boundary(
     existing_statefulsets: Mapping[str, object] | None = None,
     processor_memory_profile: ProcessorMemoryProfile | None = None,
     apply_resources: bool = True,
+    bootstrap_namespace: bool = False,
 ) -> None:
     deploy_root = ROOT / "deploy"
     with tempfile.TemporaryDirectory(
@@ -1260,6 +1371,11 @@ def _apply_reconciled_boundary(
             f"{dynamic_config_maps}",
             encoding="utf-8",
         )
+        if bootstrap_namespace:
+            execute(
+                _kubectl("apply", "-f", str(HYBRID_NAMESPACE_MANIFEST)),
+                False,
+            )
         dry_run = _json_output(
             execute,
             _kubectl(
@@ -1702,35 +1818,48 @@ def run_small(
     existing_count = None
     existing_templates = None
     existing_statefulsets = None
+    bootstrap_namespace = False
     deliberate_resource_rollout = False
     rollout = None
     profile_transition = None
     if cluster_exists:
         preflight(execute=execute)
-        statefulsets = _statefulset_inventory(execute)
-        existing = discover_existing_replica_state(statefulsets)
-        existing_count = existing.replica_count
-        existing_templates = _statefulset_template_snapshot(statefulsets)
-        existing_statefulsets = statefulsets
-        if resource_profile is not None:
-            deliberate_resource_rollout = (
-                detect_resource_profile(statefulsets) != resource_profile
+        namespace_names = _item_names(
+            _json_output(
+                execute,
+                _kubectl("get", "namespaces", "-o", "json"),
             )
-        rollout = plan_bounded_rollout(
-            existing_count=existing_count,
-            requested_count=requested_replicas,
-            batch_size=rollout_batch_size,
         )
-        profile_transition = _validate_live_profile_expansion(
-            execute,
-            existing_replica_count=existing_count,
-            boundary=boundary,
-            refresh_runtime_profiles=refresh_runtime_profiles,
-        )
+        if HYBRID_NAMESPACE not in namespace_names:
+            # A fail-closed post-create check may leave the dedicated cluster
+            # healthy but pristine. Resume it through the normal namespace
+            # bootstrap instead of requiring destructive recreation.
+            bootstrap_namespace = True
+        else:
+            statefulsets = _statefulset_inventory(execute)
+            existing = discover_existing_replica_state(statefulsets)
+            existing_count = existing.replica_count
+            existing_templates = _statefulset_template_snapshot(statefulsets)
+            existing_statefulsets = statefulsets
+            if resource_profile is not None:
+                deliberate_resource_rollout = (
+                    detect_resource_profile(statefulsets) != resource_profile
+                )
+            rollout = plan_bounded_rollout(
+                existing_count=existing_count,
+                requested_count=requested_replicas,
+                batch_size=rollout_batch_size,
+            )
+            profile_transition = _validate_live_profile_expansion(
+                execute,
+                existing_replica_count=existing_count,
+                boundary=boundary,
+                refresh_runtime_profiles=refresh_runtime_profiles,
+            )
         if configuration.num_flows > 4 or configuration.num_replicas > 2:
             resource_preflight = _validate_node_resource_capacity(
                 execute,
-                existing_replica_count=existing_count,
+                existing_replica_count=existing_count or 0,
                 requested_replica_count=requested_replicas,
             )
             print(
@@ -1760,7 +1889,21 @@ def run_small(
             ),
             False,
         )
+        # kind's create --wait gate reports control-plane readiness.  The
+        # dedicated worker may still be joining, while the Hybrid topology
+        # preflight intentionally requires both nodes to be Ready.
+        execute(
+            _kubectl(
+                "wait",
+                "--for=condition=Ready",
+                f"node/{CONTROL_PLANE_NODE_NAME}",
+                f"node/{WORKER_NODE_NAME}",
+                "--timeout=120s",
+            ),
+            False,
+        )
         preflight(execute=execute)
+        bootstrap_namespace = True
         if configuration.num_flows > 4 or configuration.num_replicas > 2:
             resource_preflight = _validate_node_resource_capacity(
                 execute,
@@ -1831,6 +1974,7 @@ def run_small(
             expected_templates=None,
             existing_statefulsets=None,
             processor_memory_profile=resource_profile,
+            bootstrap_namespace=bootstrap_namespace,
         )
         existing_count = initial_count
     elif scale_down:
@@ -2210,7 +2354,7 @@ def _add_run_arguments(
 def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Operate only the persistent single-node Hybrid kind cluster; "
+            "Operate only the persistent two-node Hybrid kind cluster; "
             "never starts or targets the shared ibg cluster."
         )
     )

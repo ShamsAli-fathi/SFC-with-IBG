@@ -2050,6 +2050,13 @@ coverage, and only then applies the Job. It never references or starts the
 shared `ibg` cluster. By default it deletes the dedicated cluster after success
 or failure; retention requires `--keep-cluster`.
 
+The one-node configuration is a completed small-gate boundary, not the
+intended Hybrid workload topology. The next authorized correction is one
+control-plane node plus one worker node, with every Hybrid workload Pod on the
+worker. It requires fresh worker-only placement, resource-envelope, and
+pure/Kernel-parity validation; it provides management/workload separation but
+not same-worker versus cross-worker workload-path evidence.
+
 Eleven focused Phase 4 tests and the complete 240-test requested regression
 set pass after the correction. Python compilation and `git diff --check` pass;
 the frozen `IBG/`/`MILP/` diff remains empty and no Markdown exists under
@@ -2801,3 +2808,144 @@ selection counts (Very Good/Good/Bad/Very Bad) were respectively `5/8/7/10`,
 The next action is not another refresh.  Diagnose and, if separately approved,
 correct the cold-start liveness behavior before repeating the explicit refresh
 acceptance gate with zero replacement-Pod restarts.  No commit or push occurred.
+
+## Hybrid fresh-host bootstrap repair
+
+Updated: 2026-08-11.
+
+The migrated Ubuntu 24.04 host now has Docker, kubectl 1.36, and kind 0.32
+installed; the Hybrid development environment pins and imports Pydantic 2.13.4.
+The first normal 15x3x10 invocation created the dedicated `ibg-hybrid` kind
+cluster but stopped before any Hybrid namespace or workload was created: its
+server-side generated-overlay dry run could not use the namespace that would
+otherwise be created by the later real apply.
+
+`scripts/run_hybrid_kernel_phase4.py` now creates only the dedicated Namespace
+manifest before that dry run, and only during first-cluster bootstrap. Existing
+cluster reconciliation, profile validation, template preservation, and all
+placement/runtime contracts remain unchanged. Focused dynamic-topology,
+Phase-5 rollout, and production-lifecycle tests pass (47 tests), along with
+compilation, diff checks, and a direct bootstrap-order check.
+
+The failed bootstrap left only the disposable dedicated kind control-plane and
+system Pods. It must be removed with the launcher `cleanup` action before the
+corrected first-run command can create the workload cleanly. No Hybrid traffic
+or controller Job ran.
+
+The subsequent normal 15x3x10 serving rollout completed on the current
+one-control-plane cluster. The user then stopped the progressing controller
+Job; all thirty two-container replica Pods and the flow generator remained
+Running with zero observed restarts. A transient host-side `kubectl logs
+--follow` fsnotify watcher failure did not stop the Job or change Hybrid
+semantics. The launcher displayed 15 flows, but controller evidence recorded
+`configuration.num_flows: 20` and emitted twenty per-flow results. That
+stopped-run discrepancy was later checked by the user: a subsequent test
+confirmed correct requested-flow propagation. Treat it as an interrupted-run
+anomaly, not an active blocker; the stopped run itself remains invalid 15-flow
+evidence.
+
+
+## Hybrid management/workload node separation complete locally
+
+Updated: 2026-08-15.
+
+The repository now defines `ibg-hybrid` as one kind control-plane plus one
+labelled worker. All three replica StatefulSets, the flow generator, the base
+and dynamic controller Jobs, and every retained Phase 4/6/7/7.5/8 controller
+Job select `ibg-hybrid.workload-node=true`. The launcher requires exactly the
+Ready `ibg-hybrid-control-plane` and `ibg-hybrid-worker` roles and rejects any
+recognized Hybrid workload Pod outside the worker. Serving rollout readiness
+also requires worker placement.
+
+Resource preflight now reads only the worker allocatable envelope, counts only
+nonterminal Pods bound to that worker, excludes control-plane management Pods
+and terminal Jobs, and retains the accepted request formulas and all resource
+declarations. Phase 7 CRI serving statistics now target the worker. No Hybrid
+policy, lookahead/MC behavior, route, profile, physical/observation jitter,
+learning, belief retention, metric, utility/SLA, telemetry, console, image, or
+rollout semantics changed. Frozen Exact and MILP source files were not edited.
+
+Validation passes 71 focused topology/dynamic/rollout tests, 183 complete
+Hybrid Kernel/infrastructure/offline-build tests, and 93 pure Hybrid tests
+(276 Hybrid tests total in memory-bounded groups). The established 119 relevant
+frozen Exact processor, forwarder, flow-generator, adapter, runner, learning,
+latency, dynamic-configuration, experiment, and launcher tests pass. All seven
+retained Hybrid Kustomize overlays and all seven controller Job templates render
+offline. Changed Python compiles, `git diff --check` passes, and no Markdown was
+created under `IBG_Hybrid/`.
+
+No live cluster, Docker image, kind node, Kubernetes object, or traffic was
+mutated. The last user-supplied live state is the historical single-control-plane
+cluster with thirty replica Pods and one flow generator; its controller Job was
+stopped by the user. That state was not reverified during this local
+implementation. The later user check confirming correct requested-flow
+propagation remains authoritative, and the stopped mismatch is not 15-flow
+evidence. The new runner intentionally rejects that one-node topology before
+mutation.
+
+Next action requires explicit approval to cleanly replace the current dedicated
+cluster and execute the worker-placement/resource/pure-Kernel live gate. Until
+then there is no two-node live evidence and no same-worker/cross-worker,
+multi-host, NIC, SR-IOV, DPDK/VPP, hugepage, line-rate, or datapath-performance
+claim.
+
+
+## Hybrid two-node bootstrap readiness correction
+
+Updated: 2026-08-15.
+
+The user's normal 15-flow/3-stage/7-replica command created
+`ibg-hybrid-control-plane` and `ibg-hybrid-worker`, then the launcher failed
+closed at its first topology check. Read-only inspection showed the eventual
+inventory is correct: both exact nodes are Ready, only the worker has
+`ibg-hybrid.workload-node=true`, and no Hybrid workload was deployed. The cause
+was a startup race: kind's create-time wait completed for the control-plane
+before the worker was Ready.
+
+Fresh-cluster operation now explicitly waits for both named nodes before the
+unchanged strict preflight. Fifty-five focused Phase 4 topology, dynamic-
+topology, and Phase 5 rollout tests pass; changed code compiles and
+`git diff --check` passes. The launcher's read-only preflight also passes
+against the retained live cluster. Codex performed no Kubernetes or Docker
+mutation while diagnosing or validating this correction.
+
+Next action is for the user to rerun the same normal-build command without
+cleanup and without `--skip-build`. It will reuse the empty two-node cluster,
+build and load both Hybrid images, then continue the resource, rollout,
+worker-placement, controller, and pure/Kernel gates. No live workload evidence
+exists yet, and no same-worker/cross-worker, multi-host, NIC, or line-rate claim
+is authorized.
+
+The resume path now explicitly treats a validated existing cluster without the
+Hybrid namespace as pristine and runs namespace-first bootstrap with zero
+existing replicas. A final read-only inventory confirms
+`ibg-hybrid-testbed` is absent and only Kubernetes management Pods exist. The
+same 55 focused tests pass after this addition.
+
+
+## Hybrid two-node live test user-confirmed
+
+Updated: 2026-08-15. The user reports that a test run after the bootstrap and
+resume corrections works. No detailed results were supplied or requested for
+retention, so no dimensions, metrics, placement inventory, parity values,
+restart/resource observations, or trace artifact are claimed here. The current
+two-node Hybrid functional task is complete; further evidence capture is
+optional and requires a new explicit request.
+
+
+## Deferred Hybrid follow-up backlog
+
+Updated: 2026-08-15. The user requested that three later workstreams be
+retained: opt-in `tc/netem` robustness testing, verification and possible
+production integration of the existing Hybrid CSV functions, and an opt-in
+per-timeslot control-plane data-footprint feature.
+
+No implementation or runtime mutation was performed. The planned order is
+netem robustness, CSV verification, then control-plane footprint. The Exact
+`netem_v1`, host-side CSV, and `control_plane_v1` contracts are compatibility
+references, not proof that their code can be copied unchanged into Hybrid.
+Each workstream must preserve the active Kernel-only runtime, worker placement,
+Hybrid algorithm/MC behavior, separated physical and observation jitter,
+selected-only learning, physical-only utility/SLA outcome, telemetry, and
+frozen Exact behavior. Packet loss and wire-byte claims remain outside the
+recorded scope.

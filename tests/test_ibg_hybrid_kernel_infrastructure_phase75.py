@@ -168,7 +168,7 @@ def test_kernel_controller_passes_explicit_mc_workers_without_hidden_state(monke
             choice=item.choice,
             pod_name=f"hybrid-stage-{item.choice.stage}-{item.choice.replica - 1}",
             pod_uid=f"uid-{item.choice.stage}-{item.choice.replica}",
-            node_name="ibg-hybrid-control-plane",
+            node_name=runner.WORKER_NODE_NAME,
             endpoint="http://example.invalid",
         )
         for item in inputs.admission

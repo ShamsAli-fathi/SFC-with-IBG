@@ -1860,10 +1860,14 @@ Accepted: 2026-08-09.
   ten measured pairs after ten complete placements; route, learning, belief,
   provenance, jitter/link, admission, final-load, and parity checks passed.
 - Retain all Phase 7/7.5 resource declarations. The resource preflight fit the
-  one-node allocatable envelope, sampled serving peaks remained below limits,
-  the controller retained 584 seconds of deadline margin, and no memory event,
-  serving restart, OOM/eviction, post-Ready probe failure, or node pressure
-  occurred. Do not add a node or retune resources automatically.
+  then-current one-node allocatable envelope, sampled serving peaks remained
+  below limits, the controller retained 584 seconds of deadline margin, and no
+  memory event, serving restart, OOM/eviction, post-Ready probe failure, or
+  node pressure occurred. Do not add a node or retune resources automatically
+  as part of dynamic scaling. A separately authorized topology correction will
+  use one Hybrid control-plane node plus one worker node, with all Hybrid
+  workloads scheduled on that worker; it requires its own inventory,
+  placement, resource, and parity gate.
 - Recognize a correctly labelled completed dynamic controller Pod as
   Hybrid-owned during reuse preflight. It is finite rollout state, not a
   foreign workload; delete/recreate only its Job after isolation validation.
@@ -2033,3 +2037,95 @@ Accepted locally: 2026-08-11.
   deliberate replacements.
 - Do not change policy, lookahead, MC, learning, utility, SLA, equilibrium,
   latency/jitter, routing, metrics, console output, or belief initialization.
+
+
+## Hybrid management/workload node-separation decisions
+
+Accepted locally: 2026-08-15. Live replacement of the current cluster remains
+separately gated.
+
+- Use exactly one kind control-plane and one kind worker named
+  `ibg-hybrid-control-plane` and `ibg-hybrid-worker`. This is management/workload
+  separation inside one physical host, not multi-worker or multi-host evidence.
+- Give only the worker `ibg-hybrid.workload-node=true`. Require that selector on
+  every Hybrid replica, flow-generator, and finite controller Job Pod template.
+  Do not rely only on the default control-plane taint.
+- Fail closed unless both nodes are Ready, their control-plane/workload roles are
+  disjoint, and every existing Hybrid workload Pod is bound to the worker. The
+  historical one-node cluster is not an in-place migration target for the new
+  runner.
+- Validate both Hybrid images on both kind nodes while collecting serving CRI
+  statistics from the worker that actually hosts the containers.
+- Size dynamic admission against worker allocatable resources only. Count
+  existing nonterminal worker-bound requests plus the unchanged proposed
+  replica/flow-generator/controller requests; exclude control-plane management
+  demand and terminal Jobs from the worker workload sum.
+- Preserve every accepted Hybrid algorithm, L=2 routing, selected-only learning,
+  physical/observation jitter, physical-only outcome utility/SLA, planning-link
+  versus measured-pair separation, telemetry, resource declaration, rollout,
+  profile, and console contract. Preserve frozen Exact and MILP sources.
+- Require separate approval before deleting or replacing the current live
+  `ibg-hybrid` cluster. A future clean-cluster gate must prove actual worker-only
+  replica/flow-generator/controller placement, worker resource fit, restart and
+  readiness safety, and unchanged pure/Kernel parity before this correction is
+  accepted as live evidence.
+- Make no same-worker/cross-worker, multi-host, NIC, SR-IOV, DPDK/VPP, hugepage,
+  line-rate, or datapath-performance claim from this topology.
+
+
+## Hybrid two-node bootstrap readiness decision
+
+Accepted: 2026-08-15.
+
+- Do not treat kind's control-plane-oriented create-time Ready message as proof
+  that the dedicated worker has completed its join.
+- On fresh creation, wait explicitly for both exact Hybrid node identities to
+  become Ready, then run the unchanged strict topology/isolation preflight.
+- Retain the newly created dedicated cluster after a fail-closed post-create
+  error; do not delete it implicitly. A subsequent normal run may reuse it
+  after the inventory passes.
+- This is lifecycle ordering only. Do not weaken worker-only scheduling or
+  alter Hybrid/Exact behavior, resources, telemetry, or evidence claims.
+
+- Treat an existing validated dedicated cluster with no Hybrid namespace as a
+  resumable pristine bootstrap, not as a deployed cluster and not as grounds
+  for implicit deletion. Once the namespace exists, retain all strict existing-
+  state discovery and reconciliation requirements.
+
+
+## Hybrid two-node confirmation-recording decision
+
+Accepted: 2026-08-15.
+
+- Record the user's successful corrected live test as functional confirmation.
+- Do not invent or preserve unreported dimensions, placements, parity values,
+  telemetry values, restart counts, resource measurements, or run artifacts.
+- Treat this as sufficient closure for the requested functional topology work,
+  but not as formal performance or datapath evidence.
+
+
+## Deferred Hybrid robustness and footprint decisions
+
+Accepted for future planning: 2026-08-15. Implementation is deferred until the
+user explicitly resumes each workstream.
+
+- Add a Hybrid opt-in `tc/netem` robustness mode while keeping Kernel as the
+  only runtime path and ordinary runs unchanged. Start with controlled
+  delay/jitter and matched no-impairment runs. Do not add packet loss, retries,
+  imputation, or missing-observation semantics without a separate decision.
+- Preserve the separation between transport impairment, physical processing
+  jitter, and observation-only learning noise. Netem must not become an input
+  to placement, learning, utility/SLA, or the declared pair formula.
+- Verify the existing Hybrid CSV functions before deciding whether to retain,
+  repair, wrap, or replace their production interface. Tests must use temporary
+  outputs and must not rewrite historical CSV data.
+- Prefer host-side, explicitly enabled CSV generation from completed structured
+  Hybrid results. Do not restore import-time file writes or require Kubernetes
+  persistent storage.
+- Add a versioned, opt-in per-timeslot Hybrid control-plane footprint. Define
+  payload categories, byte serialization, and message-count boundaries before
+  implementation; distinguish application/logical bytes from network wire
+  bytes and exclude selected-route forwarder RPCs.
+- Preserve all accepted Hybrid algorithm, pruning/lookahead/MC, profile,
+  separated-jitter learning, physical-only outcome, utility/SLA, telemetry,
+  rollout, worker placement, and frozen Exact behavior across all three items.

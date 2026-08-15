@@ -136,7 +136,7 @@ def _runtime_stats(replica_count: int = 2) -> tuple:
         (
             "docker",
             "exec",
-            "ibg-hybrid-control-plane",
+            runner.WORKER_NODE_NAME,
             "crictl",
             "stats",
             "--label",

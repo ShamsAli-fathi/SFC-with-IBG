@@ -45,6 +45,8 @@ spec:
         ibg-hybrid.stage: "1"
     spec:
       automountServiceAccountToken: false
+      nodeSelector:
+        ibg-hybrid.workload-node: "true"
       containers:
         - name: private-processor
           image: ibg-hybrid-testbed:kernel-service-v1
@@ -158,6 +160,8 @@ spec:
         ibg-hybrid.stage: "2"
     spec:
       automountServiceAccountToken: false
+      nodeSelector:
+        ibg-hybrid.workload-node: "true"
       containers:
         - name: private-processor
           image: ibg-hybrid-testbed:kernel-service-v1
@@ -243,6 +247,8 @@ spec:
         ibg-hybrid.stage: "3"
     spec:
       automountServiceAccountToken: false
+      nodeSelector:
+        ibg-hybrid.workload-node: "true"
       containers:
         - name: private-processor
           image: ibg-hybrid-testbed:kernel-service-v1

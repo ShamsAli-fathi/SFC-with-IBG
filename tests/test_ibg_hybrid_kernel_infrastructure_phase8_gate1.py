@@ -104,7 +104,7 @@ def _kernelized(result):
                     choice=ReplicaChoice(stage, replica),
                     pod_name=f"hybrid-stage-{stage}-{replica - 1}",
                     pod_uid=f"uid-{stage}-{replica}",
-                    node_name="ibg-hybrid-control-plane",
+                    node_name=runner.WORKER_NODE_NAME,
                 )
                 for stage in range(1, 4)
                 for replica in range(1, 3)
@@ -135,7 +135,14 @@ def _statefulsets():
                     },
                     "template": {
                         "metadata": {"labels": labels},
-                        "spec": {"containers": [{"name": "serving"}]},
+                        "spec": {
+                            "nodeSelector": {
+                                runner.WORKLOAD_NODE_LABEL: (
+                                    runner.WORKLOAD_NODE_LABEL_VALUE
+                                )
+                            },
+                            "containers": [{"name": "serving"}],
+                        },
                     },
                 },
             }
@@ -157,6 +164,7 @@ def _serving_pods():
                         "uid": f"uid-{name}",
                         "labels": dict(ownership.replica_labels(stage)),
                     },
+                    "spec": {"nodeName": runner.WORKER_NODE_NAME},
                     "status": {
                         "phase": "Running",
                         "conditions": [{"type": "Ready", "status": "True"}],
@@ -178,6 +186,7 @@ def _serving_pods():
                     "app.kubernetes.io/part-of": "ibg-hybrid-testbed",
                 },
             },
+            "spec": {"nodeName": runner.WORKER_NODE_NAME},
             "status": {
                 "phase": "Running",
                 "conditions": [{"type": "Ready", "status": "True"}],

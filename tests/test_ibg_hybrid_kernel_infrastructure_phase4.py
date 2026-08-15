@@ -269,14 +269,31 @@ def _inventory(names, *, namespace=None, ready=False):
                     "app.kubernetes.io/part-of": "ibg-hybrid-testbed",
                 }
         item = {"metadata": metadata}
-        if ready:
-            item["status"] = {
-                "phase": "Running",
-                "conditions": [{"type": "Ready", "status": "True"}],
-                "containerStatuses": [
-                    {"name": "serving", "restartCount": 0}
-                ],
+        is_control_plane = name == cluster_runner.CONTROL_PLANE_NODE_NAME
+        is_worker = name == cluster_runner.WORKER_NODE_NAME
+        if is_control_plane:
+            metadata["labels"] = {"node-role.kubernetes.io/control-plane": ""}
+        elif is_worker:
+            metadata["labels"] = {
+                cluster_runner.WORKLOAD_NODE_LABEL: (
+                    cluster_runner.WORKLOAD_NODE_LABEL_VALUE
+                )
             }
+        if namespace == cluster_runner.HYBRID_NAMESPACE:
+            item["spec"] = {"nodeName": cluster_runner.WORKER_NODE_NAME}
+        if ready or is_control_plane or is_worker:
+            item["status"] = {
+                "conditions": [{"type": "Ready", "status": "True"}],
+            }
+            if ready:
+                item["status"].update(
+                    {
+                        "phase": "Running",
+                        "containerStatuses": [
+                            {"name": "serving", "restartCount": 0}
+                        ],
+                    }
+                )
         items.append(item)
     return {"items": items}
 
@@ -308,26 +325,39 @@ def _statefulset_inventory(replicas=1):
                             "ibg-hybrid.stage": str(stage),
                         }
                     },
-                    "template": {"metadata": {"labels": labels}},
+                    "template": {
+                        "metadata": {"labels": labels},
+                        "spec": {
+                            "nodeSelector": {
+                                cluster_runner.WORKLOAD_NODE_LABEL: (
+                                    cluster_runner.WORKLOAD_NODE_LABEL_VALUE
+                                )
+                            }
+                        },
+                    },
                 },
             }
         )
     return {"items": items}
 
 
-def test_phase4_cluster_boundary_is_dedicated_single_node_and_local_only():
+def test_phase4_cluster_boundary_is_dedicated_two_node_and_local_only():
     kind_config = (DEPLOY / "kind-config.yaml").read_text()
     runner_source = (
         ROOT / "scripts" / "run_hybrid_kernel_phase4.py"
     ).read_text()
 
     assert kind_config.count("role: control-plane") == 1
-    assert "role: worker" not in kind_config
+    assert kind_config.count("role: worker") == 1
+    assert f'{cluster_runner.WORKLOAD_NODE_LABEL}: "true"' in kind_config
+    assert cluster_runner.EXPECTED_NODE_NAMES == {
+        cluster_runner.CONTROL_PLANE_NODE_NAME,
+        cluster_runner.WORKER_NODE_NAME,
+    }
     assert cluster_runner.CLUSTER_NAME == "ibg-hybrid"
     assert cluster_runner.KUBECTL_CONTEXT == "kind-ibg-hybrid"
     assert "kind-ibg\"" not in runner_source
     assert "ibg-control-plane" not in runner_source
-    assert "ibg-worker" not in runner_source
     assert "docker image inspect" not in runner_source
     assert "--pull=false" in runner_source
     assert "--network=none" in runner_source
@@ -350,14 +380,24 @@ def test_phase4_cluster_inventory_rejects_shared_or_foreign_workloads():
 
     with pytest.raises(RuntimeError, match="foreign baseline namespaces"):
         cluster_runner.validate_cluster_inventory(
-            nodes=_inventory(["ibg-hybrid-control-plane"]),
+            nodes=_inventory(
+                [
+                    cluster_runner.CONTROL_PLANE_NODE_NAME,
+                    cluster_runner.WORKER_NODE_NAME,
+                ]
+            ),
             namespaces=_inventory(["kube-system", "milp-testbed"]),
             pods=clean_pods,
         )
 
     with pytest.raises(RuntimeError, match="foreign workload Pods"):
         cluster_runner.validate_cluster_inventory(
-            nodes=_inventory(["ibg-hybrid-control-plane"]),
+            nodes=_inventory(
+                [
+                    cluster_runner.CONTROL_PLANE_NODE_NAME,
+                    cluster_runner.WORKER_NODE_NAME,
+                ]
+            ),
             namespaces=clean_namespaces,
             pods=_inventory(["other"], namespace="default", ready=True),
         )
@@ -384,7 +424,14 @@ def test_phase4_runner_retains_dedicated_cluster_after_failed_run(monkeypatch):
             cluster_exists = False
             return ""
         if command == cluster_runner._kubectl("get", "nodes", "-o", "json"):
-            return json.dumps(_inventory(["ibg-hybrid-control-plane"]))
+            return json.dumps(
+                _inventory(
+                    [
+                        cluster_runner.CONTROL_PLANE_NODE_NAME,
+                        cluster_runner.WORKER_NODE_NAME,
+                    ]
+                )
+            )
         if command == cluster_runner._kubectl(
             "get", "namespaces", "-o", "json"
         ):
@@ -404,8 +451,41 @@ def test_phase4_runner_retains_dedicated_cluster_after_failed_run(monkeypatch):
         cluster_runner.run_small(execute=fake_execute)
 
     assert cluster_exists
+    command_values = [command for command, _capture in commands]
+    create_index = next(
+        index
+        for index, command in enumerate(command_values)
+        if command[:3] == ("kind", "create", "cluster")
+    )
+    worker_wait = cluster_runner._kubectl(
+        "wait",
+        "--for=condition=Ready",
+        f"node/{cluster_runner.CONTROL_PLANE_NODE_NAME}",
+        f"node/{cluster_runner.WORKER_NODE_NAME}",
+        "--timeout=120s",
+    )
+    wait_index = command_values.index(worker_wait)
+    inventory_index = command_values.index(
+        cluster_runner._kubectl("get", "nodes", "-o", "json")
+    )
+    assert create_index < wait_index < inventory_index
     assert not any(
         command[:3] == ("kind", "delete", "cluster")
+        for command, _capture in commands
+    )
+
+    commands.clear()
+    with pytest.raises(RuntimeError, match="synthetic post-create failure"):
+        cluster_runner.run_small(execute=fake_execute)
+    assert not any(
+        command[:3] == ("kind", "create", "cluster")
+        for command, _capture in commands
+    )
+    assert not any(
+        command == cluster_runner._kubectl(
+            "get", "statefulsets", "-n", cluster_runner.HYBRID_NAMESPACE,
+            "-o", "json"
+        )
         for command, _capture in commands
     )
 
@@ -457,7 +537,14 @@ def test_phase4_runner_reuses_cluster_and_recreates_only_controller_job(
         if command[:3] == ("docker", "image", "inspect"):
             return "{}"
         if command == cluster_runner._kubectl("get", "nodes", "-o", "json"):
-            return json.dumps(_inventory(["ibg-hybrid-control-plane"]))
+            return json.dumps(
+                _inventory(
+                    [
+                        cluster_runner.CONTROL_PLANE_NODE_NAME,
+                        cluster_runner.WORKER_NODE_NAME,
+                    ]
+                )
+            )
         if command == cluster_runner._kubectl(
             "get", "namespaces", "-o", "json"
         ):
@@ -662,3 +749,91 @@ def test_phase4_cluster_runner_import_is_silent_and_side_effect_free(tmp_path):
     assert completed.stdout == ""
     assert completed.stderr == ""
     assert list(tmp_path.iterdir()) == []
+
+
+def test_hybrid_pod_templates_select_only_the_dedicated_worker():
+    completed = subprocess.run(
+        ["kubectl", "kustomize", str(DEPLOY)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    rendered = completed.stdout
+    assert rendered.count("nodeSelector:") == 4
+    assert rendered.count(
+        f'{cluster_runner.WORKLOAD_NODE_LABEL}: "true"'
+    ) == 4
+
+    controller_jobs = (
+        ROOT / "deploy" / "hybrid-kubernetes" / "controller-job.yaml",
+        ROOT / "deploy" / "hybrid-kubernetes" / "dynamic-controller-job.yaml",
+        DEPLOY / "controller-job.yaml",
+        ROOT / "deploy" / "hybrid-kubernetes-phase6-3x3x2" / "controller-job.yaml",
+        ROOT / "deploy" / "hybrid-kubernetes-phase7-3x3x2" / "controller-job.yaml",
+        ROOT
+        / "deploy"
+        / "hybrid-kubernetes-phase7.5-3x3x2"
+        / "controller-job.yaml",
+        ROOT
+        / "deploy"
+        / "hybrid-kubernetes-phase8-gate1-4x3x2"
+        / "controller-job.yaml",
+    )
+    for job_path in controller_jobs:
+        job = job_path.read_text(encoding="utf-8")
+        assert job.count("nodeSelector:") == 1
+        assert (
+            f'{cluster_runner.WORKLOAD_NODE_LABEL}: "true"' in job
+        )
+
+
+def test_cluster_inventory_requires_exact_ready_roles_and_worker_placement():
+    nodes = _inventory(
+        [cluster_runner.CONTROL_PLANE_NODE_NAME, cluster_runner.WORKER_NODE_NAME]
+    )
+    namespaces = _inventory(
+        ["default", "kube-system", cluster_runner.HYBRID_NAMESPACE]
+    )
+    misplaced = _inventory(
+        ["hybrid-stage-1-0"],
+        namespace=cluster_runner.HYBRID_NAMESPACE,
+        ready=True,
+    )
+    misplaced["items"][0]["spec"]["nodeName"] = (
+        cluster_runner.CONTROL_PLANE_NODE_NAME
+    )
+    with pytest.raises(RuntimeError, match="outside the dedicated worker"):
+        cluster_runner.validate_cluster_inventory(
+            nodes=nodes,
+            namespaces=namespaces,
+            pods=misplaced,
+        )
+
+    invalid_nodes = json.loads(json.dumps(nodes))
+    invalid_nodes["items"][1]["metadata"]["labels"].clear()
+    with pytest.raises(RuntimeError, match="node roles"):
+        cluster_runner.validate_cluster_inventory(
+            nodes=invalid_nodes,
+            namespaces=namespaces,
+            pods=_inventory([], namespace="kube-system"),
+        )
+
+
+def test_rollout_ready_gate_rejects_a_serving_pod_off_worker():
+    serving = _inventory(
+        [
+            "hybrid-stage-1-0",
+            "hybrid-stage-2-0",
+            "hybrid-stage-3-0",
+            "ibg-hybrid-flow-generator-abcde",
+        ],
+        namespace=cluster_runner.HYBRID_NAMESPACE,
+        ready=True,
+    )
+    serving["items"][2]["spec"]["nodeName"] = (
+        cluster_runner.CONTROL_PLANE_NODE_NAME
+    )
+    with pytest.raises(RuntimeError, match="dedicated worker"):
+        cluster_runner._validate_serving_pods(serving, replica_count=1)

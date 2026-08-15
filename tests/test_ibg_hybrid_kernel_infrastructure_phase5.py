@@ -47,7 +47,14 @@ def statefulset(stage, replicas=1, *, name=None, labels=None, selector=None):
                     else selector
                 )
             },
-            "template": {"metadata": {"labels": required}},
+            "template": {
+                "metadata": {"labels": required},
+                "spec": {
+                    "nodeSelector": {
+                        runner.WORKLOAD_NODE_LABEL: runner.WORKLOAD_NODE_LABEL_VALUE
+                    }
+                },
+            },
         },
     }
 
@@ -67,6 +74,7 @@ def ready_pod(stage, ordinal, *, uid=None, restarts=0):
             "uid": uid or f"uid-{name}",
             "labels": dict(OWNERSHIP.replica_labels(stage)),
         },
+        "spec": {"nodeName": runner.WORKER_NODE_NAME},
         "status": {
             "phase": "Running",
             "conditions": [{"type": "Ready", "status": "True"}],
@@ -89,6 +97,7 @@ def flow_generator_pod(*, uid="uid-flow-generator", restarts=0):
                 "app.kubernetes.io/part-of": "ibg-hybrid-testbed",
             },
         },
+        "spec": {"nodeName": runner.WORKER_NODE_NAME},
         "status": {
             "phase": "Running",
             "conditions": [{"type": "Ready", "status": "True"}],
@@ -111,17 +120,27 @@ def serving_pods(replicas=1):
 
 
 def names_inventory(names, *, namespace=None):
-    return {
-        "items": [
-            {
-                "metadata": {
-                    "name": name,
-                    **({"namespace": namespace} if namespace else {}),
-                }
+    items = []
+    for name in names:
+        metadata = {
+            "name": name,
+            **({"namespace": namespace} if namespace else {}),
+        }
+        item = {"metadata": metadata}
+        if name == runner.CONTROL_PLANE_NODE_NAME:
+            metadata["labels"] = {"node-role.kubernetes.io/control-plane": ""}
+            item["status"] = {
+                "conditions": [{"type": "Ready", "status": "True"}]
             }
-            for name in names
-        ]
-    }
+        elif name == runner.WORKER_NODE_NAME:
+            metadata["labels"] = {
+                runner.WORKLOAD_NODE_LABEL: runner.WORKLOAD_NODE_LABEL_VALUE
+            }
+            item["status"] = {
+                "conditions": [{"type": "Ready", "status": "True"}]
+            }
+        items.append(item)
+    return {"items": items}
 
 
 class FakeCluster:
@@ -136,7 +155,11 @@ class FakeCluster:
         if command == ("kind", "get", "clusters"):
             return "ibg-hybrid\n"
         if command == runner._kubectl("get", "nodes", "-o", "json"):
-            return json.dumps(names_inventory(["ibg-hybrid-control-plane"]))
+            return json.dumps(
+                names_inventory(
+                    [runner.CONTROL_PLANE_NODE_NAME, runner.WORKER_NODE_NAME]
+                )
+            )
         if command == runner._kubectl("get", "namespaces", "-o", "json"):
             return json.dumps(
                 names_inventory(
@@ -200,12 +223,14 @@ class FakeCluster:
             )
             return json.dumps([{"Id": f"sha256:{image_id}"}])
         if command == ("kind", "get", "nodes", "--name", "ibg-hybrid"):
-            return "ibg-hybrid-control-plane\n"
-        if command[:4] == (
-            "docker",
-            "exec",
-            "ibg-hybrid-control-plane",
-            "crictl",
+            return (
+                f"{runner.CONTROL_PLANE_NODE_NAME}\n"
+                f"{runner.WORKER_NODE_NAME}\n"
+            )
+        if (
+            command[:2] == ("docker", "exec")
+            and command[2] in runner.EXPECTED_NODE_NAMES
+            and command[3] == "crictl"
         ):
             controller_id = "c" * 64 if self.image_mismatch else CONTROLLER_ID
             return json.dumps(
@@ -378,7 +403,9 @@ def test_phase5_cluster_preflight_rejects_foreign_hybrid_namespace_pod():
     foreign = names_inventory(["foreign-workload"], namespace=runner.HYBRID_NAMESPACE)
     with pytest.raises(RuntimeError, match="foreign workload Pods"):
         runner.validate_cluster_inventory(
-            nodes=names_inventory(["ibg-hybrid-control-plane"]),
+            nodes=names_inventory(
+                [runner.CONTROL_PLANE_NODE_NAME, runner.WORKER_NODE_NAME]
+            ),
             namespaces=names_inventory(
                 ["default", "kube-system", runner.HYBRID_NAMESPACE]
             ),

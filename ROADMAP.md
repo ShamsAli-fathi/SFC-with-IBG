@@ -1291,7 +1291,6 @@ default 15x3x10 Kernel result shape was validated with a supplied complete
 incumbent (15 routes, 30 observations/assignments, 15 pairs), but deploying
 30 two-container replica Pods was not assumed safe or claimed as live
 evidence.
-
 Phase 6 remains replay and diagnostic compatibility. It may be opened only by
 explicit user direction and must not silently add netem, forwarding/cgroup
 diagnostics, DPDK/VPP, bandits, learning, Gurobi claims, or reporting changes.
@@ -2330,8 +2329,18 @@ At `10x3x5`, both live runs passed twenty-observation/ten-pair telemetry,
 skipped-stage absence, noncontiguous/stage-2-first routes, admission/final-load
 checks, selected-only learning, belief retention, seedless provenance,
 physical/observation and planning/measured separation, and pure/Kernel parity.
-The existing one-node resource envelope remained safe without resource or
-image changes. Shared `ibg` nodes stayed stopped.
+The then-current one-node resource envelope remained safe without resource or
+image changes. Shared `ibg` nodes stayed stopped. The next separately approved
+topology correction is one Hybrid control-plane node plus one worker node, with
+all Hybrid workloads on the worker. It must validate worker-only placement and
+the two-node resource envelope; it deliberately cannot establish same-worker
+versus cross-worker workload-path evidence.
+
+The stopped command printed a 15-flow selected topology while its controller
+evidence recorded `num_flows: 20`. A later user test confirmed the requested
+flow value is propagated correctly, so treat the stopped-run mismatch as an
+interrupted-run anomaly rather than a worker-topology gate blocker. Do not use
+that stopped run as 15-flow comparison evidence.
 
 Validation passes 9 focused dynamic-topology tests, 234 complete Hybrid tests,
 119 relevant frozen Exact tests, and 194 frozen MILP launcher/profile/rollout
@@ -2488,3 +2497,99 @@ No live migration is part of this completion. The next separately approved gate
 must first re-snapshot the dedicated cluster, verify the expected legacy
 15-flow/3-stage/10-replica profile, then run one explicit seeded refresh and an
 unchanged seeded rerun to prove affected-versus-unaffected UID lineage.
+
+
+### Hybrid one-control-plane/one-worker topology correction implemented locally
+
+Implemented locally: 2026-08-15. Repository phases 1 and 2 are complete; the
+clean-cluster live gate remains pending separate approval.
+
+- The kind configuration now creates one control-plane and one labelled worker.
+  All replica StatefulSets, the flow generator, and all retained controller Job
+  templates select the worker label.
+- The launcher now requires the exact two Ready roles, rejects Hybrid workloads
+  bound anywhere except the worker, repeats placement validation at serving
+  rollout gates, validates node-local images on both nodes, and collects Phase 7
+  CRI serving statistics from the worker.
+- Dynamic resource preflight now uses worker allocatable CPU/memory and only
+  worker-bound nonterminal Pod requests, plus the unchanged added-replica,
+  fresh-cluster flow-generator, and finite-controller request formulas.
+- Focused tests cover kind topology, all long-running and finite-Job selectors,
+  invalid node roles, control-plane workload rejection, rollout-ready placement,
+  two-node image validation, and worker-only resource acceptance/rejection.
+- Local validation passes 183 Hybrid Kernel/infrastructure tests and 93 pure
+  Hybrid tests, for 276 Hybrid tests in memory-bounded groups. The established
+  119 relevant frozen Exact regressions pass. All seven retained Hybrid
+  Kustomize projections and all seven controller Job templates render offline;
+  changed Python compiles and `git diff --check` passes.
+
+Pending live gate, only after explicit approval: cleanly replace the existing
+one-node `ibg-hybrid` cluster, require the two expected node identities/labels
+and Ready states, verify every replica and flow-generator Pod plus the finite
+controller Pod actually runs on `ibg-hybrid-worker`, run worker resource
+preflight, and require the existing pure/Kernel parity and telemetry gates with
+zero unsafe restart/pressure behavior. Use an explicitly selected finite
+production command and correct requested-flow propagation. Do not reuse the
+stopped mismatch as 15-flow evidence. The gate cannot establish same-worker
+versus cross-worker workload behavior, multi-host networking, NIC, or line-rate
+evidence.
+
+
+### Hybrid clean-cluster bootstrap readiness race corrected
+
+Corrected: 2026-08-15. The user-authorized 15-flow/3-stage/7-replica launch
+created the intended two-node cluster, then failed before build/deployment
+because the worker had not reached Ready when the strict inventory check ran.
+The launcher now waits for both exact nodes after fresh creation and before
+preflight. Fifty-five focused topology/dynamic-rollout tests pass, along with
+compilation and `git diff --check`; the read-only live preflight passes on the
+retained two-node cluster.
+
+The remaining live gate resumes with the same normal-build command against the
+existing empty cluster. It must still prove resource fit, worker-only replica,
+flow-generator, and controller placement, rollout/restart safety, and pure/
+Kernel parity. No same-worker/cross-worker, multi-host, NIC, or line-rate claim
+is available from this topology.
+
+The retained-cluster resume case is covered: absence of the Hybrid namespace
+selects the existing namespace-first clean bootstrap path with zero existing
+replicas. Read-only live inspection confirms that this exact condition holds;
+only Kubernetes management Pods currently exist.
+
+
+### Hybrid two-node functional gate user-confirmed
+
+Confirmed: 2026-08-15. The user reran a test after reviewing the recent
+corrections and reported that it works. The requested management/workload
+separation implementation is therefore functionally complete for the current
+scope. No detailed result capture or formal performance-evidence phase is
+required unless separately requested.
+
+
+### Deferred Hybrid follow-up plan
+
+Recorded: 2026-08-15. These phases are intentionally not started.
+
+1. **Hybrid netem robustness.** Specify the supported delay/jitter parameters,
+   replica interface and privilege boundary, trace provenance, enable/disable
+   rollout behavior, and matched baseline methodology. Implement default-off
+   Kernel impairment, focused manifest/launcher/qdisc-cleanup tests, and a
+   summarizer gate for convergence, posterior development, selected-state mix,
+   utility/SLA integrity, and unchanged pure-policy behavior. Packet loss is a
+   separate future scope.
+2. **Hybrid CSV verification.** Characterize every retained writer in
+   `IBG_Hybrid/header.py` and `IBG_Hybrid/report.py`; add temporary-directory
+   tests for first write, append, unequal-length columns, identifiers, malformed
+   input, and metric semantics. Then decide explicitly whether production
+   should call corrected legacy helpers or a host-side structured-trace
+   exporter. Verify that default runs create no CSV files.
+3. **Hybrid control-plane footprint.** Define a versioned per-timeslot schema
+   and opt-in flag, with categorized controller-boundary bytes/messages and an
+   explicit logical/application-versus-wire interpretation. Instrument without
+   changing execution, validate exact component sums and disabled-mode absence,
+   add summary/export coverage if requested, and run Pure/Kernel regression and
+   live integrity gates.
+
+Each phase requires a focused implementation review and authorization when it
+is resumed. No DPDK/VPP, multi-host, NIC, line-rate, algorithm, learning, or
+outcome change is part of this plan.

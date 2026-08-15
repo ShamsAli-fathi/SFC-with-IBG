@@ -34,6 +34,8 @@ spec:
         app.kubernetes.io/part-of: ibg-hybrid-testbed
     spec:
       automountServiceAccountToken: false
+      nodeSelector:
+        ibg-hybrid.workload-node: "true"
       containers:
         - name: flow-generator
           image: ibg-hybrid-testbed:kernel-service-v1

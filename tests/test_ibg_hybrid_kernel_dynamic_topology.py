@@ -80,7 +80,7 @@ def _generated(flows=10, replicas=5, profile_seed=None):
 
 def test_completed_dynamic_controller_pod_remains_owned_during_rerun_preflight():
     runner.validate_cluster_inventory(
-        nodes={"items": [{"metadata": {"name": "ibg-hybrid-control-plane"}}]},
+        nodes=_nodes(),
         namespaces={
             "items": [
                 {"metadata": {"name": name}}
@@ -103,6 +103,7 @@ def test_completed_dynamic_controller_pod_remains_owned_during_rerun_preflight()
                             "app.kubernetes.io/part-of": "ibg-hybrid-testbed",
                         },
                     },
+                    "spec": {"nodeName": runner.WORKER_NODE_NAME},
                     "status": {"phase": "Succeeded"},
                 }
             ]
@@ -359,6 +360,11 @@ def _statefulsets(replicas):
                     "template": {
                         "metadata": {"labels": labels},
                         "spec": {
+                            "nodeSelector": {
+                                runner.WORKLOAD_NODE_LABEL: (
+                                    runner.WORKLOAD_NODE_LABEL_VALUE
+                                )
+                            },
                             "containers": [
                                 {
                                     "name": "private-processor",
@@ -396,9 +402,12 @@ def _pods(replicas, generations=None):
                         "uid": f"uid-{name}-generation-{generations.get(name, 0)}",
                         "labels": dict(ownership.replica_labels(stage)),
                     },
-                    "spec": _statefulsets(replicas)["items"][stage - 1]["spec"][
-                        "template"
-                    ]["spec"],
+                    "spec": {
+                        **_statefulsets(replicas)["items"][stage - 1]["spec"][
+                            "template"
+                        ]["spec"],
+                        "nodeName": runner.WORKER_NODE_NAME,
+                    },
                     "status": {
                         "phase": "Running",
                         "conditions": [{"type": "Ready", "status": "True"}],
@@ -421,6 +430,7 @@ def _pods(replicas, generations=None):
                 },
             },
             "spec": {
+                "nodeName": runner.WORKER_NODE_NAME,
                 "containers": [
                     {
                         "name": "flow-generator",
@@ -428,7 +438,7 @@ def _pods(replicas, generations=None):
                             "requests": {"cpu": "50m", "memory": "128Mi"}
                         },
                     }
-                ]
+                ],
             },
             "status": {
                 "phase": "Running",
@@ -444,6 +454,40 @@ def _pods(replicas, generations=None):
 
 def _names(names):
     return {"items": [{"metadata": {"name": name}} for name in names]}
+
+
+def _nodes(*, worker_cpu="4", worker_memory="16Gi"):
+    return {
+        "items": [
+            {
+                "metadata": {
+                    "name": runner.CONTROL_PLANE_NODE_NAME,
+                    "labels": {"node-role.kubernetes.io/control-plane": ""},
+                },
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                    "allocatable": {"cpu": "4", "memory": "16Gi"},
+                },
+            },
+            {
+                "metadata": {
+                    "name": runner.WORKER_NODE_NAME,
+                    "labels": {
+                        runner.WORKLOAD_NODE_LABEL: (
+                            runner.WORKLOAD_NODE_LABEL_VALUE
+                        )
+                    },
+                },
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                    "allocatable": {
+                        "cpu": worker_cpu,
+                        "memory": worker_memory,
+                    },
+                },
+            },
+        ]
+    }
 
 
 def _configmaps(runtime, controller):
@@ -482,11 +526,7 @@ class FakeDynamicCluster:
         if command == ("kind", "get", "clusters"):
             return "ibg-hybrid\n"
         if command == runner._kubectl("get", "nodes", "-o", "json"):
-            document = _names(["ibg-hybrid-control-plane"])
-            document["items"][0]["status"] = {
-                "allocatable": {"cpu": "4", "memory": "16Gi"}
-            }
-            return json.dumps(document)
+            return json.dumps(_nodes())
         if command == runner._kubectl("get", "namespaces", "-o", "json"):
             return json.dumps(
                 _names(["default", "kube-system", runner.HYBRID_NAMESPACE])
@@ -514,12 +554,14 @@ class FakeDynamicCluster:
         ):
             return json.dumps(_configmaps(self.runtime, self.controller))
         if command == ("kind", "get", "nodes", "--name", runner.CLUSTER_NAME):
-            return "ibg-hybrid-control-plane\n"
-        if command[:4] == (
-            "docker",
-            "exec",
-            "ibg-hybrid-control-plane",
-            "crictl",
+            return (
+                f"{runner.CONTROL_PLANE_NODE_NAME}\n"
+                f"{runner.WORKER_NODE_NAME}\n"
+            )
+        if (
+            command[:2] == ("docker", "exec")
+            and command[2] in runner.EXPECTED_NODE_NAMES
+            and command[3] == "crictl"
         ):
             return json.dumps(
                 {
@@ -906,7 +948,7 @@ def _kernelized(result, configuration):
                     choice=ReplicaChoice(stage, replica),
                     pod_name=f"hybrid-stage-{stage}-{replica - 1}",
                     pod_uid=f"uid-{stage}-{replica}",
-                    node_name="ibg-hybrid-control-plane",
+                    node_name=runner.WORKER_NODE_NAME,
                 )
                 for stage in range(1, 4)
                 for replica in range(1, configuration.num_replicas + 1)
@@ -1413,3 +1455,96 @@ def test_dynamic_imports_are_silent_rng_neutral_and_file_safe(tmp_path):
     assert completed.stdout == ""
     assert completed.stderr == ""
     assert list(tmp_path.iterdir()) == []
+
+
+def _resource_pod(name, *, node_name, cpu, memory, phase="Running"):
+    return {
+        "metadata": {"name": name, "namespace": "kube-system"},
+        "spec": {
+            "nodeName": node_name,
+            "containers": [
+                {
+                    "name": "container",
+                    "resources": {
+                        "requests": {"cpu": cpu, "memory": memory}
+                    },
+                }
+            ],
+        },
+        "status": {"phase": phase},
+    }
+
+
+def test_resource_preflight_uses_only_the_worker_allocatable_envelope():
+    pods = {
+        "items": [
+            _resource_pod(
+                "control-plane-management",
+                node_name=runner.CONTROL_PLANE_NODE_NAME,
+                cpu="100",
+                memory="100Gi",
+            ),
+            _resource_pod(
+                "worker-system",
+                node_name=runner.WORKER_NODE_NAME,
+                cpu="200m",
+                memory="64Mi",
+            ),
+            _resource_pod(
+                "completed-controller",
+                node_name=runner.WORKER_NODE_NAME,
+                cpu="100",
+                memory="100Gi",
+                phase="Succeeded",
+            ),
+        ]
+    }
+
+    def execute(command, capture_output):
+        assert capture_output
+        if command == runner._kubectl("get", "nodes", "-o", "json"):
+            return json.dumps(_nodes(worker_cpu="2", worker_memory="2Gi"))
+        if command == runner._kubectl("get", "pods", "-A", "-o", "json"):
+            return json.dumps(pods)
+        raise AssertionError(command)
+
+    result = runner._validate_node_resource_capacity(
+        execute,
+        existing_replica_count=0,
+        requested_replica_count=1,
+    )
+    assert result.requested_cpu_milli == 575
+    assert result.allocatable_cpu_milli == 2000
+    assert result.requested_memory_bytes == 1024 * 1024**2
+    assert result.allocatable_memory_bytes == 2 * 1024**3
+    assert result.added_stage_pods == 3
+
+
+def test_resource_preflight_fails_against_worker_not_control_plane_capacity():
+    pods = {
+        "items": [
+            _resource_pod(
+                "worker-system",
+                node_name=runner.WORKER_NODE_NAME,
+                cpu="200m",
+                memory="64Mi",
+            )
+        ]
+    }
+
+    def execute(command, capture_output):
+        assert capture_output
+        if command == runner._kubectl("get", "nodes", "-o", "json"):
+            return json.dumps(
+                _nodes(worker_cpu="500m", worker_memory="512Mi")
+            )
+        if command == runner._kubectl("get", "pods", "-A", "-o", "json"):
+            return json.dumps(pods)
+        raise AssertionError(command)
+
+    with pytest.raises(RuntimeError, match="worker allocatable resources"):
+        runner._validate_node_resource_capacity(
+            execute,
+            existing_replica_count=0,
+            requested_replica_count=1,
+        )

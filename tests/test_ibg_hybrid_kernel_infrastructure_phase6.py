@@ -53,7 +53,12 @@ def _statefulset(stage, replicas=1, *, template_marker=None):
                 else {}
             ),
         },
-        "spec": {"containers": [{"name": "serving", "image": "service"}]},
+        "spec": {
+            "nodeSelector": {
+                runner.WORKLOAD_NODE_LABEL: runner.WORKLOAD_NODE_LABEL_VALUE
+            },
+            "containers": [{"name": "serving", "image": "service"}],
+        },
     }
     return {
         "apiVersion": "apps/v1",
@@ -93,6 +98,7 @@ def _ready_pod(stage, ordinal):
             "uid": f"uid-{name}",
             "labels": dict(ownership.replica_labels(stage)),
         },
+        "spec": {"nodeName": runner.WORKER_NODE_NAME},
         "status": {
             "phase": "Running",
             "conditions": [{"type": "Ready", "status": "True"}],
@@ -122,6 +128,7 @@ def _serving_pods(replicas=1):
                         "app.kubernetes.io/part-of": "ibg-hybrid-testbed",
                     },
                 },
+                "spec": {"nodeName": runner.WORKER_NODE_NAME},
                 "status": {
                     "phase": "Running",
                     "conditions": [{"type": "Ready", "status": "True"}],
@@ -135,17 +142,27 @@ def _serving_pods(replicas=1):
 
 
 def _names(names, *, namespace=None):
-    return {
-        "items": [
-            {
-                "metadata": {
-                    "name": name,
-                    **({"namespace": namespace} if namespace else {}),
-                }
+    items = []
+    for name in names:
+        metadata = {
+            "name": name,
+            **({"namespace": namespace} if namespace else {}),
+        }
+        item = {"metadata": metadata}
+        if name == runner.CONTROL_PLANE_NODE_NAME:
+            metadata["labels"] = {"node-role.kubernetes.io/control-plane": ""}
+            item["status"] = {
+                "conditions": [{"type": "Ready", "status": "True"}]
             }
-            for name in names
-        ]
-    }
+        elif name == runner.WORKER_NODE_NAME:
+            metadata["labels"] = {
+                runner.WORKLOAD_NODE_LABEL: runner.WORKLOAD_NODE_LABEL_VALUE
+            }
+            item["status"] = {
+                "conditions": [{"type": "Ready", "status": "True"}]
+            }
+        items.append(item)
+    return {"items": items}
 
 
 def _configmaps(runtime, controller):
@@ -232,7 +249,7 @@ def _kernelized(result):
                 choice=ReplicaChoice(stage, replica),
                 pod_name=f"hybrid-stage-{stage}-{replica - 1}",
                 pod_uid=f"uid-{stage}-{replica}",
-                node_name="ibg-hybrid-control-plane",
+                node_name=runner.WORKER_NODE_NAME,
             )
             for stage in range(1, 4)
             for replica in range(1, 3)
@@ -369,7 +386,9 @@ class FakePhase6Cluster:
         if command == ("kind", "get", "clusters"):
             return "ibg-hybrid\n"
         if command == runner._kubectl("get", "nodes", "-o", "json"):
-            return json.dumps(_names(["ibg-hybrid-control-plane"]))
+            return json.dumps(
+                _names([runner.CONTROL_PLANE_NODE_NAME, runner.WORKER_NODE_NAME])
+            )
         if command == runner._kubectl("get", "namespaces", "-o", "json"):
             return json.dumps(
                 _names(["default", "kube-system", runner.HYBRID_NAMESPACE])
@@ -396,12 +415,14 @@ class FakePhase6Cluster:
         ):
             return json.dumps(_configmaps(self.runtime, self.controller))
         if command == ("kind", "get", "nodes", "--name", "ibg-hybrid"):
-            return "ibg-hybrid-control-plane\n"
-        if command[:4] == (
-            "docker",
-            "exec",
-            "ibg-hybrid-control-plane",
-            "crictl",
+            return (
+                f"{runner.CONTROL_PLANE_NODE_NAME}\n"
+                f"{runner.WORKER_NODE_NAME}\n"
+            )
+        if (
+            command[:2] == ("docker", "exec")
+            and command[2] in runner.EXPECTED_NODE_NAMES
+            and command[3] == "crictl"
         ):
             return json.dumps(
                 {

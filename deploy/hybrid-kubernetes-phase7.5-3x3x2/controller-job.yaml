@@ -19,6 +19,8 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: ibg-hybrid-controller
+      nodeSelector:
+        ibg-hybrid.workload-node: "true"
       containers:
         - name: controller
           image: ibg-hybrid-testbed:kernel-controller-v1

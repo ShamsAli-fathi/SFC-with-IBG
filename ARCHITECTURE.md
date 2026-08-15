@@ -2122,6 +2122,15 @@ Hybrid live-gate boundary is now the temporary, single-control-plane
 `scripts/run_hybrid_kernel_phase4.py`. Its only accepted kubectl context is
 `kind-ibg-hybrid`.
 
+This single-control-plane configuration is the completed small-gate boundary,
+not the intended workload topology. The next Hybrid infrastructure correction
+is one control-plane node plus one worker node. Hybrid replica StatefulSets,
+the flow generator, and the finite controller Job must run on that worker;
+the control-plane remains reserved for Kubernetes management services. The
+two kind nodes remain containers on one physical host, so this separates
+management and workloads but provides no same-worker versus cross-worker
+workload-path comparison.
+
 The runner is fail-closed at four boundaries. It requires the pinned kind node
 image and both Hybrid images to exist locally before cluster creation; it
 accepts only the exact `ibg-hybrid-control-plane` node identity; it rejects the
@@ -2827,3 +2836,110 @@ StatefulSet Pods one stage at a time. Exact Ready coverage follows every stage
 before the finite controller Job. Unaffected stage Pods and the flow generator
 must preserve UID/restart state; deliberately changed Pods must receive new UIDs
 with zero restarts. No profile hash or accidental rollout is used.
+
+
+## Hybrid management/workload node-separation boundary
+
+Implemented locally: 2026-08-15. No kind, Docker, image, live-traffic, or
+Kubernetes API mutation was performed.
+
+The dedicated Hybrid kind definition now contains exactly
+`ibg-hybrid-control-plane` and `ibg-hybrid-worker`. Only the worker receives
+the immutable scheduling label `ibg-hybrid.workload-node=true`. All three
+replica StatefulSet Pod templates, the flow-generator Deployment Pod template,
+and every retained finite controller Job template select that label. The
+control-plane has no matching workload label and remains the Kubernetes
+management node.
+
+The persistent launcher now accepts only those two Ready node identities and
+roles. It rejects a missing worker, an extra node, a misplaced workload label,
+a worker carrying the control-plane role, or any Hybrid replica, flow-generator,
+or recognized controller Pod whose bound `spec.nodeName` is not
+`ibg-hybrid-worker`. Every serving-Ready gate repeats the worker-placement
+check, so rollout completion cannot be inferred from readiness alone on the
+wrong node. Node-image validation continues to require both Hybrid image
+identities on every kind node.
+
+Dynamic resource admission now compares the requested workload envelope only
+with `ibg-hybrid-worker` allocatable CPU and memory. Existing nonterminal Pods
+bound to that worker are counted; control-plane management Pods and completed
+Jobs are excluded; new replica Pods, a fresh-cluster flow generator, and the
+finite controller request retain their existing formulas and resource
+declarations. Phase 7 CRI statistics now come from the worker container because
+that node owns the serving containers.
+No request/limit, worker count, port, probe, client, keep-alive, algorithm,
+profile, jitter, learning, utility/SLA, telemetry, or rollout-policy value
+changed.
+
+The two kind nodes are still Docker containers on one physical host. This
+boundary provides management/workload separation only. It does not provide a
+same-worker versus cross-worker workload path, multi-host networking, NIC,
+SR-IOV, DPDK/VPP, hugepage, line-rate, or datapath-performance comparison. The
+user-reported historical one-control-plane live state is intentionally
+incompatible with the new exact topology preflight. No successful live-cluster
+read or mutation was part of this local implementation; replacement with a
+clean two-node cluster remains a separately approved live gate.
+
+
+## Hybrid two-node bootstrap readiness gate
+
+Corrected locally: 2026-08-15. A user-authorized first production launch
+created the intended control-plane and worker, but kind's create-time wait
+returned when the control-plane was Ready while the worker was still joining.
+The immediate strict topology preflight therefore failed closed before image
+build, workload deployment, or controller traffic.
+
+After creating a fresh cluster, the launcher now explicitly waits for both
+named nodes to report Ready before reading the exact node-role, workload-label,
+namespace, and Pod inventory. Existing-cluster runs retain the immediate
+fail-closed preflight. This changes only bootstrap ordering; all scheduling,
+resource, rollout, algorithm, learning, outcome, and telemetry contracts remain
+unchanged.
+
+The resumable-bootstrap boundary also recognizes an already existing,
+successfully validated dedicated cluster with no `ibg-hybrid-testbed`
+namespace as pristine. It follows the same namespace-first bootstrap path and
+uses an existing replica count of zero. If the Hybrid namespace exists, the
+unchanged strict StatefulSet/profile reconciliation path remains mandatory.
+
+
+## Hybrid two-node functional confirmation
+
+User-confirmed: 2026-08-15. The corrected production Hybrid launcher completed
+a subsequent live test successfully on the one-control-plane/one-worker kind
+topology. Detailed run output and metrics were intentionally not retained in
+the handoff. This confirms functional availability only and does not add
+same-worker/cross-worker, multi-host, NIC, line-rate, or datapath-performance
+evidence.
+
+
+## Deferred Hybrid robustness and reporting extensions
+
+Recorded for later implementation: 2026-08-15. Three independent, opt-in
+Hybrid extensions are planned. None is implemented by this entry.
+
+First, a Hybrid transport-robustness wrapper will apply controlled `tc/netem`
+impairment around the existing Kernel path. The Exact `netem_v1` boundary is
+the compatibility reference: ordinary runs remain unimpaired, configured
+delay/jitter is transport noise rather than physical or observation jitter,
+and impairment must not enter learning, placement, utility/SLA, or pair-cost
+semantics. Exact Pod/interface scope, configuration provenance, cleanup, and
+matched impaired/unimpaired validation must be reviewed against the Hybrid
+deployment before code is reused. Packet loss, retries, imputation, and
+missing-observation behavior are not implied.
+
+Second, the retained legacy Hybrid CSV helpers in `IBG_Hybrid/header.py` and
+`IBG_Hybrid/report.py` will be characterized and tested. The review must cover
+header creation, append behavior, column alignment, empty/malformed inputs,
+deterministic output, and metric meaning. Any production integration should be
+an explicit host-side export from completed structured Hybrid results, remain
+off by default, and avoid controller-side persistence or import-time writes.
+
+Third, Hybrid will gain an enable-only control-plane data-footprint record per
+completed timeslot. The Exact `control_plane_v1` application-payload boundary
+is the reference: count controller-boundary payload bytes and messages by
+category, exclude forwarder-to-forwarder selected-route traffic, and state
+clearly whether values are canonical logical bytes or observed application-body
+bytes rather than wire bytes. The versioned record must be absent when disabled
+and must not affect policy, traffic, learning, telemetry, utility/SLA, or
+equilibrium.

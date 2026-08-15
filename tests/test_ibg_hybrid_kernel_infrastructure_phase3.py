@@ -171,6 +171,7 @@ def test_service_dependency_and_source_inventory_is_lean():
         "fastapi",
         "httpx",
         "uvicorn",
+        "pydantic",
     }
     sources = docker_copy_sources("Dockerfile.service")
     assert sources == set(SERVICE_COPY_MAP) | {
@@ -205,6 +206,7 @@ def test_controller_dependency_and_source_inventory_owns_policy_learning_and_mc(
         "numpy",
         "fastapi",
         "httpx",
+        "pydantic",
     }
     sources = docker_copy_sources("Dockerfile.controller")
     assert sources == set(CONTROLLER_COPY_MAP) | {
