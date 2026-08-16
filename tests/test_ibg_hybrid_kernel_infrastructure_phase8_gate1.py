@@ -423,6 +423,10 @@ def test_phase8_gate1_runner_reconciles_without_scale_restart_or_process_change(
 
     def execute(command, capture):
         commands.append(command)
+        if command == runner._kubectl("get", "namespaces", "-o", "json"):
+            return json.dumps(
+                {"items": [{"metadata": {"name": runner.HYBRID_NAMESPACE}}]}
+            )
         return "{}\n" if "logs" in command else ""
 
     runner.run_small(

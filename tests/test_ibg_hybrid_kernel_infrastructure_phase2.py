@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -12,6 +13,11 @@ from IBG_Hybrid.contracts import HybridConfiguration, ReplicaChoice
 from IBG_Hybrid.kernel_controller import (
     HYBRID_KERNEL_OBSERVATION_PROVENANCE_VERSION,
     HybridKernelControllerAdapter,
+    HybridKernelFlowGeneratorHttpClient,
+)
+from IBG_Hybrid.control_plane_footprint import (
+    HYBRID_CONTROL_PLANE_DATA_SCHEMA,
+    HybridControlPlaneDataMeter,
 )
 from IBG_Hybrid.kernel_controller_config import (
     controller_input_document_from_mapping,
@@ -495,10 +501,86 @@ def test_controller_places_every_flow_then_sends_one_request_and_retains_beliefs
     )
     assert set(controller.beliefs) == set(uniform)
     assert controller.beliefs != uniform
+    assert first.control_plane is None
 
     second = controller.run_slot(2)
     assert second.slot.beliefs_before == first.slot.beliefs_after
     assert len(generator.requests) == 2
+
+
+def test_controller_footprint_counts_actual_http_bodies_and_exact_messages():
+    inputs = small_controller_inputs()
+    meter = HybridControlPlaneDataMeter()
+    observed = {}
+
+    def kubernetes_handler(request: Request):
+        response = Response(
+            200,
+            request=request,
+            json={"items": pod_list(inputs.configuration)},
+        )
+        observed["kubernetes_request"] = len(request.content)
+        observed["kubernetes_response"] = len(response.content)
+        return response
+
+    api = HybridKubernetesApi(
+        base_url="https://kubernetes.test",
+        token="token",
+        verify=False,
+        transport=MockTransport(kubernetes_handler),
+        control_plane_meter=meter,
+    )
+    discovery = HybridKubernetesReplicaDiscovery(api, inputs.configuration)
+
+    def flow_generator_handler(request: Request):
+        slot_request = HybridKernelRunSlotRequest.model_validate(
+            json.loads(request.content)
+        )
+        body = response_for_request(slot_request).model_dump_json().encode("utf-8")
+        observed["route_request"] = len(request.content)
+        observed["telemetry_response"] = len(body)
+        return Response(
+            200,
+            request=request,
+            content=body,
+            headers={"content-type": "application/json"},
+        )
+
+    flow_generator = HybridKernelFlowGeneratorHttpClient(
+        "http://hybrid-flow-generator.test",
+        transport=MockTransport(flow_generator_handler),
+        control_plane_meter=meter,
+    )
+    uniform = {item.choice: (0.25, 0.25, 0.25, 0.25) for item in inputs.admission}
+    outcome = HybridKernelControllerAdapter(
+        controller_inputs=inputs,
+        discovery=discovery,
+        flow_generator=flow_generator,
+        initial_beliefs=uniform,
+        control_plane_meter=meter,
+    ).run_slot(1)
+
+    footprint = outcome.control_plane
+    assert footprint["schema"] == HYBRID_CONTROL_PLANE_DATA_SCHEMA
+    assert set(footprint) == {"schema", "payload_bytes", "messages"}
+    assert footprint["payload_bytes"] == {
+        "kubernetes_discovery_tx": observed["kubernetes_request"],
+        "kubernetes_discovery_rx": observed["kubernetes_response"],
+        "route_command_tx": observed["route_request"],
+        "selected_telemetry_rx": observed["telemetry_response"],
+        "belief_tx": 0,
+        "belief_rx": 0,
+        "total": sum(observed.values()),
+    }
+    assert footprint["messages"] == {
+        "kubernetes_discovery_tx": 1,
+        "kubernetes_discovery_rx": 1,
+        "route_command_tx": 1,
+        "selected_telemetry_rx": 1,
+        "belief_tx": 0,
+        "belief_rx": 0,
+        "total": 4,
+    }
 
 
 def test_partial_kernel_telemetry_fails_before_learning_and_preserves_beliefs():

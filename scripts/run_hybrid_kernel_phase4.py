@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import hashlib
 import json
+from math import isfinite
 from pathlib import Path
+import secrets
 import subprocess
 import sys
 import tarfile
@@ -18,12 +22,17 @@ from scripts.hybrid_offline_wheelhouse import validate_all_wheelhouses
 
 from IBG_Hybrid.contracts import HybridConfiguration, ReplicaChoice
 from IBG_Hybrid.console_output import HYBRID_SLOT_EVIDENCE_PREFIX
+from IBG_Hybrid.control_plane_footprint import (
+    HYBRID_CONTROL_PLANE_DATA_ENV,
+    validate_hybrid_control_plane_data_snapshot,
+)
 from IBG_Hybrid.kernel_profile_expansion import (
     HYBRID_PROFILE_STATE_ALLOCATION_VERSION,
     HYBRID_PROFILE_STATE_ORDER,
     HybridKernelDynamicTopologyTransition,
     HybridKernelProfileExpansionError,
     generate_dynamic_topology_documents,
+    profile_seed_from_runtime_source_identity,
     seeded_profile_state_counts,
     validate_dynamic_topology_transition,
     validate_append_only_profile_expansion,
@@ -48,6 +57,37 @@ ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_NAME = "ibg-hybrid"
 KUBECTL_CONTEXT = "kind-ibg-hybrid"
 HYBRID_NAMESPACE = "ibg-hybrid-testbed"
+HYBRID_TRACE_CONTRACT_VERSION = "ibg-hybrid-experiment-jsonl-v1"
+DEFAULT_HYBRID_TRACE_DIR = ROOT / "runs"
+HYBRID_CSV_OUTPUT_DIR = ROOT / "figures" / "IBG_hybrid"
+HYBRID_CSV_FILENAMES = (
+    "time.csv",
+    "sla_violations.csv",
+    "aggregate_utility.csv",
+    "jain_index.csv",
+    "replica_results.csv",
+)
+HYBRID_FOOTPRINT_CSV_OUTPUT_DIR = HYBRID_CSV_OUTPUT_DIR / "footprint"
+HYBRID_FOOTPRINT_CSV_FIELDS = (
+    ("kubernetes_discovery_tx_bytes.csv", "payload_bytes", "kubernetes_discovery_tx"),
+    ("kubernetes_discovery_rx_bytes.csv", "payload_bytes", "kubernetes_discovery_rx"),
+    ("route_command_tx_bytes.csv", "payload_bytes", "route_command_tx"),
+    ("selected_telemetry_rx_bytes.csv", "payload_bytes", "selected_telemetry_rx"),
+    ("belief_tx_bytes.csv", "payload_bytes", "belief_tx"),
+    ("belief_rx_bytes.csv", "payload_bytes", "belief_rx"),
+    ("belief_exchange_total_bytes.csv", "payload_bytes", "belief_exchange_total"),
+    ("control_plane_payload_total_bytes.csv", "payload_bytes", "total"),
+    ("kubernetes_discovery_tx_messages.csv", "messages", "kubernetes_discovery_tx"),
+    ("kubernetes_discovery_rx_messages.csv", "messages", "kubernetes_discovery_rx"),
+    ("route_command_tx_messages.csv", "messages", "route_command_tx"),
+    ("selected_telemetry_rx_messages.csv", "messages", "selected_telemetry_rx"),
+    ("belief_tx_messages.csv", "messages", "belief_tx"),
+    ("belief_rx_messages.csv", "messages", "belief_rx"),
+    ("belief_exchange_total_messages.csv", "messages", "belief_exchange_total"),
+    ("control_plane_messages_total.csv", "messages", "total"),
+)
+HYBRID_RANDOM_SERIES_SEED_BITS = 63
+HYBRID_POLICY_ROOT_SEED_ENV = "HYBRID_POLICY_ROOT_SEED"
 KIND_NODE_IMAGE = (
     "kindest/node:v1.36.1@"
     "sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5"
@@ -83,7 +123,9 @@ PHASE75_CONTROLLER_SOURCE_CONFIGMAP = (
     "ibg-hybrid-controller-phase75-source"
 )
 PHASE75_CONTROLLER_SOURCES = (
+    ROOT / "IBG_Hybrid" / "control_plane_footprint.py",
     ROOT / "IBG_Hybrid" / "kernel_controller.py",
+    ROOT / "IBG_Hybrid" / "kernel_kubernetes_discovery.py",
     ROOT / "IBG_Hybrid" / "kernel_phase4_validation.py",
     ROOT / "IBG_Hybrid" / "kernel_controller_cli.py",
     ROOT / "IBG_Hybrid" / "console_output.py",
@@ -1260,6 +1302,7 @@ def _validate_live_profile_expansion(
         target_configuration=boundary.configuration,
         profile_seed=boundary.profile_seed,
         allow_runtime_profile_refresh=refresh_runtime_profiles,
+        allow_interrupted_scale_down=True,
     )
 
 
@@ -1626,6 +1669,391 @@ def _project_controller_log_output(
     return "" if not evidence else "\n".join(evidence) + "\n"
 
 
+def _persist_hybrid_experiment_trace(
+    output: str,
+    *,
+    trace_dir: Path,
+    requested_flows: int,
+    requested_stages: int,
+    requested_replicas: int,
+    max_iterations: int,
+    expected_experiment_seed: int | None = None,
+    series_run_index: int = 1,
+    series_run_count: int = 1,
+    series_id: str | None = None,
+    control_plane_footprint_enabled: bool = False,
+) -> Path:
+    """Validate and persist completed-slot evidence as a host-side JSONL run."""
+
+    documents = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        document = json.loads(line)
+        if not isinstance(document, dict):
+            raise RuntimeError("Hybrid trace evidence line is not an object")
+        documents.append(document)
+    if not documents:
+        raise RuntimeError("Hybrid production run emitted no slot evidence")
+    if len(documents) > max_iterations:
+        raise RuntimeError("Hybrid trace exceeds the configured iteration limit")
+    if not 1 <= series_run_index <= series_run_count:
+        raise RuntimeError("Hybrid trace has invalid series-run provenance")
+    if not isinstance(control_plane_footprint_enabled, bool):
+        raise RuntimeError("Hybrid control-plane footprint setting must be boolean")
+
+    expected_configuration = {
+        "num_flows": requested_flows,
+        "num_stages": requested_stages,
+        "num_replicas": requested_replicas,
+        "stage_budget": 2,
+    }
+    previous_slot = None
+    for document in documents:
+        if document.get("configuration") != expected_configuration:
+            raise RuntimeError("Hybrid trace configuration is inconsistent")
+        slot_id = document.get("slot_id")
+        root_seed = document.get("root_seed")
+        if expected_experiment_seed is not None and root_seed != (
+            expected_experiment_seed
+        ):
+            raise RuntimeError("Hybrid trace experiment seed is inconsistent")
+        if (
+            isinstance(slot_id, bool)
+            or not isinstance(slot_id, int)
+            or slot_id < 1
+            or (previous_slot is not None and slot_id != previous_slot + 1)
+        ):
+            raise RuntimeError("Hybrid trace slot identities are not contiguous")
+        previous_slot = slot_id
+        placements = document.get("placements")
+        if not isinstance(placements, list) or len(placements) != requested_flows:
+            raise RuntimeError("Hybrid trace has incomplete per-flow placements")
+        flow_ids = set()
+        for placement in placements:
+            if not isinstance(placement, dict):
+                raise RuntimeError("Hybrid trace placement is not an object")
+            flow_id = placement.get("flow_id")
+            measured_pair_ms = placement.get("measured_pair_ms")
+            if (
+                isinstance(flow_id, bool)
+                or not isinstance(flow_id, int)
+                or flow_id < 1
+                or flow_id in flow_ids
+                or isinstance(measured_pair_ms, bool)
+                or not isinstance(measured_pair_ms, (int, float))
+                or measured_pair_ms < 0
+            ):
+                raise RuntimeError(
+                    "Hybrid trace has invalid per-flow measured-pair evidence"
+                )
+            flow_ids.add(flow_id)
+        if flow_ids != set(range(1, requested_flows + 1)):
+            raise RuntimeError("Hybrid trace does not cover every configured flow")
+        observations = document.get("observations")
+        if not isinstance(observations, list) or len(observations) != (
+            2 * requested_flows
+        ):
+            raise RuntimeError("Hybrid trace has incomplete selected observations")
+        metrics = document.get("metrics")
+        if not isinstance(metrics, dict) or not isinstance(
+            metrics.get("equilibrium"), bool
+        ):
+            raise RuntimeError("Hybrid trace has invalid slot metrics")
+        control_plane = document.get("control_plane")
+        if control_plane_footprint_enabled:
+            if control_plane is None:
+                raise RuntimeError(
+                    "Hybrid trace lacks enabled control-plane footprint data"
+                )
+            try:
+                validate_hybrid_control_plane_data_snapshot(control_plane)
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Hybrid trace has invalid control-plane footprint: {error}"
+                ) from error
+        elif "control_plane" in document:
+            raise RuntimeError(
+                "Hybrid trace contains disabled control-plane footprint data"
+            )
+    if (
+        expected_experiment_seed is not None
+        and documents[0]["slot_id"] != expected_experiment_seed
+    ):
+        raise RuntimeError("Hybrid trace first slot does not match its experiment seed")
+
+    recorded_at = datetime.now(timezone.utc)
+    timestamp = recorded_at.strftime("%Y%m%dT%H%M%S.%fZ")
+    resolved_series_id = timestamp if series_id is None else series_id
+    if not resolved_series_id or "/" in resolved_series_id:
+        raise RuntimeError("Hybrid trace has invalid series identity")
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    run_suffix = (
+        ""
+        if series_run_count == 1
+        else f"-run{series_run_index:03d}"
+    )
+    trace_path = trace_dir / (
+        f"ibg-hybrid-experiment-{resolved_series_id}{run_suffix}.jsonl"
+    )
+    started = {
+        "event": "run_started",
+        "trace_contract_version": HYBRID_TRACE_CONTRACT_VERSION,
+        "recorded_at_utc": recorded_at.isoformat(),
+        "configuration": expected_configuration,
+        "max_iterations": max_iterations,
+        "policy_mode": documents[0].get("policy_mode"),
+        "mc_workers": documents[0].get("mc_workers"),
+        "experiment_seed": documents[0].get("root_seed"),
+        "series_run_index": series_run_index,
+        "series_run_count": series_run_count,
+        "series_id": resolved_series_id,
+    }
+    completed_slots = [
+        {
+            **document,
+            "event": "iteration_completed",
+            "trace_contract_version": HYBRID_TRACE_CONTRACT_VERSION,
+            "iteration": iteration,
+        }
+        for iteration, document in enumerate(documents, start=1)
+    ]
+    last = documents[-1]
+    completed = {
+        "event": "run_completed",
+        "trace_contract_version": HYBRID_TRACE_CONTRACT_VERSION,
+        "iterations": len(documents),
+        "first_slot_id": documents[0]["slot_id"],
+        "last_slot_id": last["slot_id"],
+        "reached_equilibrium": last["metrics"]["equilibrium"],
+        "final_beliefs": last.get("beliefs_after"),
+        "experiment_seed": last.get("root_seed"),
+        "series_run_index": series_run_index,
+        "series_run_count": series_run_count,
+        "series_id": resolved_series_id,
+    }
+    events = [started, *completed_slots, completed]
+    with trace_path.open("x", encoding="utf-8") as trace:
+        for event in events:
+            trace.write(json.dumps(event, sort_keys=True, separators=(",", ":")))
+            trace.write("\n")
+        trace.flush()
+    return trace_path
+
+
+def _hybrid_csv_run_hash(run_started: Mapping[str, object]) -> str:
+    configuration = run_started.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise ValueError("Hybrid CSV trace has no run configuration")
+    required = ("num_flows", "num_stages", "num_replicas")
+    if any(
+        isinstance(configuration.get(name), bool)
+        or not isinstance(configuration.get(name), int)
+        or configuration[name] < 1
+        for name in required
+    ):
+        raise ValueError("Hybrid CSV trace configuration is invalid")
+    series_id = run_started.get("series_id")
+    run_index = run_started.get("series_run_index")
+    experiment_seed = run_started.get("experiment_seed")
+    if (
+        not isinstance(series_id, str)
+        or not series_id
+        or isinstance(run_index, bool)
+        or not isinstance(run_index, int)
+        or run_index < 1
+        or isinstance(experiment_seed, bool)
+        or not isinstance(experiment_seed, int)
+        or experiment_seed < 1
+    ):
+        raise ValueError("Hybrid CSV trace run provenance is invalid")
+    provenance = (
+        f"{series_id}-run{run_index}-seed{experiment_seed}"
+        f"-f{configuration['num_flows']}-s{configuration['num_stages']}"
+        f"-r{configuration['num_replicas']}"
+    )
+    return hashlib.sha256(provenance.encode("utf-8")).hexdigest()[:6]
+
+
+def _hybrid_csv_belief_snapshot(value: object) -> dict[tuple[int, int], list[float]]:
+    if not isinstance(value, Mapping) or not value:
+        raise ValueError("Hybrid CSV belief snapshot is missing or empty")
+    snapshot = {}
+    for raw_identity, raw_belief in value.items():
+        if not isinstance(raw_identity, str) or raw_identity.count(":") != 1:
+            raise ValueError("Hybrid CSV belief identity is invalid")
+        try:
+            identity = tuple(int(item) for item in raw_identity.split(":"))
+        except ValueError as error:
+            raise ValueError("Hybrid CSV belief identity is invalid") from error
+        if any(item < 1 for item in identity) or identity in snapshot:
+            raise ValueError("Hybrid CSV belief identity is invalid")
+        if (
+            not isinstance(raw_belief, list)
+            or len(raw_belief) != 4
+            or any(
+                isinstance(probability, bool)
+                or not isinstance(probability, (int, float))
+                or not isfinite(float(probability))
+                or probability < 0
+                for probability in raw_belief
+            )
+        ):
+            raise ValueError("Hybrid CSV belief vector is invalid")
+        snapshot[identity] = [float(item) for item in raw_belief]
+    return dict(sorted(snapshot.items()))
+
+
+def _hybrid_footprint_csv_rows(
+    iterations: Sequence[Mapping[str, object]],
+) -> list[dict[str, dict[str, int]]] | None:
+    present = ["control_plane" in event for event in iterations]
+    if any(present) and not all(present):
+        raise ValueError(
+            "Hybrid CSV trace mixes enabled and disabled control-plane footprint"
+        )
+    if not any(present):
+        return None
+
+    rows = []
+    for event in iterations:
+        snapshot = event["control_plane"]
+        validate_hybrid_control_plane_data_snapshot(snapshot)
+        payload = dict(snapshot["payload_bytes"])
+        messages = dict(snapshot["messages"])
+        payload["belief_exchange_total"] = payload["belief_tx"] + payload["belief_rx"]
+        messages["belief_exchange_total"] = (
+            messages["belief_tx"] + messages["belief_rx"]
+        )
+        rows.append({"payload_bytes": payload, "messages": messages})
+    return rows
+
+
+def export_hybrid_csv(
+    trace_path: Path,
+    output_dir: Path = HYBRID_CSV_OUTPUT_DIR,
+) -> tuple[Path, ...]:
+    """Export one completed Hybrid trace into the five retained CSV layouts."""
+
+    from IBG_Hybrid.csv_storage import append_metric_value, read_csv_table
+    from IBG_Hybrid.header import create_belief_csv
+    from IBG_Hybrid.report import (
+        csv_gen_SLA,
+        csv_gen_jain,
+        csv_gen_time,
+        csv_gen_util,
+    )
+
+    with trace_path.open(encoding="utf-8") as trace:
+        events = [json.loads(line) for line in trace if line.strip()]
+    started = [event for event in events if event.get("event") == "run_started"]
+    iterations = [
+        event for event in events if event.get("event") == "iteration_completed"
+    ]
+    completed = [event for event in events if event.get("event") == "run_completed"]
+    if len(started) != 1 or not iterations or len(completed) != 1:
+        raise ValueError("Hybrid CSV export requires one complete experiment trace")
+    if completed[0].get("iterations") != len(iterations):
+        raise ValueError("Hybrid CSV trace completion count is inconsistent")
+
+    metric_rows = []
+    required_metrics = (
+        "elapsed_seconds",
+        "physical_only_sla_violations",
+        "raw_end_to_end_reference_utility",
+        "jain_fairness",
+    )
+    for expected_iteration, event in enumerate(iterations, start=1):
+        if event.get("iteration") != expected_iteration:
+            raise ValueError("Hybrid CSV trace iterations are not contiguous")
+        metrics = event.get("metrics")
+        if not isinstance(metrics, Mapping) or any(
+            name not in metrics for name in required_metrics
+        ):
+            raise ValueError("Hybrid CSV trace lacks required metrics")
+        elapsed = metrics["elapsed_seconds"]
+        violations = metrics["physical_only_sla_violations"]
+        end_to_end_utility = metrics["raw_end_to_end_reference_utility"]
+        fairness = metrics["jain_fairness"]
+        if (
+            isinstance(elapsed, bool)
+            or not isinstance(elapsed, (int, float))
+            or not isfinite(float(elapsed))
+            or elapsed < 0
+            or isinstance(violations, bool)
+            or not isinstance(violations, int)
+            or violations < 0
+            or isinstance(end_to_end_utility, bool)
+            or not isinstance(end_to_end_utility, (int, float))
+            or not isfinite(float(end_to_end_utility))
+            or isinstance(fairness, bool)
+            or not isinstance(fairness, (int, float))
+            or not isfinite(float(fairness))
+            or not 0 <= fairness <= 1
+        ):
+            raise ValueError("Hybrid CSV trace contains an invalid metric value")
+        metric_rows.append((elapsed, violations, end_to_end_utility, fairness))
+
+    belief_snapshots = [
+        _hybrid_csv_belief_snapshot(iterations[0].get("beliefs_before"))
+    ] + [
+        _hybrid_csv_belief_snapshot(event.get("beliefs_after"))
+        for event in iterations
+    ]
+    expected_belief_identities = set(belief_snapshots[0])
+    if any(set(snapshot) != expected_belief_identities for snapshot in belief_snapshots):
+        raise ValueError("Hybrid CSV belief identities change within one run")
+    footprint_rows = _hybrid_footprint_csv_rows(iterations)
+
+    run_id = _hybrid_csv_run_hash(started[0])
+    metric_paths = tuple(output_dir / name for name in HYBRID_CSV_FILENAMES[:4])
+    for path in metric_paths:
+        fieldnames, _rows = read_csv_table(path)
+        if run_id in fieldnames:
+            raise ValueError(f"Hybrid CSV run identifier already exists in {path}: {run_id}")
+    belief_path = output_dir / HYBRID_CSV_FILENAMES[4]
+    read_csv_table(belief_path)
+    footprint_paths: tuple[Path, ...] = ()
+    if footprint_rows is not None:
+        footprint_dir = output_dir / "footprint"
+        footprint_paths = tuple(
+            footprint_dir / filename
+            for filename, _section, _field in HYBRID_FOOTPRINT_CSV_FIELDS
+        )
+        for path in footprint_paths:
+            fieldnames, _rows = read_csv_table(path)
+            if run_id in fieldnames:
+                raise ValueError(
+                    f"Hybrid CSV run identifier already exists in {path}: {run_id}"
+                )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for elapsed, violations, end_to_end_utility, fairness in metric_rows:
+        csv_gen_time(elapsed, run_id, metric_paths[0], announce=False)
+        csv_gen_SLA(violations, run_id, metric_paths[1], announce=False)
+        csv_gen_util(
+            end_to_end_utility, run_id, metric_paths[2], announce=False
+        )
+        csv_gen_jain(fairness, run_id, metric_paths[3], announce=False)
+    for snapshot in belief_snapshots:
+        create_belief_csv(snapshot, belief_path)
+    if footprint_rows is not None:
+        for row in footprint_rows:
+            for path, (_filename, section, field) in zip(
+                footprint_paths,
+                HYBRID_FOOTPRINT_CSV_FIELDS,
+                strict=True,
+            ):
+                append_metric_value(path, run_id, row[section][field])
+    return (*metric_paths, belief_path, *footprint_paths)
+
+
+def _report_hybrid_csv(paths: Sequence[Path]) -> None:
+    print(f"Hybrid CSV reports: {paths[0].parent}")
+    for path in paths:
+        print(f"  {path.name}")
+
+
 def _stream_controller_job_logs(controller_job_name: str) -> str:
     """Stream completed-slot presentation while privately collecting evidence."""
 
@@ -1685,8 +2113,13 @@ def run_small(
     max_iterations: int | None = None,
     profile_seed: int | None = None,
     refresh_runtime_profiles: bool = False,
+    policy_root_seed: int | None = None,
+    first_slot_id: int | None = None,
+    control_plane_footprint_enabled: bool = False,
     execute: Executor = _execute,
 ) -> str:
+    if not isinstance(control_plane_footprint_enabled, bool):
+        raise RuntimeError("Hybrid control-plane footprint setting must be boolean")
     if production_experiment:
         if (
             isinstance(max_iterations, bool)
@@ -1696,6 +2129,22 @@ def run_small(
             raise RuntimeError("--max-iterations must be a positive integer")
     elif max_iterations is not None:
         raise RuntimeError("max iterations belong to the production run command")
+    for value, field in (
+        (policy_root_seed, "policy root seed"),
+        (first_slot_id, "first slot ID"),
+    ):
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 1
+        ):
+            raise RuntimeError(f"{field} must be a positive integer")
+    if not production_experiment and (
+        policy_root_seed is not None or first_slot_id is not None
+    ):
+        raise RuntimeError(
+            "random experiment seeds belong to the production run command"
+        )
     if not production_experiment and (
         profile_seed is not None or refresh_runtime_profiles
     ):
@@ -1856,6 +2305,18 @@ def run_small(
                 boundary=boundary,
                 refresh_runtime_profiles=refresh_runtime_profiles,
             )
+            deployed_profile_replicas = (
+                profile_transition.deployed_configuration.num_replicas
+                if profile_transition is not None
+                else existing_count
+            )
+            if deployed_profile_replicas > existing_count:
+                print(
+                    "Hybrid interrupted scale-down recovery: "
+                    f"StatefulSets={existing_count}, "
+                    f"deployed-profile-replicas={deployed_profile_replicas}; "
+                    "reconciling the retained ordinal prefix"
+                )
         if configuration.num_flows > 4 or configuration.num_replicas > 2:
             resource_preflight = _validate_node_resource_capacity(
                 execute,
@@ -2116,6 +2577,19 @@ def run_small(
             {
                 "HYBRID_CONTROLLER_LIFECYCLE": "experiment",
                 "MAX_ITERATIONS": str(max_iterations),
+                HYBRID_CONTROL_PLANE_DATA_ENV: (
+                    "1" if control_plane_footprint_enabled else "0"
+                ),
+                **(
+                    {}
+                    if policy_root_seed is None
+                    else {HYBRID_POLICY_ROOT_SEED_ENV: str(policy_root_seed)}
+                ),
+                **(
+                    {}
+                    if first_slot_id is None
+                    else {"SLOT_ID": str(first_slot_id)}
+                ),
             }
             if production_experiment
             else None
@@ -2196,6 +2670,9 @@ def run_experiment(
     processor_memory_profile: str | None = None,
     controller_policy: str | None = None,
     mc_workers: int | None = None,
+    policy_root_seed: int | None = None,
+    first_slot_id: int | None = None,
+    control_plane_footprint_enabled: bool = False,
     before_controller_job: RunHook | None = None,
     controller_job_started: RunHook | None = None,
     after_controller_job: RunHook | None = None,
@@ -2227,8 +2704,123 @@ def run_experiment(
         max_iterations=max_iterations,
         profile_seed=profile_seed,
         refresh_runtime_profiles=refresh_runtime_profiles,
+        policy_root_seed=policy_root_seed,
+        first_slot_id=first_slot_id,
+        control_plane_footprint_enabled=control_plane_footprint_enabled,
         execute=execute,
     )
+
+
+def _random_positive_seed(*, excluded: set[int] | None = None) -> int:
+    blocked = set() if excluded is None else excluded
+    while True:
+        value = secrets.randbits(HYBRID_RANDOM_SERIES_SEED_BITS)
+        if value > 0 and value not in blocked:
+            return value
+
+
+def _resolve_random_series_profile_seed(execute: Executor) -> int:
+    """Reuse an existing seeded environment or create one random fresh seed."""
+
+    if CLUSTER_NAME not in _kind_clusters(execute):
+        return _random_positive_seed()
+    preflight(execute=execute)
+    namespaces = _item_names(
+        _json_output(execute, _kubectl("get", "namespaces", "-o", "json"))
+    )
+    if HYBRID_NAMESPACE not in namespaces:
+        return _random_positive_seed()
+    runtime, _controller = _deployed_profile_documents(execute)
+    source_identity = runtime.get("source_identity")
+    if not isinstance(source_identity, str) or not source_identity:
+        raise RuntimeError("Hybrid runtime profile has no source identity")
+    profile_seed = profile_seed_from_runtime_source_identity(source_identity)
+    if profile_seed is None:
+        raise RuntimeError(
+            "--runs requires an existing seeded Hybrid environment or a fresh "
+            "cluster"
+        )
+    return profile_seed
+
+
+def run_experiment_series(
+    *,
+    runs: int,
+    trace_dir: Path,
+    skip_build: bool,
+    requested_flows: int,
+    requested_stages: int,
+    requested_replicas: int,
+    rollout_batch_size: int,
+    max_iterations: int,
+    processor_memory_profile: str | None = None,
+    controller_policy: str | None = None,
+    mc_workers: int | None = None,
+    csv_enabled: bool = False,
+    csv_output_dir: Path = HYBRID_CSV_OUTPUT_DIR,
+    execute: Executor = _execute,
+    stream_controller_logs: ControllerLogStreamer | None = None,
+) -> tuple[Path, ...]:
+    """Run independent random-seed Jobs in one fixed runtime environment."""
+
+    if isinstance(runs, bool) or not isinstance(runs, int) or runs < 1:
+        raise RuntimeError("--runs must be a positive integer")
+    profile_seed = _resolve_random_series_profile_seed(execute)
+    experiment_seeds = []
+    used_seeds: set[int] = set()
+    for _index in range(runs):
+        seed = _random_positive_seed(excluded=used_seeds)
+        used_seeds.add(seed)
+        experiment_seeds.append(seed)
+    print(
+        "Hybrid random series: "
+        f"runs={runs}, fixed-profile-seed={profile_seed}, "
+        "experiment-seeds=automatic-system-random"
+    )
+
+    trace_paths = []
+    series_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    for run_index, experiment_seed in enumerate(experiment_seeds, start=1):
+        print(
+            f"Hybrid experiment run {run_index}/{runs}: "
+            f"experiment-seed={experiment_seed}"
+        )
+        output = run_experiment(
+            skip_build=skip_build if run_index == 1 else True,
+            requested_flows=requested_flows,
+            requested_stages=requested_stages,
+            requested_replicas=requested_replicas,
+            rollout_batch_size=rollout_batch_size,
+            max_iterations=max_iterations,
+            profile_seed=profile_seed,
+            refresh_runtime_profiles=False,
+            processor_memory_profile=processor_memory_profile,
+            controller_policy=controller_policy,
+            mc_workers=mc_workers,
+            policy_root_seed=experiment_seed,
+            first_slot_id=experiment_seed,
+            control_plane_footprint_enabled=csv_enabled,
+            stream_controller_logs=stream_controller_logs,
+            execute=execute,
+        )
+        trace_path = _persist_hybrid_experiment_trace(
+            output,
+            trace_dir=trace_dir,
+            requested_flows=requested_flows,
+            requested_stages=requested_stages,
+            requested_replicas=requested_replicas,
+            max_iterations=max_iterations,
+            expected_experiment_seed=experiment_seed,
+            series_run_index=run_index,
+            series_run_count=runs,
+            series_id=series_id,
+            control_plane_footprint_enabled=csv_enabled,
+        )
+        trace_paths.append(trace_path)
+        print(f"Detailed Hybrid JSONL trace: {trace_path}")
+        if csv_enabled:
+            _report_hybrid_csv(export_hybrid_csv(trace_path, csv_output_dir))
+    return tuple(trace_paths)
 
 
 def cleanup(*, execute: Executor = _execute) -> None:
@@ -2329,10 +2921,19 @@ def _add_run_arguments(
         parser.add_argument(
             "--profile-seed",
             type=_nonnegative_integer,
-            required=True,
+            required=False,
             help=(
-                "nonnegative seed used only for balanced hidden-state profile "
-                "allocation"
+                "single-run nonnegative hidden-state profile seed; omitted and "
+                "forbidden when --runs generates/reuses a fixed environment"
+            ),
+        )
+        parser.add_argument(
+            "--runs",
+            type=_positive_integer,
+            default=None,
+            help=(
+                "run N independent Jobs with automatic unique system-random "
+                "experiment seeds and one fixed environment"
             ),
         )
         parser.add_argument(
@@ -2348,6 +2949,24 @@ def _add_run_arguments(
             type=_positive_integer,
             required=True,
             help="positive slot limit when equilibrium is not reached earlier",
+        )
+        parser.add_argument(
+            "--trace-dir",
+            type=Path,
+            default=DEFAULT_HYBRID_TRACE_DIR,
+            help="host directory for the detailed Hybrid JSONL trace",
+        )
+        parser.add_argument(
+            "--csv",
+            type=int,
+            choices=(0, 1),
+            default=0,
+            help=(
+                "write time, SLA, raw end-to-end utility, Jain fairness, and "
+                "replica-belief CSV reports plus controller payload/message "
+                f"footprint CSVs under {HYBRID_CSV_OUTPUT_DIR} "
+                "(1=enabled, 0=disabled)"
+            ),
         )
 
 
@@ -2371,26 +2990,63 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     _add_run_arguments(validation_parser, production=False)
     subparsers.add_parser("preflight")
     subparsers.add_parser("cleanup")
-    return parser.parse_args(arguments)
+    parsed = parser.parse_args(arguments)
+    if parsed.action == "run":
+        if parsed.runs is None and parsed.profile_seed is None:
+            parser.error("single run requires --profile-seed; use --runs N for automatic seeds")
+        if parsed.runs is not None and parsed.profile_seed is not None:
+            parser.error("--runs generates seeds automatically; do not pass --profile-seed")
+        if parsed.runs is not None and parsed.refresh_runtime_profiles:
+            parser.error("--runs cannot be combined with --refresh-runtime-profiles")
+    return parsed
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
     args = parse_args(arguments)
     try:
         if args.action == "run":
-            run_experiment(
-                skip_build=args.skip_build,
-                requested_flows=args.requested_flows,
-                requested_stages=args.requested_stages,
-                requested_replicas=args.requested_replicas,
-                rollout_batch_size=args.rollout_batch_size,
-                max_iterations=args.max_iterations,
-                profile_seed=args.profile_seed,
-                refresh_runtime_profiles=args.refresh_runtime_profiles,
-                processor_memory_profile=args.processor_memory_profile,
-                controller_policy=args.policy,
-                mc_workers=args.mc_workers,
-            )
+            if args.runs is not None:
+                run_experiment_series(
+                    runs=args.runs,
+                    trace_dir=args.trace_dir,
+                    skip_build=args.skip_build,
+                    requested_flows=args.requested_flows,
+                    requested_stages=args.requested_stages,
+                    requested_replicas=args.requested_replicas,
+                    rollout_batch_size=args.rollout_batch_size,
+                    max_iterations=args.max_iterations,
+                    processor_memory_profile=args.processor_memory_profile,
+                    controller_policy=args.policy,
+                    mc_workers=args.mc_workers,
+                    csv_enabled=bool(args.csv),
+                )
+            else:
+                output = run_experiment(
+                    skip_build=args.skip_build,
+                    requested_flows=args.requested_flows,
+                    requested_stages=args.requested_stages,
+                    requested_replicas=args.requested_replicas,
+                    rollout_batch_size=args.rollout_batch_size,
+                    max_iterations=args.max_iterations,
+                    profile_seed=args.profile_seed,
+                    refresh_runtime_profiles=args.refresh_runtime_profiles,
+                    processor_memory_profile=args.processor_memory_profile,
+                    controller_policy=args.policy,
+                    mc_workers=args.mc_workers,
+                    control_plane_footprint_enabled=bool(args.csv),
+                )
+                trace_path = _persist_hybrid_experiment_trace(
+                    output,
+                    trace_dir=args.trace_dir,
+                    requested_flows=args.requested_flows,
+                    requested_stages=args.requested_stages,
+                    requested_replicas=args.requested_replicas,
+                    max_iterations=args.max_iterations,
+                    control_plane_footprint_enabled=bool(args.csv),
+                )
+                print(f"Detailed Hybrid JSONL trace: {trace_path}")
+                if args.csv == 1:
+                    _report_hybrid_csv(export_hybrid_csv(trace_path))
         elif args.action == "run-small":
             run_small(
                 skip_build=args.skip_build,

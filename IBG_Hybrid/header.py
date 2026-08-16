@@ -5,7 +5,12 @@ from itertools import product
 import csv
 import os
 from collections import Counter
+from collections.abc import Mapping, Sequence
+from math import isfinite
+from numbers import Real
 from scipy.stats import truncnorm
+
+from IBG_Hybrid.csv_storage import HybridCsvError, append_belief_snapshot
 
 
 class Replica:
@@ -214,18 +219,41 @@ def create_belief_csv(replica_list, filename="replica_results.csv"):
     Append a dictionary (replica_list) as a new row to a CSV file.
     Creates the CSV with headers on first call if it doesn't exist.
     """
-    data = {key: value.belief for key, value in replica_list.items()}
+    if not isinstance(replica_list, Mapping) or not replica_list:
+        raise HybridCsvError("replica_list must be a nonempty mapping")
 
-    # Convert to DataFrame (single row)
-    df = pd.DataFrame([data])
+    def identity_order(item):
+        identity = item[0]
+        if (
+            isinstance(identity, tuple)
+            and len(identity) == 2
+            and all(isinstance(value, int) and not isinstance(value, bool)
+                    for value in identity)
+        ):
+            return (0, identity[0], identity[1])
+        return (1, str(identity))
 
-    # Check if file exists
-    if not os.path.exists(filename):
-        # First time: create with headers
-        df.to_csv(filename, index=False)
-    else:
-        # Append without headers
-        df.to_csv(filename, mode='a', header=False, index=False)
+    snapshot = {}
+    for identity, value in sorted(replica_list.items(), key=identity_order):
+        belief = value.belief if hasattr(value, "belief") else value
+        if (
+            not isinstance(belief, Sequence)
+            or isinstance(belief, (str, bytes))
+            or len(belief) != 4
+            or any(
+                isinstance(probability, bool)
+                or not isinstance(probability, Real)
+                or not isfinite(float(probability))
+                or probability < 0
+                for probability in belief
+            )
+        ):
+            raise HybridCsvError(
+                f"belief for replica {identity!r} must contain four "
+                "finite nonnegative values"
+            )
+        snapshot[identity] = tuple(float(probability) for probability in belief)
+    append_belief_snapshot(filename, snapshot)
 
 
 from scipy.stats import truncnorm

@@ -38,8 +38,16 @@ spec:
               mountPath: /etc/ibg-hybrid-controller
               readOnly: true
             - name: controller-phase75-source
+              mountPath: /app/IBG_Hybrid/control_plane_footprint.py
+              subPath: control_plane_footprint.py
+              readOnly: true
+            - name: controller-phase75-source
               mountPath: /app/IBG_Hybrid/kernel_controller.py
               subPath: kernel_controller.py
+              readOnly: true
+            - name: controller-phase75-source
+              mountPath: /app/IBG_Hybrid/kernel_kubernetes_discovery.py
+              subPath: kernel_kubernetes_discovery.py
               readOnly: true
             - name: controller-phase75-source
               mountPath: /app/IBG_Hybrid/kernel_phase4_validation.py

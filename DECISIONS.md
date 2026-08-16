@@ -2129,3 +2129,151 @@ user explicitly resumes each workstream.
 - Preserve all accepted Hybrid algorithm, pruning/lookahead/MC, profile,
   separated-jitter learning, physical-only outcome, utility/SLA, telemetry,
   rollout, worker placement, and frozen Exact behavior across all three items.
+
+
+## Hybrid persistent JSONL trace decisions
+
+Accepted and implemented locally: 2026-08-15.
+
+- Persist every successful production Hybrid run to a timestamped host-side
+  JSONL trace under `runs/` by default; allow `--trace-dir` only to relocate the
+  destination.
+- Wrap the unchanged per-slot controller evidence in versioned `run_started`,
+  `iteration_completed`, and `run_completed` lifecycle records rather than
+  depending on ephemeral Job logs.
+- Fail before file creation if slot coverage, configuration, observation count,
+  or per-flow measured-pair evidence is incomplete or inconsistent.
+- Do not require cgroup/solver-resource diagnostics for the experiment trace,
+  and do not persist processor-private hidden-state allocation provenance.
+- Keep trace persistence host-side and behavior-neutral. It must not change the
+  Hybrid algorithm, MC/lookahead selection, learning, utility/SLA, telemetry,
+  workload placement, Kernel route, or frozen Exact implementation.
+
+
+## Hybrid 80-ms SLA decision
+
+Accepted: 2026-08-15.
+
+- Set only the Hybrid SLA threshold to 80 ms. Preserve Exact's 110-ms default.
+- Keep `physical-only-v1` as the active Hybrid SLA basis: compare the sum of
+  the two selected physical processing latencies with 80 ms.
+- Continue recording measured pair and raw physical-plus-pair latency as
+  references; do not include pair or observation-only noise in active SLA
+  classification.
+- Do not rewrite or reinterpret historical Hybrid traces. New traces carry the
+  explicit 80-ms threshold in every slot.
+- This threshold change affects classification only. It does not change
+  placement, policy, pruning/lookahead/MC, learning, latency generation,
+  utility, telemetry, routing, resources, or worker scheduling.
+
+
+## Hybrid random-series decisions
+
+Accepted and implemented locally: 2026-08-15.
+
+- `--runs N` owns all seed selection. It must reject `--profile-seed` and
+  `--refresh-runtime-profiles`; users provide no seed value in series mode.
+- Draw one nonzero 63-bit profile seed from the operating system CSPRNG only
+  when a fresh Hybrid environment needs one, then keep that environment fixed
+  for the complete series. Reuse the recorded profile seed when an existing
+  seeded Hybrid environment is present, and fail closed for an existing
+  unseeded/legacy environment whose allocation cannot be proven.
+- Draw a distinct nonzero 63-bit experiment seed for every run. Use it as both
+  the policy root seed and first slot ID so all experiment-side randomized
+  streams, including Kernel processor request sampling, vary automatically.
+- Create a fresh finite controller Job with fresh uniform beliefs for each
+  member while reusing the prepared workloads and image after the first run.
+- Persist every member separately with a shared series ID, run index/count,
+  and experiment-seed provenance. Do not merge results or add implicit CSV
+  output.
+- Preserve the explicit profile-seed contract for ordinary single runs. Do not
+  alter Exact or any Hybrid algorithm, jitter, learning, utility/SLA,
+  telemetry, scheduling, or route semantics.
+
+
+## Hybrid interrupted scale-down recovery decision
+
+Accepted and implemented locally: 2026-08-15.
+
+- Treat a lower, consistent three-Stage StatefulSet count as a resumable
+  interrupted scale-down only when the deployed runtime and controller
+  documents remain exact deterministic versioned documents for a larger
+  replica count.
+- Reconcile from the actual retained low-ordinal prefix toward the newly
+  requested target through the existing bounded rollout and profile ordering.
+- Keep the recovery automatic because it completes a launcher-owned
+  scale-before-ConfigMap sequence without inventing hidden-state data or
+  restarting retained Pods under `--skip-build`.
+- Continue failing closed when Pods exceed documented profiles, stage counts
+  differ, ownership/templates drift, documents are malformed, or any retained
+  runtime/admission/link value differs from the generation rule.
+- Do not delete or recreate the dedicated cluster for this recoverable state,
+  and do not alter Hybrid semantics or frozen Exact behavior.
+
+
+## Hybrid CSV export decisions
+
+Accepted and implemented locally: 2026-08-15.
+
+- Keep CSV output opt-in through production `--csv 1`; default `--csv 0`
+  writes only the existing JSONL trace.
+- Export host-side only after a complete validated trace exists, under the
+  ignored `figures/` directory. Do not add a controller volume or Pod-side
+  persistence.
+- Preserve the existing wide formats: run-hash columns and timeslot rows for
+  time/SLA/utility/Jain, and replica-identity columns with belief-snapshot rows
+  for `replica_results.csv`.
+- Explicitly exclude `log_results` and `results.csv` from repair, integration,
+  tests, and command output.
+- Define `aggregate_utility.csv` as the requested end-to-end utility view:
+  export `raw_end_to_end_reference_utility`. Do not substitute
+  `aggregate_expected_utility` or `physical_realized_utility`.
+- Export the active physical-only SLA count, Jain fairness, and elapsed seconds
+  without recomputation. Append initial plus every post-timeslot belief
+  snapshot without adding a run-marker column that would change the legacy
+  belief format.
+- Repair the public helpers to align rows by headers, tolerate empty files and
+  unequal column lengths, write atomically, and fail on malformed structures or
+  invalid values. Keep the ordinary direct-call append behavior.
+- Reject duplicate metric run hashes before writing a trace export. Preserve
+  JSONL as the complete provenance source and make no Exact edit.
+
+
+## Hybrid CSV directory decision
+
+Accepted: 2026-08-15. Keep every generated Hybrid CSV in
+`figures/IBG_hybrid/`. Create that directory recursively on demand. Do not
+change filenames or table layouts, move existing historical files implicitly,
+or affect Exact's separate CSV destination.
+
+
+## Hybrid control-plane data-footprint decisions
+
+Accepted and implemented locally: 2026-08-15.
+
+- Reuse Exact `control_plane_v1` category names and observed HTTP application-
+  body boundary, but use `ibg-hybrid-control-plane-data-v1` because the user
+  explicitly excluded Exact's timing and CPU portions. Do not record timing,
+  CPU, memory, cgroups, headers, wire bytes, NIC traffic, or forwarding-path
+  payloads in this feature.
+- Use production `--csv 1` as the sole activation switch and propagate its
+  enabled/disabled state into the controller Job. Add no second CLI flag.
+- Require one accepted aggregate Kubernetes discovery request/response and one
+  route-command/selected-telemetry exchange per completed slot. Count actual
+  serialized request bodies and raw response bodies.
+- Keep observed belief TX/RX bytes and messages at zero while beliefs remain
+  controller-local. Do not model or fabricate distributed belief exchange.
+- Validate grand payload and message totals as the exact sum of the six primary
+  categories. Expose belief TX-plus-RX as a derived CSV view without adding it
+  to either grand total again.
+- Attach the footprint to Kernel controller result/evidence, not
+  `HybridSlotMetrics`, and exclude it from Pure/Kernel semantic parity.
+- Persist a footprint block only when enabled and reject missing, unexpected,
+  mixed, malformed, negative, or arithmetically inconsistent completed-slot
+  records before trace/CSV acceptance.
+- Put all 16 footprint CSVs under `figures/IBG_hybrid/footprint/` using the
+  existing run-column/timeslot-row, blank-padding, duplicate-rejection, and
+  atomic-write rules. Preserve the existing five Hybrid CSVs unchanged.
+- Keep summary support Hybrid-specific and data-only. Validate completed traces
+  before reporting per-run median/p95 payload/message categories and totals;
+  do not extend or modify Exact's full timing/CPU summary tool.

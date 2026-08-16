@@ -12,6 +12,7 @@ import httpx
 from IBG import latency_model as exact_latency
 
 from .contracts import GlobalLoadState, ReplicaChoice, TwoStageAction
+from .control_plane_footprint import HybridControlPlaneDataMeter
 from .kernel_controller_config import HybridKernelControllerInputDocument
 from .kernel_infrastructure_contract import HybridKernelDiscoverySnapshot
 from .kernel_route_contracts import (
@@ -69,10 +70,12 @@ class HybridKernelFlowGeneratorHttpClient:
         *,
         timeout_seconds: float = 30.0,
         transport: httpx.BaseTransport | None = None,
+        control_plane_meter: HybridControlPlaneDataMeter | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = float(timeout_seconds)
         self.transport = transport
+        self.control_plane_meter = control_plane_meter
         if not self.base_url:
             raise ValueError("flow-generator base_url must not be empty")
         if self.timeout_seconds <= 0:
@@ -91,6 +94,13 @@ class HybridKernelFlowGeneratorHttpClient:
                 json=request.model_dump(mode="json"),
             )
             response.raise_for_status()
+            if self.control_plane_meter is not None:
+                self.control_plane_meter.record_exchange(
+                    request_field="route_command_tx",
+                    response_field="selected_telemetry_rx",
+                    request_payload_bytes=len(response.request.content),
+                    response_payload_bytes=len(response.content),
+                )
             return HybridKernelRunSlotResponse.model_validate(response.json())
 
 
@@ -298,6 +308,7 @@ class HybridKernelSlotTrafficAdapter:
 class HybridKernelControllerSlotResult:
     discovery: HybridKernelDiscoverySnapshot
     slot: HybridSlotResult
+    control_plane: Mapping[str, object] | None = None
     controller_contract_version: str = HYBRID_KERNEL_CONTROLLER_ADAPTER_VERSION
 
 
@@ -315,6 +326,7 @@ class HybridKernelControllerAdapter:
         policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
         mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
         policy: IBGHybridPolicy | None = None,
+        control_plane_meter: HybridControlPlaneDataMeter | None = None,
     ) -> None:
         expected = {item.choice for item in controller_inputs.admission}
         if set(initial_beliefs) != expected:
@@ -329,6 +341,7 @@ class HybridKernelControllerAdapter:
             controller_inputs.configuration,
             DEFAULT_HYBRID_POLICY_PARAMETERS,
         )
+        self.control_plane_meter = control_plane_meter
         self._beliefs = {
             choice: tuple(float(value) for value in initial_beliefs[choice])
             for choice in sorted(expected)
@@ -345,6 +358,8 @@ class HybridKernelControllerAdapter:
         flows: tuple[HybridFlow, ...] | None = None,
         discovery_wait: Mapping[str, object] | None = None,
     ) -> HybridKernelControllerSlotResult:
+        if self.control_plane_meter is not None:
+            self.control_plane_meter.begin_slot()
         snapshot = self.discovery.wait_for_complete_ready(
             **dict(discovery_wait or {})
         )
@@ -390,5 +405,10 @@ class HybridKernelControllerAdapter:
         )
         if traffic.requests_submitted != 1:
             raise RuntimeError("Hybrid controller must submit exactly one slot request")
+        control_plane = (
+            None
+            if self.control_plane_meter is None
+            else self.control_plane_meter.finish_slot()
+        )
         self._beliefs = dict(result.beliefs_after)
-        return HybridKernelControllerSlotResult(snapshot, result)
+        return HybridKernelControllerSlotResult(snapshot, result, control_plane)

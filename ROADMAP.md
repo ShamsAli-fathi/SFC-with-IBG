@@ -2593,3 +2593,148 @@ Recorded: 2026-08-15. These phases are intentionally not started.
 Each phase requires a focused implementation review and authorization when it
 is resumed. No DPDK/VPP, multi-host, NIC, line-rate, algorithm, learning, or
 outcome change is part of this plan.
+
+
+### Hybrid persistent JSONL experiment evidence complete locally
+
+Completed: 2026-08-15.
+
+- Production `run` now saves the collected detailed slot evidence to
+  `runs/ibg-hybrid-experiment-<UTC timestamp>.jsonl`; `--trace-dir` selects a
+  different host directory.
+- The file contains versioned start, per-iteration, and completion events. Each
+  per-iteration event preserves the existing per-flow `measured_pair_ms` and
+  the rest of the current detailed Hybrid evidence.
+- Pre-write validation rejects missing flows, missing/invalid measured pairs,
+  incomplete selected observations, dimension drift, noncontiguous slots, and
+  invalid metrics. Focused tests prove lifecycle shape, pair preservation,
+  malformed-pair rejection without file creation, CLI integration, and printed
+  trace location.
+- The full Hybrid Kernel test selection passes 178 tests. Compilation and
+  `git diff --check` pass. No live experiment or cluster mutation was performed.
+
+This closes persistence of the current Hybrid evidence. Netem, CSV verification,
+and opt-in control-plane-footprint work remain separate deferred phases.
+
+
+### Hybrid SLA threshold changed to 80 ms locally
+
+Completed: 2026-08-15. The Hybrid runner now uses a dedicated public 80-ms SLA
+constant for physical-only classification and records that value in slot
+metrics. Tests cover the Exact 110-ms/Hybrid 80-ms separation, physical-only
+input, observation/pair exclusion, and two-selected-stage aggregation.
+
+All 279 Hybrid tests pass. Compilation and `git diff --check` pass. No Exact
+source file, live cluster, image, Job, or trace was changed. A future live run must use
+a normal image build before `--skip-build` can reuse the new controller image.
+
+
+### Hybrid automatic random multi-run orchestration complete locally
+
+Completed: 2026-08-15. The production launcher now accepts `--runs N` with no
+seed arguments. It fixes one seeded runtime environment across the series,
+starts every member in a fresh controller Job with fresh beliefs, assigns a
+unique operating-system-random experiment seed to the policy root and first
+slot ID, and writes one seed-provenanced JSONL trace per member. Existing
+seeded environments are reused; fresh environments get one automatic random
+profile seed; legacy environments without seeded provenance fail closed.
+
+CLI validation covers the no-seed contract and incompatible options. Focused
+tests cover fixed-environment reuse, fresh-environment profile generation,
+zero/duplicate rejection, per-run build reuse, Job seed propagation, fresh CLI
+routing, series trace naming and provenance, and controller seed ingestion.
+The complete Hybrid selection passes 284 tests, and the relevant frozen Exact
+regression selection passes 109 tests. Changed Python compiles and
+`git diff --check` passes. No live cluster, image, Job, or traffic was mutated
+during this implementation.
+
+The next normal production invocation must build the updated image before a
+later invocation can safely use `--skip-build`. The separate deferred CSV
+verification remains the next requested review and must not be folded into
+this series feature.
+
+
+### Hybrid interrupted scale-down resume corrected locally
+
+Corrected: 2026-08-15. The first user trial exposed a retained live state with
+three Ready replicas in every StatefulSet while the exact seeded ConfigMaps
+still described the former 20-flow/10-replica environment. Kubernetes managed
+fields identify the replica field as a scale-subresource update; the last
+applied StatefulSet count and profile count also differ. This is the precise
+window after high ordinals are removed but before the final lower-profile
+reconciliation.
+
+The dynamic transition gate now permits only that exact profile-superset/live-
+prefix state and resumes from the actual count. Tests prove opt-in validation,
+continued rejection of excess live Pods and document drift, and an end-to-end
+mocked 3-to-7 recovery that trims 10-replica profiles, rolls out in bounded
+batches, and preserves processes. All 286 Hybrid tests and the relevant 109
+frozen Exact regression tests pass; compilation and `git diff --check` pass.
+Only read-only live inspection was performed. The cluster was not repaired or
+otherwise mutated by Codex.
+
+
+### Hybrid CSV verification and opt-in export complete locally
+
+Completed: 2026-08-15. The deferred legacy CSV review found that normal
+create/append worked but belief-column order could silently corrupt meaning,
+schema growth could create malformed rows, empty metric files failed, and no
+active Hybrid path called the helpers. The repaired helpers preserve their
+wide layouts while using deterministic header alignment, blank-cell padding,
+validation, and atomic replacement. `log_results` was explicitly left outside
+the work.
+
+Production `--csv 1` now exports the four metric reports and belief report from
+each completed JSONL trace. `aggregate_utility.csv` uses raw end-to-end utility
+as requested. Tests cover empty files, uneven run lengths, semantic rejection,
+reordered and added belief identities, exact output filenames/layouts,
+end-to-end rather than predicted/physical utility, duplicate-run rejection,
+CLI default-off/explicit-on behavior, single-run routing, and multi-run columns.
+An existing six-slot Hybrid JSONL trace exported successfully in a temporary
+directory with six rows in each metric file and seven belief snapshots.
+
+All 291 Hybrid tests and the relevant 109 frozen Exact regression tests pass;
+changed Python compiles, CLI help is correct, and `git diff --check` passes.
+No live cluster, image, Job, traffic, historical CSV, or repository `figures/`
+file was changed during implementation.
+
+
+### Hybrid CSV directory isolation complete locally
+
+Completed: 2026-08-15. The default Hybrid CSV destination is now
+`figures/IBG_hybrid/`, and export creates the missing directory tree before
+writing. Focused coverage proves the exact default path and first-export
+directory creation. No CSV schema, filename, metric, live runtime, or Exact
+behavior changed.
+
+
+### Hybrid per-timeslot control-plane data footprint complete locally
+
+Completed: 2026-08-15. The deferred footprint phase now records categorized
+application-body bytes and message counts only when production uses `--csv 1`.
+Host activation is propagated into each finite controller Job, successful
+slots persist a validated data-only evidence block, and disabled runs reject
+unexpected footprint data while emitting neither the block nor footprint
+CSVs.
+
+Actual HTTPX body sizes cover one accepted aggregate Kubernetes discovery
+exchange and one route/telemetry exchange. Belief TX/RX remain observed zeros.
+Six-category totals and derived belief TX-plus-RX views are validated without
+double counting. Sixteen separate footprint files use the existing wide CSV
+layout under `figures/IBG_hybrid/footprint/`; the original five Hybrid reports
+are unchanged. Timing, CPU, memory, cgroups, wire bytes, and forwarding traffic
+were deliberately excluded.
+
+All 305 Hybrid tests and a broad 188-test frozen Exact regression selection
+pass. Seven retained Hybrid Kustomize overlays render offline, changed Python
+compiles, production help exposes the combined `--csv` behavior, and
+`git diff --check` passes. No live cluster, image, Job, traffic, existing trace,
+or generated CSV was mutated. Any live validation remains a separate approval
+gate.
+
+Final verification addendum: the Hybrid-specific data summary command now
+validates completed traces and reports median/p95 payload/message categories,
+derived belief totals, and exact grand totals without CPU or timing fields.
+Its three focused tests raise the complete Hybrid count from the earlier 305
+to 308 passing tests. The previously recorded 188 Exact regressions, seven
+offline renders, compilation, and diff checks remain passing.

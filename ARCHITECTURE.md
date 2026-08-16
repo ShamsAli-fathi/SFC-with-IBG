@@ -920,7 +920,6 @@ units and separation. Because MILP already knows the true states, selected
 observations may be retained for matched traffic/telemetry evidence but do not
 update or steer the MILP policy, and MILP runs do not stop on belief
 equilibrium.
-
 ### MILP per-run cutoff contract
 
 The future MILP executable must accept `--cutoff SECONDS` on every run. The
@@ -2943,3 +2942,172 @@ clearly whether values are canonical logical bytes or observed application-body
 bytes rather than wire bytes. The versioned record must be absent when disabled
 and must not affect policy, traffic, learning, telemetry, utility/SLA, or
 equilibrium.
+
+
+## Hybrid persistent experiment trace
+
+Implemented locally: 2026-08-15. Every successful production `run` now writes
+a host-side timestamped JSONL file named
+`ibg-hybrid-experiment-<UTC timestamp>.jsonl` under `runs/` by default. The
+destination can be relocated with `--trace-dir`; persistence is not performed
+inside the controller Pod and requires no Kubernetes volume.
+
+The `ibg-hybrid-experiment-jsonl-v1` stream follows an Exact-style lifecycle:
+one `run_started` record, one `iteration_completed` record for every completed
+timeslot, and one `run_completed` record. Each iteration retains the complete
+existing Hybrid machine evidence, including configuration, flow order, Ready
+Pod identities, selected paths/replicas, final loads, planning-link values,
+each flow's measured pair latency, selected physical/observation/learning
+values, beliefs, metrics, and Pure/Kernel parity.
+
+Before creating a file, the host validates configuration identity, the maximum
+iteration bound, contiguous slot IDs, exactly one placement and measured pair
+value per configured flow, exactly two selected observations per flow, and a
+valid equilibrium field. Cgroup and solver-resource evidence are not required
+or added. Processor-private hidden-state allocation provenance remains absent.
+This persistence layer changes no controller, policy, traffic, learning,
+utility/SLA, telemetry, scheduling, or Kernel behavior.
+
+
+## Hybrid 80-ms physical-only SLA threshold
+
+Changed locally with explicit user authorization: 2026-08-15. Hybrid now owns
+`HYBRID_SLA_LATENCY_THRESHOLD_MS = 80.0`; it no longer inherits Exact's
+110-ms default. The active SLA input remains the sum of the two selected
+physical processing latencies under `physical-only-v1`. Measured pair latency,
+raw end-to-end latency, and observation-only jitter remain recorded but do not
+enter Hybrid SLA classification.
+
+Every new Hybrid slot records `sla_latency_threshold_ms: 80.0`, so persisted
+JSONL traces remain self-describing. Existing traces, including
+`ibg-hybrid-experiment-20260815T122632.955716Z.jsonl`, retain their historical
+110-ms classifications and must not be backfilled. Exact's threshold and all
+Exact source remain unchanged.
+
+
+## Hybrid automatic random experiment series
+
+Implemented locally: 2026-08-15. Production `run --runs N` executes `N`
+finite, independent controller Jobs without accepting a seed argument. The
+launcher obtains nonzero, distinct 63-bit experiment seeds from the operating
+system CSPRNG. Each run's experiment seed is both the controller policy root
+seed and its first slot ID, so policy/flow-order random streams and Kernel
+processor request sampling vary together while remaining reproducible from
+that run's persisted provenance.
+
+The runtime environment is fixed across a series. An existing seeded Hybrid
+deployment reuses its deployed profile seed; a fresh cluster or validated
+cluster without the Hybrid namespace receives one automatically random profile
+seed for the whole series. The same topology and hidden-state allocation are
+then reconciled for every run. Runtime-profile refresh is forbidden in series
+mode, and an existing legacy deployment without seeded profile provenance
+fails closed. The first run performs the requested image/build path and later
+runs reuse it; every run still creates a new finite controller Job and
+therefore begins with fresh uniform beliefs.
+
+Each series member is persisted as its own validated JSONL lifecycle trace.
+The files share a series identity, use `-run001`, `-run002`, and subsequent
+suffixes, and record the experiment seed plus series index/count. Single-run
+behavior remains available and continues to require explicit `--profile-seed`.
+This orchestration changes no Hybrid solver, pruning/lookahead/MC behavior,
+jitter, learning, outcome, telemetry, worker-placement, or frozen Exact code.
+
+
+## Hybrid interrupted scale-down recovery
+
+Implemented locally: 2026-08-15. Dynamic seeded-topology reconciliation now
+recognizes one narrowly recoverable deployment state: all three owned
+StatefulSets have the same positive replica count, that count is lower than the
+replica count in the deployed runtime/controller documents, and those documents
+still match their exact versioned deterministic generation rule. Kubernetes
+StatefulSet ordinals make the live Pods the retained low-ordinal prefix.
+
+The launcher validates the complete old documents before mutation, reports the
+recovery, projects the requested target documents, and resumes normal bounded
+rollout from the actual StatefulSet count. A profile count below the live Pod
+count, inconsistent stage counts, malformed/foreign ownership, or any profile,
+admission, planning-link, source-identity, observation-seed, or retained-state
+drift still fails closed. This recovery changes no running workload by itself
+and does not weaken the fixed-environment contract within a multi-run series.
+
+
+## Hybrid opt-in legacy-layout CSV export
+
+Implemented locally: 2026-08-15. Production `run --csv 1` converts each
+completed, validated host-side Hybrid JSONL trace into exactly five CSV files
+under the ignored repository-local `figures/` directory:
+`time.csv`, `sla_violations.csv`, `aggregate_utility.csv`, `jain_index.csv`,
+and `replica_results.csv`. CSV output remains disabled by default, uses no
+controller filesystem or Kubernetes volume, and never creates or calls
+`results.csv`/`log_results`.
+
+The four metric files retain the legacy wide layout: one deterministic
+six-character run-hash column per experiment and one value per completed
+timeslot row. Time exports `elapsed_seconds`; SLA exports the active
+`physical_only_sla_violations`; Jain exports `jain_fairness`. By explicit user
+choice, the legacy-named `aggregate_utility.csv` exports the current raw
+end-to-end utility, `raw_end_to_end_reference_utility`, rather than predicted
+or physical-only utility. Multi-run series therefore add one distinct column
+per automatically seeded Job.
+
+`replica_results.csv` retains one `(stage, replica)` column per identity and a
+JSON belief vector in each cell. Every experiment appends its initial belief
+snapshot followed by one post-update snapshot per completed timeslot; run
+boundaries remain implicit to preserve the legacy layout. Column alignment is
+now identity-based and deterministic, including reordered inputs and added
+replicas. Shared atomic table primitives treat an empty file as new, preserve
+unequal run lengths with blank cells, reject malformed rows/duplicate headers,
+validate metric and belief values, and reject metric run-hash collisions before
+export. The export layer changes no Hybrid metric, algorithm, learning,
+telemetry, scheduling, JSONL, or frozen Exact behavior.
+
+
+## Hybrid CSV output directory
+
+Adjusted locally: 2026-08-15. All opt-in Hybrid CSV reports now live under the
+dedicated `figures/IBG_hybrid/` directory rather than directly under
+`figures/`. The host exporter checks the path and creates the directory and
+missing parents before its first write. Filenames, columns, rows, metric
+semantics, JSONL provenance, and default-off behavior are unchanged.
+
+
+## Hybrid opt-in control-plane data footprint
+
+Implemented locally: 2026-08-15. Production `--csv 1` now propagates
+`HYBRID_CONTROL_PLANE_FOOTPRINT=1` into the finite controller Job. Each
+successfully completed Kernel slot carries an
+`ibg-hybrid-control-plane-data-v1` block at the controller-result/evidence
+boundary; `--csv 0` and omission propagate the disabled state and emit no
+block. The record deliberately stays outside `HybridSlotMetrics` and Pure/
+Kernel semantic parity.
+
+The category names and application-body boundary match Exact
+`control_plane_v1`: one accepted aggregate Kubernetes Pod-list request and
+response, one serialized route-command request, one raw selected-telemetry
+response, and controller-local belief TX/RX fields. Hybrid counts the actual
+HTTPX request and response body lengths. GET request bodies are normally zero;
+belief bytes and messages are exactly zero because no belief vector crosses
+the controller boundary. The six-category payload and message totals are
+validated exactly. Forwarder traffic, headers, wire bytes, NIC throughput,
+memory, cgroups, timing, and CPU are not measured.
+
+Exact's full schema also contains timing and CPU fields, which were explicitly
+excluded from this Hybrid scope. Hybrid therefore uses a separately named
+data-only schema rather than emitting an incomplete record under the Exact
+schema name. A completed Hybrid snapshot requires exactly one message in each
+discovery/route/telemetry category and zero belief messages; transient
+incomplete discovery polls and failed slots cannot become completed evidence.
+
+When footprint evidence is present, the existing host exporter additionally
+creates `figures/IBG_hybrid/footprint/` and writes 16 wide-layout CSVs: the six
+primary payload categories, derived belief payload total, grand payload total,
+and the parallel eight message reports. Derived belief totals are TX plus RX
+and are never added to the six-category grand total a second time. The original
+five files under `figures/IBG_hybrid/` retain their names, layout, and meaning.
+
+`scripts/hybrid_control_plane_summary.py` is the matching host-side validation
+and summary boundary. It accepts completed Hybrid JSONL traces, revalidates
+every data-only snapshot, and reports per-run median/p95 values for each
+payload category, each message category, the two derived belief totals, and
+the two exact grand totals. It contains no timing or CPU reporting and does not
+change Exact's separate `scripts/control_plane_summary.py`.

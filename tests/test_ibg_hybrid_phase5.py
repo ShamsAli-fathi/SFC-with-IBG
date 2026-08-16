@@ -22,6 +22,7 @@ from IBG_Hybrid import (
     HybridPolicyParameters,
     HybridReplica,
     HybridSimulationResult,
+    HYBRID_SLA_LATENCY_THRESHOLD_MS,
     HybridSlotInput,
     PipelinePath,
     ReplicaChoice,
@@ -433,8 +434,10 @@ def test_observation_jitter_is_excluded_from_physical_utility_and_sla():
 
     assert result.metrics.physical_only_sla_violations == SLA_v(
         outcome_latency_ms_per_flow(physical_latency, pair_latency),
-        exact_latency.DEFAULT_SLA_LATENCY_MS,
+        HYBRID_SLA_LATENCY_THRESHOLD_MS,
     )
+    assert result.metrics.sla_latency_threshold_ms == 80.0
+    assert exact_latency.DEFAULT_SLA_LATENCY_MS == 110.0
     assert dict(result.metrics.raw_end_to_end_latency_ms_per_flow) == {
         flow: physical_latency[flow] + pair_latency[flow]
         for flow in physical_latency
@@ -530,8 +533,9 @@ def test_physical_utility_fairness_and_sla_match_exact_helpers():
     )
     assert result.metrics.physical_only_sla_violations == SLA_v(
         dict(result.metrics.physical_processing_latency_ms_per_flow),
-        110.0,
+        HYBRID_SLA_LATENCY_THRESHOLD_MS,
     )
+    assert result.metrics.sla_latency_threshold_ms == 80.0
 
 
 def test_repeated_slots_are_deterministic_and_beliefs_carry_forward():
@@ -696,7 +700,7 @@ def test_importing_phase5_is_silent_and_does_not_run_a_slot(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_physical_only_110ms_sla_uses_two_selected_stages():
+def test_physical_only_80ms_sla_uses_two_selected_stages():
     configuration = HybridConfiguration(num_flows=8, num_replicas=1)
     ready = {
         ReplicaChoice(1, 1): True,
@@ -721,7 +725,8 @@ def test_physical_only_110ms_sla_uses_two_selected_stages():
         for placement in result.placements
     )
     assert result.metrics.physical_only_sla_violations == sum(
-        latency > 110.0 for latency in physical.values()
+        latency > HYBRID_SLA_LATENCY_THRESHOLD_MS
+        for latency in physical.values()
     )
     assert result.metrics.physical_only_sla_violations > 0
 

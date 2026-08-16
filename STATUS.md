@@ -2949,3 +2949,159 @@ Hybrid algorithm/MC behavior, separated physical and observation jitter,
 selected-only learning, physical-only utility/SLA outcome, telemetry, and
 frozen Exact behavior. Packet loss and wire-byte claims remain outside the
 recorded scope.
+
+
+## Hybrid JSONL trace persistence complete locally
+
+Updated: 2026-08-15. Successful production Hybrid runs now save their detailed
+machine evidence outside Kubernetes as
+`runs/ibg-hybrid-experiment-<UTC timestamp>.jsonl` by default. The launcher
+prints the final path, and `--trace-dir` can relocate it. The versioned file has
+start, per-timeslot, and completion records; every timeslot includes the
+existing placement records and therefore each configured flow's
+`measured_pair_ms`, alongside observations, beliefs, metrics, identities,
+loads, planning links, and parity evidence.
+
+The writer validates complete dimensions, contiguous slots, one placement and
+measured pair per flow, two selected observations per flow, and equilibrium
+typing before creating the file. Cgroup evidence is neither required nor added,
+and processor-private profile allocation remains undisclosed. The complete
+Hybrid Kernel selection passes 178 tests; compilation and `git diff --check`
+pass. No live cluster, Job, image, or traffic was changed or executed for this
+implementation.
+
+
+## Hybrid SLA threshold is now 80 ms locally
+
+Updated: 2026-08-15. With explicit user authorization, Hybrid physical-only SLA
+classification now compares each flow's two selected physical processing
+latencies against 80 ms. Pair latency remains present in
+`measured_pair_ms`/raw end-to-end reference metrics and observation jitter
+remains learning-only; neither enters the active SLA count. Exact remains at
+110 ms and no Exact Python source was edited for this change.
+
+The full 279-test Hybrid selection passes; compilation and `git diff --check`
+pass. Existing JSONL traces keep their historical threshold. No live build or
+run was performed, so the current node-local controller image still has the
+previous behavior until the next normal-build production command.
+
+
+## Hybrid automatic random series implemented locally
+
+Updated: 2026-08-15. `scripts/run_hybrid_kernel_phase4.py run --runs N` now
+requires no seed argument and rejects an explicitly supplied profile seed. It
+uses system CSPRNG values, guarantees a nonzero distinct experiment seed for
+each member, and records that seed in a separate JSONL trace. Every member gets
+a new finite controller Job and fresh uniform beliefs; its experiment seed is
+used for the policy root and first slot ID.
+
+The environment remains fixed: an existing seeded Hybrid deployment keeps its
+profile seed, while a fresh environment receives one automatic random profile
+seed for the entire series. Runtime-profile refresh is disallowed. The first
+member honors the requested build mode and subsequent members reuse the
+prepared image/workloads. Ordinary one-run operation is unchanged and still
+requires `--profile-seed`.
+
+All 284 Hybrid tests pass. The relevant 109-test frozen Exact regression
+selection passes, changed Python compiles, the CLI help exposes the intended
+contract, and `git diff --check` is clean. No live Kubernetes object, kind
+cluster, Docker image, or traffic was changed or exercised. Because the local
+controller behavior has changed (including the earlier Hybrid 80-ms SLA), the
+next live invocation should be a normal build, not `--skip-build`.
+
+Deferred next work remains the isolated CSV-helper verification. It must not
+change default run output, historical CSV files, the new random-series/JSONL
+contract, or frozen Exact behavior.
+
+
+## Hybrid live mismatch diagnosed and resume path corrected
+
+Updated: 2026-08-15. Read-only inspection after the user's failed launch shows
+all three Hybrid StatefulSets at 3/3 Ready replicas. The deployed runtime
+profile is still the exact seeded `20x3x10` allocation with profile seed 42.
+StatefulSet last-applied data describes 7 replicas, while the replica field is
+currently owned through the Kubernetes scale subresource. The launcher
+therefore correctly detected inconsistent persisted layers, but previously had
+no way to resume the safe low-ordinal prefix.
+
+The local launcher now validates and resumes this exact interrupted scale-down
+shape. It still rejects profiles smaller than live replica counts, unequal
+stage counts, ownership/template problems, or any deterministic document
+drift. Focused recovery and lifecycle tests pass 44 tests; the complete Hybrid
+selection passes 286 tests; the relevant frozen Exact selection passes 109
+tests. Changed Python compiles and `git diff --check` passes.
+
+Codex made no live mutation. The next user invocation can use the intended
+normal-build `--runs` command; it will first reconcile the retained three-Pod
+prefix to the requested topology and then execute the series. Do not use
+`--skip-build` until the updated controller image has been built successfully.
+
+
+## Hybrid CSV helpers repaired and `--csv 1` available locally
+
+Updated: 2026-08-15. The five requested outputs now work from the active
+Hybrid JSONL schema while preserving their legacy layouts. `time.csv`,
+`sla_violations.csv`, `aggregate_utility.csv`, and `jain_index.csv` use one
+six-character experiment column with one completed-timeslot value per row.
+`replica_results.csv` uses `(stage, replica)` columns and appends the initial
+beliefs plus every completed post-update snapshot. `log_results` and
+`results.csv` were ignored completely as requested.
+
+`aggregate_utility.csv` now deliberately records
+`raw_end_to_end_reference_utility`. SLA records the active physical-only count;
+time and Jain use their existing completed-slot metrics. The helpers safely
+handle empty files, reordered/added belief identities, and unequal run lengths;
+they reject malformed files, duplicate headers/run hashes, non-finite metrics,
+invalid Jain/SLA/time values, and malformed beliefs.
+
+CSV generation is off by default. Adding `--csv 1` to either a single
+production run or automatic random `--runs N` series exports each completed
+trace host-side to ignored `figures/`; no controller or Kubernetes storage is
+used. A real retained Hybrid trace passed a temporary export probe. All 291
+Hybrid tests and the relevant 109 Exact regressions pass; compilation, CLI
+help, and `git diff --check` pass. No live runtime or existing CSV was mutated.
+
+
+## Hybrid CSVs isolated in their own folder
+
+Updated: 2026-08-15. `--csv 1` now saves all five Hybrid reports under
+`/home/vhakami/vesal/SFC-with-IBG/figures/IBG_hybrid/`. The exporter creates
+the directory recursively when absent. Existing CSV formats and semantics are
+unchanged, and no historical file was moved.
+
+
+## Hybrid control-plane data footprint complete locally
+
+Updated: 2026-08-15. Production `--csv 1` now enables per-timeslot Hybrid
+controller-boundary payload/message accounting and propagates the switch into
+the controller Job. `--csv 0` or omission emits no footprint JSONL block and
+creates no footprint CSVs. The original five Hybrid reports remain unchanged.
+
+Completed slots count actual HTTP application-body bytes for one accepted
+aggregate Kubernetes Pod-list exchange and one route-command/selected-
+telemetry exchange. Belief TX/RX bytes and messages remain zero because beliefs
+are controller-local. The data-only schema validates the six primary category
+totals, exactly one message for each discovery/route/telemetry direction, zero
+belief messages, and derived belief TX-plus-RX totals without double counting.
+Timing, CPU, memory, cgroups, HTTP headers, wire bytes, forwarder traffic, NIC
+throughput, and line rate are outside this implementation.
+
+Enabled trace export creates 16 separate wide-layout files under
+`figures/IBG_hybrid/footprint/`, including each payload/message category,
+belief totals, and exact grand totals. Mixed enabled/disabled traces, malformed
+schemas/files, negative values, incorrect totals, and duplicate run hashes are
+rejected before export.
+
+Local verification passes all 305 Hybrid tests and 188 broad frozen Exact
+regressions. All seven retained Hybrid Kustomize overlays render, changed
+Python compiles, CLI help and `git diff --check` pass. No live Kubernetes or
+Docker mutation and no experiment traffic occurred. A live validation would
+require separate user approval; it is not needed for local completion.
+
+Final verification addendum: `scripts/hybrid_control_plane_summary.py` now
+provides the requested data-only trace summary for every payload/message
+category, derived belief totals, and exact grand totals. It emits no timing or
+CPU metrics and leaves Exact's summary unchanged. Three additional focused
+tests pass, bringing the complete Hybrid result to 308 tests; the recorded 188
+Exact regressions, seven offline renders, compilation, CLI help, and diff
+checks remain passing.

@@ -9,6 +9,11 @@ import os
 from typing import Callable, Mapping
 
 from .contracts import GlobalLoadState, ReplicaChoice
+from .control_plane_footprint import (
+    HYBRID_CONTROL_PLANE_DATA_ENV,
+    HybridControlPlaneDataMeter,
+    validate_hybrid_control_plane_data_snapshot,
+)
 from .console_output import (
     HYBRID_SLOT_EVIDENCE_PREFIX,
     format_hybrid_slot_metrics,
@@ -208,9 +213,10 @@ def _slot_evidence(
         and not hasattr(observation, "observation_seed")
         for observation in slot.observations
     )
-    return {
+    item = {
         "contract_version": HYBRID_KERNEL_PHASE4_VALIDATION_VERSION,
         "slot_id": slot.slot_id,
+        "root_seed": slot.root_seed,
         "configuration": asdict(slot.configuration),
         "flow_order": list(slot.flow_order),
         "policy_mode": policy_mode,
@@ -281,6 +287,11 @@ def _slot_evidence(
         ),
         "metrics": asdict(slot.metrics),
     }
+    control_plane = getattr(outcome, "control_plane", None)
+    if control_plane is not None:
+        validate_hybrid_control_plane_data_snapshot(control_plane)
+        item["control_plane"] = control_plane
+    return item
 
 
 def run_small_live_gate(
@@ -444,8 +455,15 @@ def _controller_from_environment(
     *,
     policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
     mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
+    policy_root_seed: int = 2050,
 ) -> tuple[HybridKernelControllerAdapter, HybridKernelControllerInputDocument]:
     values = os.environ if environ is None else environ
+    footprint_setting = values.get(HYBRID_CONTROL_PLANE_DATA_ENV, "0")
+    if footprint_setting not in {"0", "1"}:
+        raise ValueError(f"{HYBRID_CONTROL_PLANE_DATA_ENV} must be 0 or 1")
+    control_plane_meter = (
+        HybridControlPlaneDataMeter() if footprint_setting == "1" else None
+    )
     inputs = load_controller_input_document(
         values.get(
             "HYBRID_CONTROLLER_INPUTS_PATH",
@@ -454,7 +472,10 @@ def _controller_from_environment(
     )
     ownership = DEFAULT_HYBRID_KERNEL_OWNERSHIP
     discovery = HybridKubernetesReplicaDiscovery(
-        HybridKubernetesApi(ownership=ownership),
+        HybridKubernetesApi(
+            ownership=ownership,
+            control_plane_meter=control_plane_meter,
+        ),
         inputs.configuration,
         ownership=ownership,
     )
@@ -463,7 +484,8 @@ def _controller_from_environment(
             "FLOW_GENERATOR_URL",
             "http://ibg-hybrid-flow-generator.ibg-hybrid-testbed."
             "svc.cluster.local.:8080",
-        )
+        ),
+        control_plane_meter=control_plane_meter,
     )
     uniform = (0.25, 0.25, 0.25, 0.25)
     return (
@@ -472,8 +494,10 @@ def _controller_from_environment(
             discovery=discovery,
             flow_generator=flow_generator,
             initial_beliefs={item.choice: uniform for item in inputs.admission},
+            policy_root_seed=policy_root_seed,
             policy_mode=policy_mode,
             mc_workers=mc_workers,
+            control_plane_meter=control_plane_meter,
         ),
         inputs,
     )

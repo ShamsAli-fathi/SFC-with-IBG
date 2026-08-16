@@ -467,6 +467,12 @@ def _profile_seed_from_runtime_source_identity(source_identity: str) -> int | No
     return _validate_profile_seed(int(value))
 
 
+def profile_seed_from_runtime_source_identity(source_identity: str) -> int | None:
+    """Return validated host-side seeded-profile provenance, when present."""
+
+    return _profile_seed_from_runtime_source_identity(source_identity)
+
+
 def seeded_hidden_state_sequence(
     *,
     stage: int,
@@ -775,6 +781,7 @@ def validate_dynamic_topology_transition(
     target_configuration: HybridConfiguration,
     profile_seed: int | None = None,
     allow_runtime_profile_refresh: bool = False,
+    allow_interrupted_scale_down: bool = False,
 ) -> HybridKernelDynamicTopologyTransition:
     """Reject drift and permit only deterministic dimension-driven changes."""
 
@@ -799,7 +806,14 @@ def validate_dynamic_topology_transition(
             "deployed runtime/controller configurations differ"
         )
     deployed_configuration = current_runtime.configuration
-    if deployed_configuration.num_replicas != existing_replica_count:
+    replica_count_matches = (
+        deployed_configuration.num_replicas == existing_replica_count
+    )
+    interrupted_scale_down_prefix = (
+        allow_interrupted_scale_down
+        and existing_replica_count < deployed_configuration.num_replicas
+    )
+    if not replica_count_matches and not interrupted_scale_down_prefix:
         raise HybridKernelProfileExpansionError(
             "deployed profile replica count differs from StatefulSet count"
         )

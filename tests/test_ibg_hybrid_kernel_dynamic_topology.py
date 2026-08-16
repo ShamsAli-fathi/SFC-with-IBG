@@ -300,6 +300,93 @@ def test_dynamic_transition_accepts_only_deterministic_high_ordinal_removal():
         )
 
 
+def test_dynamic_transition_recovers_only_an_exact_interrupted_scale_down_prefix():
+    canonical_runtime, canonical_controller = _canonical_documents()
+    deployed_configuration = HybridConfiguration(20, 3, 10, 2)
+    target_configuration = HybridConfiguration(20, 3, 7, 2)
+    deployed_runtime, deployed_controller = generate_dynamic_topology_documents(
+        canonical_runtime=canonical_runtime,
+        canonical_controller=canonical_controller,
+        configuration=deployed_configuration,
+        profile_seed=42,
+    )
+    proposed_runtime, proposed_controller = generate_dynamic_topology_documents(
+        canonical_runtime=canonical_runtime,
+        canonical_controller=canonical_controller,
+        configuration=target_configuration,
+        profile_seed=42,
+    )
+
+    with pytest.raises(
+        HybridKernelProfileExpansionError,
+        match="profile replica count differs",
+    ):
+        validate_dynamic_topology_transition(
+            deployed_runtime=deployed_runtime,
+            deployed_controller=deployed_controller,
+            proposed_runtime=proposed_runtime,
+            proposed_controller=proposed_controller,
+            canonical_runtime=canonical_runtime,
+            canonical_controller=canonical_controller,
+            existing_replica_count=3,
+            target_configuration=target_configuration,
+            profile_seed=42,
+        )
+
+    recovered = validate_dynamic_topology_transition(
+        deployed_runtime=deployed_runtime,
+        deployed_controller=deployed_controller,
+        proposed_runtime=proposed_runtime,
+        proposed_controller=proposed_controller,
+        canonical_runtime=canonical_runtime,
+        canonical_controller=canonical_controller,
+        existing_replica_count=3,
+        target_configuration=target_configuration,
+        profile_seed=42,
+        allow_interrupted_scale_down=True,
+    )
+    assert recovered.deployed_configuration == deployed_configuration
+    assert recovered.target_configuration == target_configuration
+    assert {choice.replica for choice in recovered.removed_runtime_identities} == {
+        8,
+        9,
+        10,
+    }
+
+    with pytest.raises(
+        HybridKernelProfileExpansionError,
+        match="profile replica count differs",
+    ):
+        validate_dynamic_topology_transition(
+            deployed_runtime=deployed_runtime,
+            deployed_controller=deployed_controller,
+            proposed_runtime=proposed_runtime,
+            proposed_controller=proposed_controller,
+            canonical_runtime=canonical_runtime,
+            canonical_controller=canonical_controller,
+            existing_replica_count=11,
+            target_configuration=target_configuration,
+            profile_seed=42,
+            allow_interrupted_scale_down=True,
+        )
+
+    drifted_runtime = copy.deepcopy(deployed_runtime)
+    drifted_runtime["profiles"][0]["hidden_state"] = 1
+    with pytest.raises(HybridKernelProfileExpansionError, match="versioned rule"):
+        validate_dynamic_topology_transition(
+            deployed_runtime=drifted_runtime,
+            deployed_controller=deployed_controller,
+            proposed_runtime=proposed_runtime,
+            proposed_controller=proposed_controller,
+            canonical_runtime=canonical_runtime,
+            canonical_controller=canonical_controller,
+            existing_replica_count=3,
+            target_configuration=target_configuration,
+            profile_seed=42,
+            allow_interrupted_scale_down=True,
+        )
+
+
 def test_arbitrary_positive_cli_and_invalid_dimensions_fail_before_contact():
     parsed = runner.parse_args(
         [
@@ -847,6 +934,52 @@ def test_mocked_dynamic_8_to_5_scales_before_reducing_profiles(monkeypatch):
     rerun_commands = [command for command, _capture in cluster.commands[command_count:]]
     assert not any("scale" in command or "restart" in command for command in rerun_commands)
     assert runner._serving_process_snapshot(_pods(5), replica_count=5) == retained
+
+
+def test_mocked_interrupted_scale_down_reconciles_retained_prefix(
+    monkeypatch, capsys
+):
+    cluster = FakeDynamicCluster(replicas=3, flows=20, profile_seed=42)
+    _configuration, cluster.runtime, cluster.controller = _generated(
+        flows=20,
+        replicas=10,
+        profile_seed=42,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_local_platform_image_id",
+        lambda execute, image: (
+            SERVICE_ID if image == runner.SERVICE_IMAGE else CONTROLLER_ID
+        ),
+    )
+
+    runner.run_experiment(
+        skip_build=True,
+        requested_flows=20,
+        requested_stages=3,
+        requested_replicas=7,
+        rollout_batch_size=2,
+        max_iterations=2,
+        profile_seed=42,
+        execute=cluster.execute,
+    )
+
+    assert cluster.replicas == 7
+    assert cluster.runtime["configuration"]["num_replicas"] == 7
+    assert len(cluster.runtime["profiles"]) == 21
+    assert cluster.controller["configuration"]["num_replicas"] == 7
+    assert [
+        event[1]
+        for event in cluster.rollout_events
+        if event[0] == "scale"
+    ] == [5, 7]
+    assert not any(
+        "restart" in command for command, _capture in cluster.commands
+    )
+    assert (
+        "Hybrid interrupted scale-down recovery: StatefulSets=3, "
+        "deployed-profile-replicas=10"
+    ) in capsys.readouterr().out
 
 
 def test_dynamic_kustomize_projection_keeps_templates_and_generated_configmaps():

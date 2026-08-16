@@ -62,6 +62,9 @@ CONTROLLER_COPY_MAP = {
     ),
     "deploy/hybrid-kubernetes/image-stage-budget.py": "IBG_Hybrid/budgeted.py",
     "IBG_Hybrid/contracts.py": "IBG_Hybrid/contracts.py",
+    "IBG_Hybrid/control_plane_footprint.py": (
+        "IBG_Hybrid/control_plane_footprint.py"
+    ),
     "IBG_Hybrid/expected_utility.py": "IBG_Hybrid/expected_utility.py",
     "IBG_Hybrid/phase0_contract.py": "IBG_Hybrid/phase0_contract.py",
     "IBG_Hybrid/policy.py": "IBG_Hybrid/policy.py",

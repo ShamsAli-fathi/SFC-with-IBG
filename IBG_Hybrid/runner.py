@@ -65,6 +65,7 @@ from .slot_contracts import (
 
 EXACT_BELIEF_RETENTION = 0.8
 EXACT_EQUILIBRIUM_THRESHOLD = 0.033
+HYBRID_SLA_LATENCY_THRESHOLD_MS = 80.0
 
 
 # These names intentionally describe orchestration only.  They do not select
@@ -348,7 +349,7 @@ def _compute_metrics(
     )
     sla_violations = SLA_v(
         active_outcome_latency,
-        exact_latency.DEFAULT_SLA_LATENCY_MS,
+        HYBRID_SLA_LATENCY_THRESHOLD_MS,
     )
 
     fairness_input = {
@@ -390,7 +391,7 @@ def _compute_metrics(
         raw_end_to_end_reference_utility_per_flow=_metric_pairs(
             raw_reference_utility
         ),
-        sla_latency_threshold_ms=exact_latency.DEFAULT_SLA_LATENCY_MS,
+        sla_latency_threshold_ms=HYBRID_SLA_LATENCY_THRESHOLD_MS,
         physical_only_sla_violations=sla_violations,
         jain_fairness=fairness,
         elapsed_seconds=elapsed_seconds,

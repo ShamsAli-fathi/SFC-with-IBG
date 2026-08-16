@@ -398,7 +398,9 @@ def test_phase75_job_patch_and_source_configmap_are_controller_only():
     )
     assert set(captured["ConfigMap"]["data"]) == {
         "console_output.py",
+        "control_plane_footprint.py",
         "kernel_controller.py",
+        "kernel_kubernetes_discovery.py",
         "kernel_phase4_validation.py",
         "kernel_controller_cli.py",
     }

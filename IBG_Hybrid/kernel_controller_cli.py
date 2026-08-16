@@ -28,6 +28,7 @@ MAX_HYBRID_KERNEL_MC_WORKERS = 2
 HYBRID_CONTROLLER_LIFECYCLE_ENV = "HYBRID_CONTROLLER_LIFECYCLE"
 HYBRID_CONTROLLER_LIFECYCLE_EXPERIMENT = "experiment"
 HYBRID_CONTROLLER_LIFECYCLE_VALIDATION = "validation"
+HYBRID_POLICY_ROOT_SEED_ENV = "HYBRID_POLICY_ROOT_SEED"
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
     controller, inputs = _controller_from_environment(
         policy_mode=selection.policy_mode,
         mc_workers=selection.effective_workers,
+        policy_root_seed=int(
+            os.environ.get(HYBRID_POLICY_ROOT_SEED_ENV, "2050")
+        ),
     )
     def print_completed_slot(iteration, slot, item) -> None:
         item["controller_contract_version"] = (

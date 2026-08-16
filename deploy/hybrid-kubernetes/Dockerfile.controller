@@ -32,7 +32,7 @@ COPY deploy/hybrid-kubernetes/image-stage-budget.py /app/IBG_Hybrid/budgeted.py
 COPY IBG_Hybrid/contracts.py IBG_Hybrid/expected_utility.py IBG_Hybrid/phase0_contract.py IBG_Hybrid/policy.py /app/IBG_Hybrid/
 COPY IBG_Hybrid/slot_contracts.py IBG_Hybrid/simulation.py IBG_Hybrid/console_output.py IBG_Hybrid/runner.py /app/IBG_Hybrid/
 COPY IBG_Hybrid/kernel_infrastructure_contract.py IBG_Hybrid/kernel_route_contracts.py /app/IBG_Hybrid/
-COPY IBG_Hybrid/kernel_controller_config.py IBG_Hybrid/kernel_kubernetes_discovery.py IBG_Hybrid/kernel_controller.py IBG_Hybrid/kernel_controller_service.py IBG_Hybrid/kernel_phase4_validation.py /app/IBG_Hybrid/
+COPY IBG_Hybrid/control_plane_footprint.py IBG_Hybrid/kernel_controller_config.py IBG_Hybrid/kernel_kubernetes_discovery.py IBG_Hybrid/kernel_controller.py IBG_Hybrid/kernel_controller_service.py IBG_Hybrid/kernel_phase4_validation.py /app/IBG_Hybrid/
 COPY IBG_Hybrid/kernel_controller_cli.py /app/IBG_Hybrid/
 
 USER 10001:10001

@@ -11,6 +11,7 @@ from typing import Callable
 import httpx
 
 from .contracts import HybridConfiguration, ReplicaChoice
+from .control_plane_footprint import HybridControlPlaneDataMeter
 from .kernel_infrastructure_contract import (
     DEFAULT_HYBRID_KERNEL_OWNERSHIP,
     HybridKernelContractError,
@@ -40,6 +41,7 @@ class HybridKubernetesApi:
         verify: str | bool | None = None,
         transport: httpx.BaseTransport | None = None,
         timeout_seconds: float = 10.0,
+        control_plane_meter: HybridControlPlaneDataMeter | None = None,
     ) -> None:
         self.ownership = ownership
         self.base_url = base_url or self._in_cluster_url()
@@ -51,6 +53,8 @@ class HybridKubernetesApi:
         )
         self.transport = transport
         self.timeout_seconds = float(timeout_seconds)
+        self.control_plane_meter = control_plane_meter
+        self._last_exchange_payload_bytes: tuple[int, int] | None = None
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
 
@@ -89,12 +93,29 @@ class HybridKubernetesApi:
             )
             response.raise_for_status()
             payload = response.json()
+            self._last_exchange_payload_bytes = (
+                len(response.request.content),
+                len(response.content),
+            )
         items = payload.get("items")
         if not isinstance(items, list):
             raise HybridKernelContractError(
                 "Kubernetes Pod list response must contain an items list"
             )
         return tuple(items)
+
+    def record_last_successful_discovery_exchange(self) -> None:
+        if self.control_plane_meter is None:
+            return
+        if self._last_exchange_payload_bytes is None:
+            raise RuntimeError("Hybrid Kubernetes discovery exchange is unavailable")
+        request_bytes, response_bytes = self._last_exchange_payload_bytes
+        self.control_plane_meter.record_exchange(
+            request_field="kubernetes_discovery_tx",
+            response_field="kubernetes_discovery_rx",
+            request_payload_bytes=request_bytes,
+            response_payload_bytes=response_bytes,
+        )
 
 
 def _is_ready(pod: dict[str, object]) -> bool:
@@ -169,11 +190,16 @@ class HybridKubernetesReplicaDiscovery:
                     ready=_is_ready(pod),
                 )
             )
-        return HybridKernelDiscoverySnapshot(
+        snapshot = HybridKernelDiscoverySnapshot(
             configuration=self.configuration,
             replicas=tuple(replicas),
             ownership=self.ownership,
         )
+        # Count only the aggregate Pod-list response that produced the accepted
+        # complete Ready snapshot.  Transient incomplete polling attempts never
+        # become part of completed-slot evidence.
+        self.api.record_last_successful_discovery_exchange()
+        return snapshot
 
     def wait_for_complete_ready(
         self,
@@ -196,4 +222,3 @@ class HybridKubernetesReplicaDiscovery:
         raise HybridKernelContractError(
             f"Hybrid replicas did not become completely Ready: {last_error}"
         ) from last_error
-
