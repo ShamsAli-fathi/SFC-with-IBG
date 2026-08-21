@@ -30,7 +30,7 @@ SERVICE_ACCOUNT_DIRECTORY = Path(
 
 
 class HybridKubernetesApi:
-    """Namespace-scoped Kubernetes Core API reader for Hybrid replica Pods."""
+    """Persistent namespace-scoped Kubernetes Core API reader."""
 
     def __init__(
         self,
@@ -57,6 +57,29 @@ class HybridKubernetesApi:
         self._last_exchange_payload_bytes: tuple[int, int] | None = None
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        self._client = httpx.Client(
+            base_url=self.base_url,
+            headers={"Authorization": f"Bearer {self.token}"},
+            verify=self.verify,
+            transport=self.transport,
+            timeout=self.timeout_seconds,
+        )
+
+    @property
+    def is_closed(self) -> bool:
+        return self._client.is_closed
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> HybridKubernetesApi:
+        if self.is_closed:
+            raise RuntimeError("Hybrid Kubernetes API client is closed")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        del exc_type, exc_value, traceback
+        self.close()
 
     @staticmethod
     def _in_cluster_url() -> str:
@@ -73,6 +96,8 @@ class HybridKubernetesApi:
         ).strip()
 
     def list_hybrid_replica_pods(self) -> tuple[dict[str, object], ...]:
+        if self.is_closed:
+            raise RuntimeError("Hybrid Kubernetes API client is closed")
         selector = ",".join(
             (
                 f"app.kubernetes.io/name={self.ownership.replica_name_label}",
@@ -80,23 +105,16 @@ class HybridKubernetesApi:
                 "app.kubernetes.io/component=replica-stage",
             )
         )
-        with httpx.Client(
-            base_url=self.base_url,
-            headers={"Authorization": f"Bearer {self.token}"},
-            verify=self.verify,
-            transport=self.transport,
-            timeout=self.timeout_seconds,
-        ) as client:
-            response = client.get(
-                f"/api/v1/namespaces/{self.ownership.namespace}/pods",
-                params={"labelSelector": selector},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            self._last_exchange_payload_bytes = (
-                len(response.request.content),
-                len(response.content),
-            )
+        response = self._client.get(
+            f"/api/v1/namespaces/{self.ownership.namespace}/pods",
+            params={"labelSelector": selector},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        self._last_exchange_payload_bytes = (
+            len(response.request.content),
+            len(response.content),
+        )
         items = payload.get("items")
         if not isinstance(items, list):
             raise HybridKernelContractError(
@@ -146,6 +164,9 @@ class HybridKubernetesReplicaDiscovery:
         self.api = api
         self.configuration = configuration
         self.ownership = ownership
+
+    def close(self) -> None:
+        self.api.close()
 
     def discover_complete_ready(self) -> HybridKernelDiscoverySnapshot:
         replicas = []

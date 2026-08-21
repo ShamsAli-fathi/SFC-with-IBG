@@ -26,6 +26,10 @@ HYBRID_KERNEL_DISCOVERY_CONTRACT_VERSION = "ibg-hybrid-ready-discovery-v1"
 HYBRID_KERNEL_CONTROLLER_LIFECYCLE_VERSION = (
     "ibg-hybrid-kernel-controller-lifecycle-v1"
 )
+HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION = (
+    "ibg-hybrid-controller-lookahead-pool-v1"
+)
+HYBRID_KERNEL_LOOKAHEAD_WORKERS = 2
 HYBRID_KERNEL_IMAGE_OWNERSHIP_VERSION = "ibg-hybrid-kernel-image-ownership-v1"
 
 HYBRID_KERNEL_NAMESPACE = "ibg-hybrid-testbed"

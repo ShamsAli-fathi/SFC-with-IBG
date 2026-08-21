@@ -12,6 +12,8 @@ from IBG_Hybrid.contracts import GlobalLoadState, ReplicaChoice
 from IBG_Hybrid.kernel_controller_config import load_controller_input_document
 from IBG_Hybrid.kernel_infrastructure_contract import (
     DEFAULT_HYBRID_KERNEL_OWNERSHIP,
+    HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION,
+    HYBRID_KERNEL_LOOKAHEAD_WORKERS,
 )
 from IBG_Hybrid.kernel_phase4_validation import run_small_live_gate
 from IBG_Hybrid.kernel_phase8_evidence import (
@@ -309,6 +311,17 @@ def test_phase8_gate1_lookahead_has_complete_routes_telemetry_and_parity():
     assert all(item["policy_mode"] == "lookahead" for item in evidence)
     assert first.final_loads.loads == ((2, 1), (1, 1), (2, 1))
 
+    persistent_pool_evidence = copy.deepcopy(evidence)
+    for item in persistent_pool_evidence:
+        item["lookahead_process_workers"] = HYBRID_KERNEL_LOOKAHEAD_WORKERS
+        item["lookahead_pool_lifecycle_version"] = (
+            HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION
+        )
+        item["active_child_processes_after_slot"] = (
+            HYBRID_KERNEL_LOOKAHEAD_WORKERS
+        )
+    validate_phase8_gate1_slots(persistent_pool_evidence)
+
 
 def test_phase8_gate1_evidence_rejects_mc_or_incomplete_telemetry():
     inputs = load_controller_input_document(PHASE8 / "controller-inputs.json")
@@ -331,6 +344,13 @@ def test_phase8_gate1_evidence_rejects_mc_or_incomplete_telemetry():
     invalid = copy.deepcopy(evidence)
     invalid[0]["observation_count"] = 7
     with pytest.raises(HybridKernelPhase8EvidenceError, match="eight"):
+        validate_phase8_gate1_slots(invalid)
+    invalid = copy.deepcopy(evidence)
+    invalid[0]["lookahead_process_workers"] = HYBRID_KERNEL_LOOKAHEAD_WORKERS
+    invalid[0]["active_child_processes_after_slot"] = (
+        HYBRID_KERNEL_LOOKAHEAD_WORKERS
+    )
+    with pytest.raises(HybridKernelPhase8EvidenceError, match="pool lifecycle"):
         validate_phase8_gate1_slots(invalid)
 
 

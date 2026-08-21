@@ -2738,3 +2738,149 @@ derived belief totals, and exact grand totals without CPU or timing fields.
 Its three focused tests raise the complete Hybrid count from the earlier 305
 to 308 passing tests. The previously recorded 188 Exact regressions, seven
 offline renders, compilation, and diff checks remain passing.
+
+
+### Planned Hybrid per-timeslot execution optimization sequence
+
+Planned: 2026-08-16. No implementation or live mutation is part of this entry.
+
+1. **Phase 1: persistent HTTP clients — medium difficulty.** Move Kubernetes
+   discovery, controller-to-flow-generator, and flow-generator ingress clients
+   to explicit controller/application lifetimes. Prove connection reuse and
+   cleanup while retaining exactly one accepted discovery exchange and one
+   route/telemetry exchange per completed slot, unchanged application bodies,
+   errors, telemetry, footprint totals, and Pure/Kernel results. Do not alter
+   inherited public-forwarder clients or keep-alive values.
+2. **Phase 2: bounded parallel candidate evaluation — high difficulty.**
+   Introduce a pure, process-safe task for one focal lookahead candidate and
+   return its canonical index. Keep real flows and each branch's projected
+   future flows sequential. First validate serial versus two-process branch
+   equality without activating the parallel path in production. Require exact
+   candidate accounting, scores, failures, selected routes, loads, and metric
+   parity.
+3. **Phase 3: controller-lifetime process pool — medium-high difficulty.**
+   Create one bounded two-process pool for the finite controller run, reuse it
+   across flows and slots, and activate only the Phase 2 independent-candidate
+   boundary. Prove no stale belief/load state, deterministic canonical
+   collection, clean exception propagation, termination cleanup, no orphaned
+   children, and complete serial/parallel Hybrid result equality.
+4. **Phase 4: soft controller CPU priority — medium overall difficulty and
+   last by design.** Only if controlled results show remaining controller CPU
+   contention, raise the shared CPU request from `100m` toward a measured
+   value, initially evaluating `1`, while keeping the `2`-CPU limit. Update all
+   controller templates and worker resource-preflight formulas together. Do
+   not pin cores, add nodes, or reduce replica access to idle CPU. A live A/B
+   gate requires separate approval and must show resource fit, no serving
+   regressions/restarts, and unchanged Pure/Kernel behavior.
+
+Each phase ends with its focused suite, the full Hybrid selection, relevant
+frozen Exact regressions, compilation, applicable offline Kustomize renders,
+and `git diff --check`. Phase 1 is the next authorized planning handoff; later
+phases must not be pulled forward before the preceding acceptance gate passes.
+
+
+### Hybrid optimization Phase 1 complete locally
+
+Completed: 2026-08-16. Controller-side Kubernetes discovery and flow-generator
+HTTP clients now persist across slots and close with the finite controller.
+The flow-generator starts and closes one asynchronous first-forwarder client
+pool through its FastAPI lifespan. Construction failure, normal completion,
+slot failure, application shutdown, repeated closure, and use-after-close have
+explicit ownership behavior. Direct non-ASGI executor calls retain their
+historical per-call lifecycle.
+
+Focused tests prove two-slot reuse, exact enabled footprint message totals,
+belief continuity, application startup/shutdown, failed-slot cleanup, and
+unchanged direct-call behavior. All 312 Hybrid tests pass in memory-bounded
+groups, the established 188 frozen Exact regression selection passes, all
+seven Hybrid Kustomize overlays render offline, changed Python compiles, and
+`git diff --check` passes. No cluster, Job, workload, image, traffic, generated
+trace, or CSV was changed. These are lifecycle/parity results, not live speed
+evidence.
+
+The next ordered work is Phase 2 only: expose a pure process-safe evaluator for
+one independent focal lookahead candidate, retain the serial production path,
+and prove canonical serial/two-process equality before Phase 3 can activate a
+controller-lifetime pool.
+
+
+### Hybrid optimization Phase 2 complete locally
+
+Completed: 2026-08-16. The deterministic lookahead implementation now has one
+top-level picklable task/evaluator/outcome boundary per independent focal
+candidate. Tasks freeze every required current input and retain the candidate's
+canonical index; workers own private state and policy caches, execute dependent
+future-flow projections sequentially, and return complete success or dead-end
+accounting. Decision assembly restores canonical order before the unchanged
+strict-improvement and first-on-tie rule. Unexpected worker errors retain their
+candidate index and action.
+
+Production remains serial. The two-process path is reachable only through a
+private import-safe validation method with a caller-owned executor. No pool was
+added to the controller, runner, CLI, Job, launcher, or automatic lookahead
+path, and existing MC behavior is unchanged.
+
+The focused Phase 2/lookahead/MC group passes 46 tests. The complete Hybrid
+suite passes 321 tests in memory-bounded groups, and the established 188 frozen
+Exact regressions pass. Changed Python compiles, all seven Hybrid Kustomize
+overlays render offline, and `git diff --check` passes. No live cluster, image,
+Job, workload, or traffic operation occurred, and no speed improvement is
+claimed.
+
+The next ordered phase is Phase 3: after separate authorization, give the
+finite controller one bounded two-process pool, reuse it across focal decisions
+and slots, and activate only this proven independent-candidate boundary with
+lifecycle and full-result parity gates. Phase 4 CPU priority remains deferred.
+
+
+### Hybrid optimization Phase 3 complete locally
+
+Completed: 2026-08-16. The finite Kernel lookahead controller now creates one
+spawn-isolated two-process pool, reuses the same executor and worker processes
+across all sequential focal flows and completed slots, and closes the pool
+before its persistent HTTP clients at controller exit. Every task continues to
+use the Phase 2 immutable indexed branch boundary and a private policy/cache.
+Pure callers remain serial unless the internal executor boundary is supplied.
+
+Focused tests prove full-slot serial/parallel equality, one map per sequential
+real focal flow, identical worker PIDs across two slots, fresh belief transfer,
+canonical decision equality, task-failure propagation before traffic, normal
+shutdown with no remaining children, lifecycle evidence compatibility, and no
+lookahead pool in manual MC mode. The complete Hybrid suite passes 325 tests in
+memory-bounded groups; the established 188 frozen Exact regressions also pass.
+Changed Python compiles, all seven Hybrid Kustomize overlays render offline,
+and `git diff --check` passes.
+
+No cluster, image, Job, workload, traffic, repository experiment trace, or CSV
+output was created or modified. These local gates do not establish a speedup.
+The next action is a separately approved clean finite-controller live gate:
+build/load the changed controller image, verify exactly two stable lookahead
+children across slots and none after Job completion, confirm Pure/Kernel
+semantic parity and serving non-regression, and compare wall time. Phase 4 soft
+CPU priority remains conditional on that evidence and is not implemented.
+
+
+### Hybrid optimization Phase 3 live gate complete
+
+Completed: 2026-08-16. After explicit user approval, only the changed controller
+image was rebuilt and loaded, and the existing dedicated `ibg-hybrid` cluster
+was retained. The user-authorized topology changed from 30x3x15 to 15x3x8 at
+profile seed 50; ordinal-prefix Pods 0--7 and the flow generator retained their
+UIDs and zero restarts, while removed ordinals 8--14 were the only serving Pods
+deleted by the bounded scale-down.
+
+The explicit-lookahead Job completed three slots at root seed 2050. Every slot
+reported the fixed two-worker lifecycle/version/active-child contract, exact
+Pure/Kernel replay parity, belief chaining, complete placement before one
+request, 30 selected observations, 15 measured pairs, and worker-only Ready
+replicas. Worker PIDs 22 and 25 persisted across all slots. The Job exited zero;
+no controller container remained. Slot metric times were 10.150, 7.545, and
+8.546 seconds, but no speedup is claimed without a matched serial baseline.
+
+The validated trace is
+`runs/ibg-hybrid-experiment-20260816T105745.330728Z.jsonl`. Changed Python
+compiles, all seven offline overlays render, and `git diff --check` passes after
+the live gate. No code correction was required, so the already-passing focused,
+325-Hybrid, and 188-Exact local regression results remain the applicable code
+gate. Phase 3 is complete. Phase 4 CPU priority remains conditional and needs
+new explicit authorization.

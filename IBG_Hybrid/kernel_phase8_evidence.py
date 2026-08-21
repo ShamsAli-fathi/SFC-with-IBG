@@ -5,6 +5,11 @@ from __future__ import annotations
 from collections import Counter
 from typing import Mapping, Sequence
 
+from .kernel_infrastructure_contract import (
+    HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION,
+    HYBRID_KERNEL_LOOKAHEAD_WORKERS,
+)
+
 
 HYBRID_KERNEL_PHASE8_GATE1_EVIDENCE_VERSION = (
     "ibg-hybrid-kernel-phase8-gate1-evidence-v1"
@@ -67,9 +72,21 @@ def validate_phase8_gate1_slots(
                 raise HybridKernelPhase8EvidenceError(
                     f"slot failed required semantic boundary: {field}"
                 )
-        if slot.get("active_child_processes_after_slot") != 0:
+        lookahead_workers = slot.get("lookahead_process_workers", 0)
+        expected_lifecycle = (
+            HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION
+            if lookahead_workers == HYBRID_KERNEL_LOOKAHEAD_WORKERS
+            else None
+        )
+        if (
+            lookahead_workers not in {0, HYBRID_KERNEL_LOOKAHEAD_WORKERS}
+            or slot.get("lookahead_pool_lifecycle_version")
+            != expected_lifecycle
+            or slot.get("active_child_processes_after_slot")
+            != lookahead_workers
+        ):
             raise HybridKernelPhase8EvidenceError(
-                "lookahead slot retained an unexpected child process"
+                "lookahead process-pool lifecycle evidence is inconsistent"
             )
 
         placements = slot.get("placements")

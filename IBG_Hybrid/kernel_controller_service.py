@@ -45,18 +45,21 @@ def main() -> None:
         flow_generator=flow_generator,
         initial_beliefs={item.choice: uniform for item in inputs.admission},
     )
-    first_slot = int(os.environ.get("SLOT_ID", "1"))
-    iterations = int(os.environ.get("MAX_ITERATIONS", "1"))
-    if first_slot < 1 or iterations < 1:
-        raise ValueError("SLOT_ID and MAX_ITERATIONS must be positive")
-    for iteration, slot_id in enumerate(
-        range(first_slot, first_slot + iterations), start=1
-    ):
-        outcome = controller.run_slot(slot_id)
-        print(
-            format_hybrid_slot_metrics(outcome.slot, iteration=iteration),
-            flush=True,
-        )
+    try:
+        first_slot = int(os.environ.get("SLOT_ID", "1"))
+        iterations = int(os.environ.get("MAX_ITERATIONS", "1"))
+        if first_slot < 1 or iterations < 1:
+            raise ValueError("SLOT_ID and MAX_ITERATIONS must be positive")
+        for iteration, slot_id in enumerate(
+            range(first_slot, first_slot + iterations), start=1
+        ):
+            outcome = controller.run_slot(slot_id)
+            print(
+                format_hybrid_slot_metrics(outcome.slot, iteration=iteration),
+                flush=True,
+            )
+    finally:
+        controller.close()
 
 
 if __name__ == "__main__":

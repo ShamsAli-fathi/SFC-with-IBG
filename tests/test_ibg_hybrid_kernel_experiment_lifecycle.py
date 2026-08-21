@@ -179,8 +179,10 @@ def test_controller_cli_selects_production_lifecycle_and_reports_final_status(
     monkeypatch.setenv("SLOT_ID", "4")
     monkeypatch.setenv("MAX_ITERATIONS", "5")
     monkeypatch.setenv("HYBRID_POLICY_ROOT_SEED", "987654321")
+    close_calls = []
     controller = SimpleNamespace(
-        beliefs={ReplicaChoice(1, 1): (0.25, 0.25, 0.25, 0.25)}
+        beliefs={ReplicaChoice(1, 1): (0.25, 0.25, 0.25, 0.25)},
+        close=lambda: close_calls.append("closed"),
     )
     controller_arguments = {}
 
@@ -237,6 +239,7 @@ def test_controller_cli_selects_production_lifecycle_and_reports_final_status(
     assert output.index(expected) < output.index("Final replica state")
     assert "State  Capacity" not in output
     assert controller_arguments["policy_root_seed"] == 987654321
+    assert close_calls == ["closed"]
 
 
 def test_production_cli_requires_positive_dimensions_and_iteration_limit():

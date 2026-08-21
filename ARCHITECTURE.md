@@ -3111,3 +3111,171 @@ every data-only snapshot, and reports per-run median/p95 values for each
 payload category, each message category, the two derived belief totals, and
 the two exact grand totals. It contains no timing or CPU reporting and does not
 change Exact's separate `scripts/control_plane_summary.py`.
+
+
+## Planned Hybrid per-timeslot execution optimizations
+
+Planned: 2026-08-16. Four architecture-only optimizations are ordered for the
+Hybrid Kernel controller. They must not change flow order, pruning, candidate
+sets, lookahead depth, branch recurrence, canonical tie-breaking, placement,
+loads, random streams, physical or observation jitter, learning, beliefs,
+utility/SLA, fairness, equilibrium, route semantics, telemetry, footprint
+arithmetic, worker placement, or frozen Exact behavior.
+
+Phase 1, **persistent HTTP clients**, has medium implementation difficulty.
+Controller-owned clients will reuse connections across slots for aggregate
+Kubernetes discovery and the controller-to-flow-generator request. The
+flow-generator application will reuse its client pool for first-forwarder
+dispatch. Request counts, bodies, validation, timeouts, and completed-slot
+footprint categories remain unchanged. Existing inherited forwarder-local and
+downstream clients, their 30-second keep-alive contract, and measured selected-
+pair semantics are outside this change. Every client requires an explicit
+startup/shutdown owner and deterministic cleanup on success and failure.
+
+Phase 2, **bounded parallel lookahead candidate evaluation**, has high
+implementation difficulty because semantic equality is the primary gate. Only
+independent focal-candidate branches for one current real flow may execute in
+parallel. Real flows remain sequential, and projected future flows inside each
+branch remain sequential. Each task receives immutable current state, beliefs,
+admission data, planning links, parameters, and its canonical candidate index.
+Results must be restored to canonical order before the unchanged strict-
+improvement and first-on-tie selection rule is applied. Phase 2 first exposes
+and validates this pure worker boundary while production remains serial.
+
+Phase 3, **controller-lifetime bounded process-pool reuse**, has medium-high
+implementation difficulty. One two-process pool will be created by the finite
+controller, reused across all focal decisions and completed slots, and closed
+when the controller exits. Workers must receive current slot state explicitly
+and must never retain controller beliefs, real loads, or mutable policy state.
+Normal completion, task failure, and controller termination must leave no
+child process. This phase activates the Phase 2 boundary only after exact
+serial/parallel parity is established.
+
+Phase 4, **soft controller CPU priority**, is deliberately last and has medium
+overall difficulty: the manifest edit is small, but resource admission and
+live non-regression evidence are not. If preceding measurements justify it,
+the controller CPU request may increase from `100m` toward an evidence-selected
+value, initially considering `1`, while retaining the `2`-CPU limit. This is
+shared weighted capacity, not an exclusive or pinned core. It adds no node and
+changes no one-control-plane/one-worker placement rule. All controller Job
+templates and worker-only resource-preflight arithmetic must agree before a
+separately approved live comparison. Unused CPU must remain available to
+replicas and the flow generator.
+
+
+## Hybrid persistent HTTP-client lifecycle
+
+Implemented locally: 2026-08-16. Phase 1 gives the finite controller explicit
+ownership of one persistent synchronous Kubernetes client and one persistent
+controller-to-flow-generator client. Both are constructed once, reused by all
+slots, closed once by the controller CLI on success or failure, and rejected
+after closure. Environment construction uses a pending-resource stack so a
+partially constructed controller cannot leak an already-created client.
+
+The Hybrid flow-generator FastAPI lifespan now starts one asynchronous client
+pool in `HybridKernelRouteExecutor`, reuses it for first-forwarder dispatches,
+and closes it at application shutdown. Import remains client-free. Pure direct
+executor callers that do not run an ASGI lifespan retain the former safe
+one-call client lifecycle, keeping import/unit-test usage compatible without
+creating an event-loop-bound client globally.
+
+This changes connection ownership only. Kubernetes selector/query behavior,
+one accepted discovery exchange, one route/telemetry exchange, request and
+response bodies, timeouts, validation, footprint bytes/messages, selected-pair
+semantics, inherited public-forwarder clients and keep-alive, algorithm,
+learning, metrics, and Pure/Kernel parity remain unchanged. No performance
+improvement is claimed without a separately approved live comparison.
+
+
+## Hybrid process-safe focal lookahead branch boundary
+
+Implemented locally: 2026-08-16. Phase 2 exposes the module-level
+`evaluate_hybrid_lookahead_branch` boundary for exactly one deterministic
+focal candidate. Its frozen task carries the Hybrid configuration and policy
+parameters, immutable current global loads, the complete scored focal action,
+admission metadata, beliefs, planning pair links, requested/effective depth,
+and original canonical index. Mapping inputs are serialized as immutable
+tuples; the worker reconstructs private dictionaries and a private
+`IBGHybridPolicy` cache.
+
+Each branch applies only its focal action to private state, then evaluates its
+projected future flows sequentially through the unchanged greedy policy. The
+indexed outcome contains either the complete existing
+`HybridLookaheadEvaluation` or the complete existing branch-failure record.
+Unexpected worker exceptions retain the canonical index and focal action.
+Decision assembly sorts outcomes by canonical index, verifies complete
+one-to-one candidate coverage, and then applies the unchanged strict-
+improvement rule, so exact ties retain the first canonical completed branch.
+
+Production `select_lookahead` invokes this worker boundary serially. A private
+import-safe validation method can map the same tasks through a test-owned
+executor, but no process pool is owned or activated by the policy, controller,
+runner, CLI, Job, or launcher. Real flows, real commits, branch-internal future
+flows, traffic, telemetry, learning, beliefs, metrics, and existing MC pool
+semantics remain sequential and unchanged. Phase 3 alone may later integrate
+a controller-lifetime bounded pool after separate authorization. This phase
+proves process safety and semantic equality only; it makes no speed claim.
+
+
+## Hybrid controller-lifetime lookahead process pool
+
+Implemented locally: 2026-08-16. Phase 3 activates the Phase 2 focal-branch
+boundary only for the finite Kernel controller's deterministic-lookahead mode.
+The controller constructs one `ProcessPoolExecutor` with exactly two workers
+and a `spawn` multiprocessing context. Spawn prevents workers from inheriting
+the controller's Kubernetes and flow-generator HTTP clients; every submitted
+task still carries its complete current immutable planning inputs and creates
+its own private policy/cache.
+
+The same executor is passed through every sequential real focal decision in a
+slot and every completed slot in the finite controller lifetime. Each focal
+decision maps only its independent candidate branches; projected future flows
+inside each task remain sequential. The map completes before the selected real
+focal action is committed, and all real flows remain ordered and sequential.
+The workers remain idle during traffic, telemetry validation, learning, and
+metrics, then receive fresh explicit loads and beliefs with the next task.
+
+The controller shuts the pool down with waiting and pending-future
+cancellation before closing its persistent HTTP clients. Normal completion,
+slot failure, context exit, CLI `finally` cleanup, and the alternate finite
+controller-service exit all use that owner. Slot evidence records the fixed
+worker count and `ibg-hybrid-controller-lookahead-pool-v1` lifecycle. Active
+lookahead slots require exactly two children between slots; controller shutdown
+requires none. Historical lookahead evidence without this provenance continues
+to represent the former zero-worker lifecycle. Manual MC retains its separate
+per-slot rollout pool and requires zero lookahead workers.
+
+Pure `run_hybrid_slot` and direct `select_lookahead` calls remain serial by
+default. They accept an executor only as an internal integration boundary; no
+CLI worker flag or user-facing lookahead mode was added. No resource, manifest,
+topology, scheduling, HTTP, footprint, algorithm, random, latency, learning,
+utility/SLA, telemetry, or frozen Exact behavior changed. Local tests establish
+reuse, cleanup, and semantic equality, not a timeslot speed improvement.
+
+
+## Hybrid controller-lifetime lookahead live validation
+
+Validated live: 2026-08-16. The user authorized a bounded transition from the
+existing 30-flow, 15-replica environment to 15 flows and eight replicas per
+stage with the retained profile seed 50. The launcher removed only StatefulSet
+ordinals 8--14; all retained ordinals 0--7 and the flow-generator Pod kept
+their UIDs and zero restart counts. All 24 retained replica Pods, the flow
+generator, and the finite controller ran on `ibg-hybrid-worker`; Kubernetes
+management services remained on the control-plane node.
+
+Only the controller image was rebuilt and loaded. A three-slot, explicitly
+deterministic-lookahead controller Job used root seed 2050 and the unchanged
+100m/2-CPU request/limit. Every completed slot reported two lookahead workers,
+`ibg-hybrid-controller-lookahead-pool-v1`, two active children after the slot,
+Pure/Kernel replay parity, retained belief continuity, complete placement
+before one route request, 30 selected observations, and 15 measured pairs.
+Observed worker PIDs 22 and 25 remained identical across all three slots. The
+controller container then exited successfully and no controller container or
+lookahead worker remained; the 48 continuing `spawn_main` processes are the
+unchanged two Uvicorn workers in each of 24 public-forwarder containers.
+
+Slot elapsed times were 10.150, 7.545, and 8.546 seconds (26.240 seconds total
+inside slot metrics); the Kubernetes controller Pod ran for approximately 58
+seconds and the Job completed in 61 seconds. This is lifecycle and correctness
+evidence only because no matched live serial baseline was run. It is not a
+speedup, multi-host, cross-worker, NIC, line-rate, or exclusive-CPU result.

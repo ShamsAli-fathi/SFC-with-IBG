@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from itertools import combinations, product
@@ -293,6 +293,89 @@ class HybridLookaheadBranchFailure:
         if self.failing_state != expected_state:
             raise ValueError(
                 "failing state must follow every completed continuation action"
+            )
+
+
+@dataclass(frozen=True)
+class HybridLookaheadBranchTask:
+    """Immutable, process-safe inputs for one canonical focal branch."""
+
+    configuration: HybridConfiguration
+    parameters: HybridPolicyParameters
+    current_state: GlobalLoadState
+    focal_candidate: ScoredHybridAction
+    admission: tuple[tuple[ReplicaChoice, ReplicaAdmission], ...]
+    beliefs: tuple[tuple[ReplicaChoice, tuple[float, ...]], ...]
+    planning_pair_links: tuple[
+        tuple[tuple[ReplicaChoice, ReplicaChoice], float],
+        ...,
+    ]
+    requested_depth: int
+    effective_depth: int
+    canonical_index: int
+
+    def __post_init__(self) -> None:
+        admission = tuple(self.admission)
+        beliefs = tuple(
+            (choice, tuple(belief)) for choice, belief in self.beliefs
+        )
+        planning_pair_links = tuple(self.planning_pair_links)
+        object.__setattr__(self, "admission", admission)
+        object.__setattr__(self, "beliefs", beliefs)
+        object.__setattr__(self, "planning_pair_links", planning_pair_links)
+        if not isinstance(self.configuration, HybridConfiguration):
+            raise TypeError("configuration must be HybridConfiguration")
+        if not isinstance(self.parameters, HybridPolicyParameters):
+            raise TypeError("parameters must be HybridPolicyParameters")
+        if not isinstance(self.current_state, GlobalLoadState):
+            raise TypeError("current_state must be GlobalLoadState")
+        if not isinstance(self.focal_candidate, ScoredHybridAction):
+            raise TypeError("focal_candidate must be ScoredHybridAction")
+        self.current_state.validate_for(self.configuration)
+        self.focal_candidate.action.validate_for(self.configuration)
+        for name in ("requested_depth", "effective_depth", "canonical_index"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, Integral):
+                raise TypeError(f"{name} must be an integer")
+        if self.requested_depth < 0:
+            raise ValueError("requested_depth must not be negative")
+        if not 0 <= self.effective_depth <= self.requested_depth:
+            raise ValueError(
+                "effective_depth must be within requested_depth"
+            )
+        if self.canonical_index < 0:
+            raise ValueError("canonical_index must not be negative")
+
+
+@dataclass(frozen=True)
+class HybridLookaheadBranchOutcome:
+    """One indexed completed evaluation or deterministic branch dead-end."""
+
+    canonical_index: int
+    focal_candidate: ScoredHybridAction
+    evaluation: HybridLookaheadEvaluation | None = None
+    rejected_branch: HybridLookaheadBranchFailure | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.canonical_index, bool) or not isinstance(
+            self.canonical_index,
+            Integral,
+        ):
+            raise TypeError("canonical_index must be an integer")
+        if self.canonical_index < 0:
+            raise ValueError("canonical_index must not be negative")
+        if (self.evaluation is None) == (self.rejected_branch is None):
+            raise ValueError(
+                "branch outcome requires exactly one evaluation or rejection"
+            )
+        outcome_action = (
+            self.evaluation.focal_action
+            if self.evaluation is not None
+            else self.rejected_branch.focal_action
+        )
+        if outcome_action != self.focal_candidate.action:
+            raise ValueError(
+                "branch outcome must retain its focal candidate action"
             )
 
 
@@ -849,6 +932,121 @@ class NoFeasibleMonteCarloAction(RuntimeError):
         self.rejected_candidates = rejected_candidates
 
 
+class HybridLookaheadBranchWorkerError(RuntimeError):
+    """Unexpected branch-worker failure with canonical candidate provenance."""
+
+    def __init__(
+        self,
+        canonical_index: int,
+        focal_action: TwoStageAction,
+        detail: str,
+    ) -> None:
+        self.canonical_index = canonical_index
+        self.focal_action = focal_action
+        self.detail = detail
+        # Preserve constructor arguments so multiprocessing can pickle and
+        # reconstruct this exception in the parent process.
+        super().__init__(canonical_index, focal_action, detail)
+
+    def __str__(self) -> str:
+        return (
+            "Hybrid lookahead branch worker failed for canonical candidate "
+            f"{self.canonical_index} {self.focal_action.choices}: {self.detail}"
+        )
+
+
+def evaluate_hybrid_lookahead_branch(
+    task: HybridLookaheadBranchTask,
+) -> HybridLookaheadBranchOutcome:
+    """Evaluate exactly one focal candidate using private branch state.
+
+    This module-level boundary is deliberately picklable. It creates a private
+    policy/cache and private dictionaries from the task's immutable values;
+    projected future flows then remain sequential within this one branch.
+    """
+
+    if not isinstance(task, HybridLookaheadBranchTask):
+        raise TypeError("task must be HybridLookaheadBranchTask")
+    try:
+        policy = IBGHybridPolicy(task.configuration, task.parameters)
+        admission = dict(task.admission)
+        beliefs = dict(task.beliefs)
+        planning_pair_links = dict(task.planning_pair_links)
+        focal_action = task.focal_candidate.action
+        branch_state = task.current_state.apply(
+            focal_action,
+            task.configuration,
+        )
+        state_after_focal = branch_state
+        continuation_steps = []
+        failed_accounting = None
+        for _future_index in range(task.effective_depth):
+            try:
+                continuation = policy.select_greedy(
+                    state=branch_state,
+                    admission=admission,
+                    beliefs=beliefs,
+                    known_pair_link_costs=planning_pair_links,
+                )
+            except NoFeasiblePrunedAction as error:
+                failed_accounting = error.accounting
+                break
+            step = HybridLookaheadStep(
+                state_before=branch_state,
+                decision=continuation,
+            )
+            continuation_steps.append(step)
+            branch_state = step.state_after
+
+        if failed_accounting is not None:
+            return HybridLookaheadBranchOutcome(
+                canonical_index=task.canonical_index,
+                focal_candidate=task.focal_candidate,
+                rejected_branch=HybridLookaheadBranchFailure(
+                    focal_action=focal_action,
+                    state_after_focal=state_after_focal,
+                    completed_steps=tuple(continuation_steps),
+                    failing_state=branch_state,
+                    failure_accounting=failed_accounting,
+                    requested_depth=task.requested_depth,
+                    effective_depth=task.effective_depth,
+                ),
+            )
+
+        focal_value = focal_utility_at_projected_loads(
+            focal_action,
+            branch_state,
+            task.configuration,
+            lambda choice, load: expected_stage_utility_from_belief(
+                beliefs[choice],
+                load,
+            ),
+            lambda source, target: planning_pair_links[(source, target)],
+            link_weight=HYBRID_LINK_WEIGHT_UTILITY_PER_MS,
+        )
+        return HybridLookaheadBranchOutcome(
+            canonical_index=task.canonical_index,
+            focal_candidate=task.focal_candidate,
+            evaluation=HybridLookaheadEvaluation(
+                focal_action=focal_action,
+                state_after_focal=state_after_focal,
+                projected_final_state=branch_state,
+                continuation_steps=tuple(continuation_steps),
+                focal_value=focal_value,
+                requested_depth=task.requested_depth,
+                effective_depth=task.effective_depth,
+            ),
+        )
+    except HybridLookaheadBranchWorkerError:
+        raise
+    except Exception as error:
+        raise HybridLookaheadBranchWorkerError(
+            task.canonical_index,
+            task.focal_candidate.action,
+            f"{type(error).__name__}: {error}",
+        ) from error
+
+
 def _require_rollout_workers(rollout_workers: int) -> int:
     """Validate an execution-only MC worker limit.
 
@@ -1372,6 +1570,7 @@ class IBGHybridPolicy:
             tuple[ReplicaChoice, ReplicaChoice],
             float,
         ],
+        branch_executor: Executor | None = None,
     ) -> HybridLookaheadDecision:
         """Select one focal action through deterministic limited lookahead.
 
@@ -1379,8 +1578,63 @@ class IBGHybridPolicy:
         unchanged :meth:`select_greedy` Phase 2 boundary. Each candidate owns
         an immutable branch state. The returned solver state commits only the
         selected focal action; projected continuation states are diagnostic
-        evaluations rather than real placements.
+        evaluations rather than real placements. The default remains the
+        serial oracle. A finite controller may supply its internally owned
+        executor to schedule only these independent branch tasks.
         """
+
+        if branch_executor is not None and not isinstance(
+            branch_executor,
+            Executor,
+        ):
+            raise TypeError(
+                "branch_executor must be a concurrent.futures.Executor"
+            )
+        return self._select_lookahead(
+            state=state,
+            admission=admission,
+            beliefs=beliefs,
+            known_pair_link_costs=known_pair_link_costs,
+            branch_executor=branch_executor,
+        )
+
+    def _select_lookahead_with_executor_for_validation(
+        self,
+        *,
+        state: GlobalLoadState,
+        admission: Mapping[ReplicaChoice, ReplicaAdmission],
+        beliefs: Mapping[ReplicaChoice, Sequence[float]],
+        known_pair_link_costs: Mapping[
+            tuple[ReplicaChoice, ReplicaChoice],
+            float,
+        ],
+        branch_executor: Executor,
+    ) -> HybridLookaheadDecision:
+        """Exercise the Phase 2 worker boundary without production activation."""
+
+        if not isinstance(branch_executor, Executor):
+            raise TypeError("branch_executor must be a concurrent.futures.Executor")
+        return self.select_lookahead(
+            state=state,
+            admission=admission,
+            beliefs=beliefs,
+            known_pair_link_costs=known_pair_link_costs,
+            branch_executor=branch_executor,
+        )
+
+    def _select_lookahead(
+        self,
+        *,
+        state: GlobalLoadState,
+        admission: Mapping[ReplicaChoice, ReplicaAdmission],
+        beliefs: Mapping[ReplicaChoice, Sequence[float]],
+        known_pair_link_costs: Mapping[
+            tuple[ReplicaChoice, ReplicaChoice],
+            float,
+        ],
+        branch_executor: Executor | None,
+    ) -> HybridLookaheadDecision:
+        """Build and assemble canonical deterministic lookahead branches."""
 
         configuration = self.configuration
         state.validate_for(configuration)
@@ -1404,68 +1658,73 @@ class IBGHybridPolicy:
             beliefs=beliefs,
             known_pair_link_costs=known_pair_link_costs,
         )
-        evaluations = []
-        rejected_branches = []
-        for scored_focal in focal_decision.scored_actions:
-            focal_action = scored_focal.action
-            branch_state = state.apply(focal_action, configuration)
-            state_after_focal = branch_state
-            continuation_steps = []
-            failed_accounting = None
-            for _future_index in range(effective_depth):
-                try:
-                    continuation = self.select_greedy(
-                        state=branch_state,
-                        admission=admission,
-                        beliefs=beliefs,
-                        known_pair_link_costs=known_pair_link_costs,
-                    )
-                except NoFeasiblePrunedAction as error:
-                    failed_accounting = error.accounting
-                    break
-                step = HybridLookaheadStep(
-                    state_before=branch_state,
-                    decision=continuation,
-                )
-                continuation_steps.append(step)
-                branch_state = step.state_after
-
-            if failed_accounting is not None:
-                rejected_branches.append(
-                    HybridLookaheadBranchFailure(
-                        focal_action=focal_action,
-                        state_after_focal=state_after_focal,
-                        completed_steps=tuple(continuation_steps),
-                        failing_state=branch_state,
-                        failure_accounting=failed_accounting,
-                        requested_depth=requested_depth,
-                        effective_depth=effective_depth,
-                    )
-                )
-                continue
-
-            focal_value = focal_utility_at_projected_loads(
-                focal_action,
-                branch_state,
-                configuration,
-                lambda choice, load: expected_stage_utility_from_belief(
-                    beliefs[choice],
-                    load,
-                ),
-                lambda source, target: known_pair_link_costs[(source, target)],
-                link_weight=HYBRID_LINK_WEIGHT_UTILITY_PER_MS,
+        immutable_admission = tuple(sorted(admission.items()))
+        immutable_beliefs = tuple(
+            (choice, tuple(belief))
+            for choice, belief in sorted(beliefs.items())
+        )
+        immutable_planning_links = tuple(
+            sorted(known_pair_link_costs.items())
+        )
+        branch_tasks = tuple(
+            HybridLookaheadBranchTask(
+                configuration=configuration,
+                parameters=self.parameters,
+                current_state=state,
+                focal_candidate=scored_focal,
+                admission=immutable_admission,
+                beliefs=immutable_beliefs,
+                planning_pair_links=immutable_planning_links,
+                requested_depth=requested_depth,
+                effective_depth=effective_depth,
+                canonical_index=canonical_index,
             )
-            evaluations.append(
-                HybridLookaheadEvaluation(
-                    focal_action=focal_action,
-                    state_after_focal=state_after_focal,
-                    projected_final_state=branch_state,
-                    continuation_steps=tuple(continuation_steps),
-                    focal_value=focal_value,
-                    requested_depth=requested_depth,
-                    effective_depth=effective_depth,
+            for canonical_index, scored_focal in enumerate(
+                focal_decision.scored_actions
+            )
+        )
+        if branch_executor is None:
+            branch_outcomes = tuple(
+                evaluate_hybrid_lookahead_branch(task)
+                for task in branch_tasks
+            )
+        else:
+            branch_outcomes = tuple(
+                branch_executor.map(
+                    evaluate_hybrid_lookahead_branch,
+                    branch_tasks,
                 )
             )
+
+        ordered_outcomes = tuple(
+            sorted(
+                branch_outcomes,
+                key=lambda outcome: outcome.canonical_index,
+            )
+        )
+        expected_indices = tuple(range(len(branch_tasks)))
+        if tuple(
+            outcome.canonical_index for outcome in ordered_outcomes
+        ) != expected_indices:
+            raise RuntimeError(
+                "lookahead branch outcomes do not cover canonical candidates"
+            )
+        for task, outcome in zip(branch_tasks, ordered_outcomes):
+            if outcome.focal_candidate != task.focal_candidate:
+                raise RuntimeError(
+                    "lookahead branch outcome changed its canonical candidate"
+                )
+
+        evaluations = [
+            outcome.evaluation
+            for outcome in ordered_outcomes
+            if outcome.evaluation is not None
+        ]
+        rejected_branches = [
+            outcome.rejected_branch
+            for outcome in ordered_outcomes
+            if outcome.rejected_branch is not None
+        ]
 
         if not evaluations:
             raise NoFeasibleLookaheadAction(

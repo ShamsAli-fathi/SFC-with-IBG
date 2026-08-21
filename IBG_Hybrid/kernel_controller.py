@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass
 from math import isclose
+import multiprocessing
 from typing import Mapping, Protocol, Sequence
 
 import httpx
@@ -14,7 +16,11 @@ from IBG import latency_model as exact_latency
 from .contracts import GlobalLoadState, ReplicaChoice, TwoStageAction
 from .control_plane_footprint import HybridControlPlaneDataMeter
 from .kernel_controller_config import HybridKernelControllerInputDocument
-from .kernel_infrastructure_contract import HybridKernelDiscoverySnapshot
+from .kernel_infrastructure_contract import (
+    HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION,
+    HYBRID_KERNEL_LOOKAHEAD_WORKERS,
+    HybridKernelDiscoverySnapshot,
+)
 from .kernel_route_contracts import (
     HybridKernelRunSlotRequest,
     HybridKernelRunSlotResponse,
@@ -25,6 +31,7 @@ from .policy import IBGHybridPolicy
 from .runner import (
     DEFAULT_HYBRID_MC_WORKERS,
     HYBRID_SLOT_POLICY_LOOKAHEAD,
+    HYBRID_SLOT_POLICY_MC,
     run_hybrid_slot,
 )
 from .slot_contracts import (
@@ -62,7 +69,7 @@ class HybridKernelReadyDiscoveryPort(Protocol):
 
 
 class HybridKernelFlowGeneratorHttpClient:
-    """Synchronous controller-side client; exactly one POST per slot call."""
+    """Persistent controller-side client; exactly one POST per slot call."""
 
     def __init__(
         self,
@@ -80,28 +87,46 @@ class HybridKernelFlowGeneratorHttpClient:
             raise ValueError("flow-generator base_url must not be empty")
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        self._client = httpx.Client(
+            timeout=self.timeout_seconds,
+            transport=self.transport,
+        )
+
+    @property
+    def is_closed(self) -> bool:
+        return self._client.is_closed
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> HybridKernelFlowGeneratorHttpClient:
+        if self.is_closed:
+            raise RuntimeError("Hybrid flow-generator HTTP client is closed")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        del exc_type, exc_value, traceback
+        self.close()
 
     def run_slot(
         self,
         request: HybridKernelRunSlotRequest,
     ) -> HybridKernelRunSlotResponse:
-        with httpx.Client(
-            timeout=self.timeout_seconds,
-            transport=self.transport,
-        ) as client:
-            response = client.post(
-                f"{self.base_url}/run-slot",
-                json=request.model_dump(mode="json"),
+        if self.is_closed:
+            raise RuntimeError("Hybrid flow-generator HTTP client is closed")
+        response = self._client.post(
+            f"{self.base_url}/run-slot",
+            json=request.model_dump(mode="json"),
+        )
+        response.raise_for_status()
+        if self.control_plane_meter is not None:
+            self.control_plane_meter.record_exchange(
+                request_field="route_command_tx",
+                response_field="selected_telemetry_rx",
+                request_payload_bytes=len(response.request.content),
+                response_payload_bytes=len(response.content),
             )
-            response.raise_for_status()
-            if self.control_plane_meter is not None:
-                self.control_plane_meter.record_exchange(
-                    request_field="route_command_tx",
-                    response_field="selected_telemetry_rx",
-                    request_payload_bytes=len(response.request.content),
-                    response_payload_bytes=len(response.content),
-                )
-            return HybridKernelRunSlotResponse.model_validate(response.json())
+        return HybridKernelRunSlotResponse.model_validate(response.json())
 
 
 @dataclass(frozen=True)
@@ -309,11 +334,27 @@ class HybridKernelControllerSlotResult:
     discovery: HybridKernelDiscoverySnapshot
     slot: HybridSlotResult
     control_plane: Mapping[str, object] | None = None
+    lookahead_process_workers: int = 0
+    lookahead_pool_lifecycle_version: str | None = None
     controller_contract_version: str = HYBRID_KERNEL_CONTROLLER_ADAPTER_VERSION
+
+    def __post_init__(self) -> None:
+        if self.lookahead_process_workers not in {
+            0,
+            HYBRID_KERNEL_LOOKAHEAD_WORKERS,
+        }:
+            raise ValueError("unexpected Hybrid lookahead process-worker count")
+        expected_version = (
+            HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION
+            if self.lookahead_process_workers
+            else None
+        )
+        if self.lookahead_pool_lifecycle_version != expected_version:
+            raise ValueError("lookahead pool lifecycle provenance is inconsistent")
 
 
 class HybridKernelControllerAdapter:
-    """Retain beliefs while delegating all placement mathematics to Hybrid."""
+    """Retain beliefs and own finite controller-side runtime resources."""
 
     def __init__(
         self,
@@ -327,10 +368,30 @@ class HybridKernelControllerAdapter:
         mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
         policy: IBGHybridPolicy | None = None,
         control_plane_meter: HybridControlPlaneDataMeter | None = None,
+        lookahead_executor: Executor | None = None,
     ) -> None:
         expected = {item.choice for item in controller_inputs.admission}
         if set(initial_beliefs) != expected:
             raise ValueError("initial beliefs must cover every Hybrid replica exactly")
+        if policy_mode not in {
+            HYBRID_SLOT_POLICY_LOOKAHEAD,
+            HYBRID_SLOT_POLICY_MC,
+        }:
+            raise ValueError("unsupported Hybrid controller policy mode")
+        if lookahead_executor is not None and not isinstance(
+            lookahead_executor,
+            Executor,
+        ):
+            raise TypeError(
+                "lookahead_executor must be a concurrent.futures.Executor"
+            )
+        if (
+            lookahead_executor is not None
+            and policy_mode != HYBRID_SLOT_POLICY_LOOKAHEAD
+        ):
+            raise ValueError(
+                "lookahead_executor is valid only for deterministic lookahead"
+            )
         self.controller_inputs = controller_inputs
         self.discovery = discovery
         self.flow_generator = flow_generator
@@ -342,14 +403,74 @@ class HybridKernelControllerAdapter:
             DEFAULT_HYBRID_POLICY_PARAMETERS,
         )
         self.control_plane_meter = control_plane_meter
+        self._closed = False
         self._beliefs = {
             choice: tuple(float(value) for value in initial_beliefs[choice])
             for choice in sorted(expected)
         }
+        self._lookahead_executor = None
+        if self.policy_mode == HYBRID_SLOT_POLICY_LOOKAHEAD:
+            self._lookahead_executor = lookahead_executor or ProcessPoolExecutor(
+                max_workers=HYBRID_KERNEL_LOOKAHEAD_WORKERS,
+                mp_context=multiprocessing.get_context("spawn"),
+            )
 
     @property
     def beliefs(self) -> Mapping[ReplicaChoice, BeliefVector]:
         return dict(self._beliefs)
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
+    @property
+    def lookahead_executor(self) -> Executor | None:
+        return self._lookahead_executor
+
+    @property
+    def lookahead_process_workers(self) -> int:
+        return (
+            HYBRID_KERNEL_LOOKAHEAD_WORKERS
+            if self.policy_mode == HYBRID_SLOT_POLICY_LOOKAHEAD
+            else 0
+        )
+
+    def close(self) -> None:
+        """Close owned controller-side ports once, preserving the first error."""
+
+        if self._closed:
+            return
+        self._closed = True
+        first_error: Exception | None = None
+        lookahead_executor, self._lookahead_executor = (
+            self._lookahead_executor,
+            None,
+        )
+        if lookahead_executor is not None:
+            try:
+                lookahead_executor.shutdown(wait=True, cancel_futures=True)
+            except Exception as error:
+                first_error = error
+        for resource in (self.flow_generator, self.discovery):
+            close = getattr(resource, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
+
+    def __enter__(self) -> HybridKernelControllerAdapter:
+        if self._closed:
+            raise RuntimeError("Hybrid Kernel controller is closed")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        del exc_type, exc_value, traceback
+        self.close()
 
     def run_slot(
         self,
@@ -358,6 +479,8 @@ class HybridKernelControllerAdapter:
         flows: tuple[HybridFlow, ...] | None = None,
         discovery_wait: Mapping[str, object] | None = None,
     ) -> HybridKernelControllerSlotResult:
+        if self._closed:
+            raise RuntimeError("Hybrid Kernel controller is closed")
         if self.control_plane_meter is not None:
             self.control_plane_meter.begin_slot()
         snapshot = self.discovery.wait_for_complete_ready(
@@ -402,6 +525,7 @@ class HybridKernelControllerAdapter:
             simulation_adapter=traffic,
             policy_mode=self.policy_mode,
             mc_workers=self.mc_workers,
+            lookahead_executor=self._lookahead_executor,
         )
         if traffic.requests_submitted != 1:
             raise RuntimeError("Hybrid controller must submit exactly one slot request")
@@ -411,4 +535,15 @@ class HybridKernelControllerAdapter:
             else self.control_plane_meter.finish_slot()
         )
         self._beliefs = dict(result.beliefs_after)
-        return HybridKernelControllerSlotResult(snapshot, result, control_plane)
+        process_workers = self.lookahead_process_workers
+        return HybridKernelControllerSlotResult(
+            discovery=snapshot,
+            slot=result,
+            control_plane=control_plane,
+            lookahead_process_workers=process_workers,
+            lookahead_pool_lifecycle_version=(
+                HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION
+                if process_workers
+                else None
+            ),
+        )

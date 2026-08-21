@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict
 
@@ -34,7 +36,25 @@ class HybridKernelGeneratorHealthResponse(BaseModel):
 
 def create_app(executor: HybridKernelRouteExecutor | None = None) -> FastAPI:
     runtime = executor or HybridKernelRouteExecutor()
-    application = FastAPI(title="IBG-Hybrid Flow Generator", version="0.1.0")
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        del application
+        start = getattr(runtime, "start", None)
+        close = getattr(runtime, "aclose", None)
+        try:
+            if callable(start):
+                await start()
+            yield
+        finally:
+            if callable(close):
+                await close()
+
+    application = FastAPI(
+        title="IBG-Hybrid Flow Generator",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
     application.state.executor = runtime
 
     @application.get(
@@ -65,4 +85,3 @@ def create_app(executor: HybridKernelRouteExecutor | None = None) -> FastAPI:
 
 
 app = create_app()
-

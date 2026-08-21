@@ -51,7 +51,7 @@ class HybridKernelRouteExecutorConfig:
 
 
 class HybridKernelRouteExecutor:
-    """Send complete two-hop routes through the selected public forwarders."""
+    """Send routes through first forwarders using an application-owned pool."""
 
     def __init__(
         self,
@@ -60,20 +60,66 @@ class HybridKernelRouteExecutor:
     ) -> None:
         self.config = config or HybridKernelRouteExecutorConfig()
         self.transport = transport
+        self._client: httpx.AsyncClient | None = None
+        self._closed = False
+
+    @property
+    def is_started(self) -> bool:
+        return self._client is not None
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
+    def _new_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=self.config.request_timeout_seconds,
+            transport=self.transport,
+        )
+
+    async def start(self) -> None:
+        """Create the pool during ASGI startup, never during module import."""
+
+        if self._closed:
+            raise RuntimeError("Hybrid route executor is closed")
+        if self._client is None:
+            self._client = self._new_client()
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        client, self._client = self._client, None
+        if client is not None:
+            await client.aclose()
+
+    async def __aenter__(self) -> HybridKernelRouteExecutor:
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        del exc_type, exc_value, traceback
+        await self.aclose()
 
     async def run_slot(
         self,
         request: HybridKernelRunSlotRequest,
     ) -> HybridKernelRunSlotResponse:
+        if self._closed:
+            raise RuntimeError("Hybrid route executor is closed")
         if request.datapath_mode != self.config.datapath_mode:
             raise HybridKernelRouteExecutionError(
                 "requested and configured datapath modes differ"
             )
         started = time.perf_counter()
-        async with httpx.AsyncClient(
-            timeout=self.config.request_timeout_seconds,
-            transport=self.transport,
-        ) as client:
+        client = self._client
+        owns_client = client is None
+        if client is None:
+            # Import-safe direct callers that do not run an ASGI lifespan retain
+            # the historical one-call lifecycle. Production starts the shared
+            # pool explicitly through the flow-generator application lifespan.
+            client = self._new_client()
+        try:
             outcomes = await asyncio.gather(
                 *(
                     self._run_flow(client, request.slot_id, route)
@@ -81,6 +127,9 @@ class HybridKernelRouteExecutor:
                 ),
                 return_exceptions=True,
             )
+        finally:
+            if owns_client:
+                await client.aclose()
         failures = [outcome for outcome in outcomes if isinstance(outcome, Exception)]
         if failures:
             raise HybridKernelRouteExecutionError(str(failures[0])) from failures[0]

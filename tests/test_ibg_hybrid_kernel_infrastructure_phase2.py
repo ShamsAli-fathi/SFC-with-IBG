@@ -5,7 +5,14 @@ from pathlib import Path
 import subprocess
 import sys
 
-from httpx import ASGITransport, AsyncClient, MockTransport, Request, Response
+from httpx import (
+    ASGITransport,
+    AsyncClient,
+    HTTPStatusError,
+    MockTransport,
+    Request,
+    Response,
+)
 import pytest
 
 from IBG import latency_model as exact_latency
@@ -47,6 +54,20 @@ from testbed.route_forwarder import PairwiseLinkTelemetry
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy" / "hybrid-kubernetes"
+
+
+class CountingTransport:
+    def __init__(self, handler):
+        self.handler = handler
+        self.requests = []
+        self.close_calls = 0
+
+    def handle_request(self, request):
+        self.requests.append(request)
+        return self.handler(request)
+
+    def close(self):
+        self.close_calls += 1
 
 
 def pod(stage, replica, **changes):
@@ -226,6 +247,19 @@ class FakeExecutor:
     async def run_slot(self, request):
         self.requests.append(request)
         return response_for_request(request)
+
+
+class LifecycleExecutor(FakeExecutor):
+    def __init__(self):
+        super().__init__()
+        self.start_calls = 0
+        self.close_calls = 0
+
+    async def start(self):
+        self.start_calls += 1
+
+    async def aclose(self):
+        self.close_calls += 1
 
 
 class FakeDiscovery:
@@ -440,6 +474,56 @@ def test_hybrid_http_boundary_accepts_both_route_shapes_and_rejects_exact_shape(
     assert rejected_version.status_code == 422
 
 
+def test_flow_generator_application_owns_one_executor_lifecycle():
+    executor = LifecycleExecutor()
+    application = create_app(executor)
+    request = HybridKernelRunSlotRequest(
+        slot_id=1,
+        routes=(
+            {
+                "flow_id": 1,
+                "hops": (
+                    {
+                        "stage": 1,
+                        "replica_id": 1,
+                        "url": "http://hybrid-stage-1-0",
+                        "assigned_load": 1,
+                    },
+                    {
+                        "stage": 3,
+                        "replica_id": 1,
+                        "url": "http://hybrid-stage-3-0",
+                        "assigned_load": 1,
+                    },
+                ),
+                "skipped_stage": 2,
+            },
+        ),
+    )
+
+    async def exercise():
+        async with application.router.lifespan_context(application):
+            assert executor.start_calls == 1
+            assert executor.close_calls == 0
+            async with AsyncClient(
+                transport=ASGITransport(app=application),
+                base_url="http://hybrid-flow-generator.test",
+            ) as client:
+                first = await client.post(
+                    "/run-slot", json=request.model_dump(mode="json")
+                )
+                second = await client.post(
+                    "/run-slot", json=request.model_dump(mode="json")
+                )
+            assert first.status_code == second.status_code == 200
+            assert executor.close_calls == 0
+        assert executor.close_calls == 1
+
+    asyncio.run(exercise())
+
+    assert len(executor.requests) == 2
+
+
 def test_controller_places_every_flow_then_sends_one_request_and_retains_beliefs():
     inputs = small_controller_inputs()
     ready = snapshot(inputs.configuration)
@@ -506,6 +590,7 @@ def test_controller_places_every_flow_then_sends_one_request_and_retains_beliefs
     second = controller.run_slot(2)
     assert second.slot.beliefs_before == first.slot.beliefs_after
     assert len(generator.requests) == 2
+    controller.close()
 
 
 def test_controller_footprint_counts_actual_http_bodies_and_exact_messages():
@@ -552,13 +637,17 @@ def test_controller_footprint_counts_actual_http_bodies_and_exact_messages():
         control_plane_meter=meter,
     )
     uniform = {item.choice: (0.25, 0.25, 0.25, 0.25) for item in inputs.admission}
-    outcome = HybridKernelControllerAdapter(
+    controller = HybridKernelControllerAdapter(
         controller_inputs=inputs,
         discovery=discovery,
         flow_generator=flow_generator,
         initial_beliefs=uniform,
         control_plane_meter=meter,
-    ).run_slot(1)
+    )
+    try:
+        outcome = controller.run_slot(1)
+    finally:
+        controller.close()
 
     footprint = outcome.control_plane
     assert footprint["schema"] == HYBRID_CONTROL_PLANE_DATA_SCHEMA
@@ -583,6 +672,117 @@ def test_controller_footprint_counts_actual_http_bodies_and_exact_messages():
     }
 
 
+def test_controller_reuses_http_clients_across_slots_and_closes_owned_ports():
+    inputs = small_controller_inputs()
+    meter = HybridControlPlaneDataMeter()
+
+    def kubernetes_handler(request: Request):
+        return Response(
+            200,
+            request=request,
+            json={"items": pod_list(inputs.configuration)},
+        )
+
+    kubernetes_transport = CountingTransport(kubernetes_handler)
+    api = HybridKubernetesApi(
+        base_url="https://kubernetes.test",
+        token="token",
+        verify=False,
+        transport=kubernetes_transport,
+        control_plane_meter=meter,
+    )
+    discovery = HybridKubernetesReplicaDiscovery(api, inputs.configuration)
+
+    def flow_generator_handler(request: Request):
+        slot_request = HybridKernelRunSlotRequest.model_validate_json(
+            request.content
+        )
+        return Response(
+            200,
+            request=request,
+            content=response_for_request(slot_request).model_dump_json(),
+            headers={"content-type": "application/json"},
+        )
+
+    flow_transport = CountingTransport(flow_generator_handler)
+    flow_generator = HybridKernelFlowGeneratorHttpClient(
+        "http://hybrid-flow-generator.test",
+        transport=flow_transport,
+        control_plane_meter=meter,
+    )
+    uniform = {
+        item.choice: (0.25, 0.25, 0.25, 0.25)
+        for item in inputs.admission
+    }
+    controller = HybridKernelControllerAdapter(
+        controller_inputs=inputs,
+        discovery=discovery,
+        flow_generator=flow_generator,
+        initial_beliefs=uniform,
+        control_plane_meter=meter,
+    )
+
+    with controller:
+        first = controller.run_slot(1)
+        second = controller.run_slot(2)
+        assert kubernetes_transport.close_calls == 0
+        assert flow_transport.close_calls == 0
+
+    assert len(kubernetes_transport.requests) == 2
+    assert len(flow_transport.requests) == 2
+    assert kubernetes_transport.close_calls == 1
+    assert flow_transport.close_calls == 1
+    assert api.is_closed is flow_generator.is_closed is controller.is_closed is True
+    assert first.slot.beliefs_after == second.slot.beliefs_before
+    assert first.control_plane["messages"]["total"] == 4
+    assert second.control_plane["messages"]["total"] == 4
+    with pytest.raises(RuntimeError, match="closed"):
+        controller.run_slot(3)
+
+
+def test_controller_closes_both_http_clients_after_slot_failure():
+    inputs = small_controller_inputs()
+
+    kubernetes_transport = CountingTransport(
+        lambda request: Response(
+            200,
+            request=request,
+            json={"items": pod_list(inputs.configuration)},
+        )
+    )
+    api = HybridKubernetesApi(
+        base_url="https://kubernetes.test",
+        token="token",
+        verify=False,
+        transport=kubernetes_transport,
+    )
+    flow_transport = CountingTransport(
+        lambda request: Response(503, request=request, text="unavailable")
+    )
+    flow_generator = HybridKernelFlowGeneratorHttpClient(
+        "http://hybrid-flow-generator.test",
+        transport=flow_transport,
+    )
+    uniform = {
+        item.choice: (0.25, 0.25, 0.25, 0.25)
+        for item in inputs.admission
+    }
+    controller = HybridKernelControllerAdapter(
+        controller_inputs=inputs,
+        discovery=HybridKubernetesReplicaDiscovery(api, inputs.configuration),
+        flow_generator=flow_generator,
+        initial_beliefs=uniform,
+    )
+
+    with pytest.raises(HTTPStatusError, match="503"):
+        with controller:
+            controller.run_slot(1)
+
+    assert api.is_closed is flow_generator.is_closed is controller.is_closed is True
+    assert kubernetes_transport.close_calls == 1
+    assert flow_transport.close_calls == 1
+
+
 def test_partial_kernel_telemetry_fails_before_learning_and_preserves_beliefs():
     inputs = small_controller_inputs()
     uniform = {item.choice: (0.25, 0.25, 0.25, 0.25) for item in inputs.admission}
@@ -593,8 +793,11 @@ def test_partial_kernel_telemetry_fails_before_learning_and_preserves_beliefs():
         initial_beliefs=uniform,
     )
 
-    with pytest.raises(RuntimeError, match="partial flow coverage"):
-        controller.run_slot(1)
+    try:
+        with pytest.raises(RuntimeError, match="partial flow coverage"):
+            controller.run_slot(1)
+    finally:
+        controller.close()
     assert controller.beliefs == uniform
 
 

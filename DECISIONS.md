@@ -2277,3 +2277,135 @@ Accepted and implemented locally: 2026-08-15.
 - Keep summary support Hybrid-specific and data-only. Validate completed traces
   before reporting per-run median/p95 payload/message categories and totals;
   do not extend or modify Exact's full timing/CPU summary tool.
+
+
+## Hybrid per-timeslot optimization decisions
+
+Accepted for ordered implementation: 2026-08-16.
+
+- Implement exactly four optimization phases in this order: persistent HTTP
+  clients; bounded parallel focal-candidate evaluation; controller-lifetime
+  reuse of that bounded process pool; and, only last, conditional soft
+  controller CPU priority.
+- Treat Phase 1 as medium difficulty. Reuse only the controller discovery,
+  controller-to-flow-generator, and flow-generator ingress client pools across
+  slots. Preserve exchange counts, payloads, timeouts, failure behavior,
+  footprint totals, and every inherited Exact forwarder client/keep-alive
+  boundary. Require explicit lifecycle cleanup.
+- Treat Phase 2 as high difficulty. Parallelize only independent hypothetical
+  candidates for the same focal flow. Never parallelize real flow commits or
+  dependent projected future-flow decisions. Restore results by original
+  candidate index before unchanged scoring and tie-breaking, and keep a serial
+  oracle until complete decision/result parity is proven.
+- Treat Phase 3 as medium-high difficulty. Use one controller-owned pool of two
+  processes across the finite experiment instead of constructing pools per
+  decision or slot. Pass current immutable inputs with every task; do not allow
+  workers to retain beliefs, loads, random state, or mutable policy state.
+  Require cleanup after success, failure, and termination.
+- Treat Phase 4 as medium overall difficulty and keep it conditional on evidence
+  from the preceding phases. Prefer a larger shared CPU request, initially
+  considering `1` CPU with the existing `2`-CPU limit, over exclusive pinning.
+  Do not reserve exclusive cores, add a node, change workload placement, or
+  claim additional physical CPU capacity.
+- Do not add timing or CPU fields to the data-only control-plane-footprint
+  schema as part of this work. Use existing result parity, focused connection/
+  process lifecycle checks, and controlled wall-time/resource validation.
+- Require focused tests, full Hybrid regressions, relevant frozen Exact
+  regressions, offline manifest rendering, compilation, and `git diff --check`
+  in every applicable phase. Require separate approval before any live Job,
+  workload, image, or cluster validation.
+
+
+## Hybrid persistent HTTP-client decisions
+
+Accepted and implemented locally: 2026-08-16.
+
+- Let the finite `HybridKernelControllerAdapter` own and close the persistent
+  Kubernetes discovery and controller-to-flow-generator clients. The CLI must
+  close the controller after normal completion and exceptions; use-after-close
+  is invalid, and repeated close is harmless.
+- Close already-created clients if environment-driven controller construction
+  fails before ownership transfer.
+- Let the flow-generator ASGI lifespan own the persistent asynchronous ingress
+  pool. Do not create an AsyncClient at import time. Preserve an ephemeral
+  one-call fallback only for direct executor callers outside an ASGI lifespan.
+- Reuse client instances without changing request counts, payloads, timeouts,
+  validation, exception mapping, footprint arithmetic, or response conversion.
+- Do not touch the inherited Exact public-forwarder local/downstream clients,
+  their limits/windows, or selected-pair measurement.
+- Treat the completed unit/regression gate as lifecycle and parity evidence,
+  not as proof of reduced live timeslot duration.
+
+
+## Hybrid process-safe focal-branch decisions
+
+Accepted and implemented locally: 2026-08-16.
+
+- Represent one deterministic lookahead focal branch with a frozen, picklable
+  task containing all current inputs explicitly, including its complete scored
+  candidate and canonical index. Do not send controller or shared policy state
+  to a worker.
+- Reconstruct private dictionaries and a private policy/cache per task. Apply
+  the focal candidate once, and keep projected future flows sequential within
+  that branch through the unchanged greedy boundary.
+- Return one indexed success or deterministic dead-end. Correlate unexpected
+  exceptions with the same index and focal action; never retry, drop,
+  approximate, or substitute a branch.
+- Restore and validate canonical candidate order before constructing the
+  unchanged lookahead decision. Retain strict improvement and the first
+  canonical completed candidate on exact score ties.
+- Keep public production `select_lookahead` serial. Limit executor use to the
+  private import-safe Phase 2 validation path until Phase 3 separately owns
+  and activates a controller-lifetime bounded pool.
+- Do not alter existing Monte Carlo pool behavior or any algorithm, flow,
+  learning, metric, telemetry, footprint, resource, topology, or runtime
+  boundary. Treat the passing parity gate as process-safety evidence, not a
+  performance result.
+
+
+## Hybrid controller-lifetime lookahead-pool decisions
+
+Accepted and implemented locally: 2026-08-16.
+
+- Give each finite deterministic-lookahead Kernel controller exactly one
+  controller-owned two-process executor. Reuse it across every focal decision
+  and completed slot; do not create a pool per decision or per slot.
+- Use the multiprocessing `spawn` context so worker processes inherit no live
+  Kubernetes client, flow-generator client, controller belief mapping, or
+  other parent runtime state. Continue passing every branch input explicitly.
+- Keep public pure policy and slot calls serial by default. Permit executor
+  injection only through the internal runner/policy integration boundary; add
+  no user-facing lookahead worker option.
+- Shut down the executor before controller-owned HTTP clients, wait for worker
+  exit, cancel pending futures, make repeated controller closure harmless, and
+  propagate task/shutdown failures without serial fallback.
+- Record two persistent lookahead children between slots and zero after the
+  finite controller closes. Preserve historical zero-worker evidence and
+  require manual MC evidence to contain no lookahead-pool provenance.
+- Keep the existing manual-MC per-slot rollout pool entirely separate. Do not
+  change MC worker arguments, roots, samples, seeds, tail, lifecycle, or
+  evidence meaning.
+- Treat local equality and process-lifecycle tests as correctness evidence
+  only. Require separate approval for image construction and a live timing/
+  non-regression comparison before considering Phase 4 CPU priority.
+
+
+## Hybrid lookahead-pool live-gate decisions
+
+Accepted from the 2026-08-16 live gate:
+
+- Accept the three-slot 15-flow, 3-stage, 8-replica run at profile seed 50 and
+  root seed 2050 as live lifecycle and semantic-parity evidence for the fixed
+  two-process controller-lifetime lookahead pool.
+- Accept PID 22/25 stability across the three slots, exact two-worker lifecycle
+  fields per completed slot, successful controller exit, and absence of an
+  active controller container afterward as the live pool-reuse/cleanup gate.
+- Keep the 48 post-controller `spawn_main` processes classified as the expected
+  two Uvicorn workers for each of 24 public-forwarder containers, not as
+  controller children.
+- Retain the user-authorized eight-replica topology. The scale-down removed only
+  ordinals 8--14; retained serving Pods preserved UID and restart identity.
+- Do not infer a speedup from the recorded times. No matched serial live run was
+  performed. Phase 4 soft CPU priority therefore remains conditional and is
+  not authorized or justified by this gate alone.
+- Make no multi-host, cross-worker, NIC, line-rate, or exclusive-CPU claim.

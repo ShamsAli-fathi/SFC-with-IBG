@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 
-from httpx import MockTransport, Request, Response
+from httpx import AsyncBaseTransport, MockTransport, Request, Response
 import pytest
 from pydantic import ValidationError
 
@@ -41,6 +41,20 @@ from testbed.route_forwarder import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class CountingAsyncTransport(AsyncBaseTransport):
+    def __init__(self, handler):
+        self.handler = handler
+        self.requests = []
+        self.close_calls = 0
+
+    async def handle_async_request(self, request):
+        self.requests.append(request)
+        return await self.handler(request)
+
+    async def aclose(self):
+        self.close_calls += 1
 
 
 def action(first, second):
@@ -310,6 +324,57 @@ def test_route_executor_returns_two_observations_one_pair_and_selected_only_inpu
         }
         for flow in result.flows
     )
+
+
+def test_route_executor_reuses_application_client_and_closes_after_failure():
+    fail = False
+
+    async def handler(request_value: Request):
+        if fail:
+            raise RuntimeError("injected transport failure")
+        payload = json.loads(request_value.content)
+        payload["entry_host"] = request_value.url.host
+        return Response(
+            200,
+            request=request_value,
+            json=forwarded_response(payload),
+        )
+
+    transport = CountingAsyncTransport(handler)
+    request = HybridKernelRunSlotRequest(
+        slot_id=9,
+        routes=(route(1, (1, 1), (3, 1), skipped_stage=2),),
+    )
+
+    async def exercise():
+        nonlocal fail
+        async with HybridKernelRouteExecutor(transport=transport) as executor:
+            assert executor.is_started is True
+            first = await executor.run_slot(request)
+            second = await executor.run_slot(
+                request.model_copy(update={"slot_id": 10})
+            )
+            assert transport.close_calls == 0
+            assert (
+                first.flows[0].selected_choices
+                == second.flows[0].selected_choices
+            )
+            fail = True
+            with pytest.raises(
+                HybridKernelRouteExecutionError,
+                match="injected transport failure",
+            ):
+                await executor.run_slot(
+                    request.model_copy(update={"slot_id": 11})
+                )
+        assert executor.is_closed is True
+        with pytest.raises(RuntimeError, match="closed"):
+            await executor.run_slot(request)
+
+    asyncio.run(exercise())
+
+    assert len(transport.requests) == 3
+    assert transport.close_calls == 1
 
 
 @pytest.mark.parametrize("timeout", (0, -1, float("nan"), float("inf"), True))

@@ -71,6 +71,8 @@ def validate_mc_slot_evidence(
             slot.get("observation_count") != 6
             or slot.get("measured_pair_count") != 3
             or slot.get("active_child_processes_after_slot") != 0
+            or slot.get("lookahead_process_workers", 0) != 0
+            or slot.get("lookahead_pool_lifecycle_version") is not None
         ):
             raise HybridKernelMcEvidenceError(
                 "manual MC telemetry or pool cleanup is incomplete"

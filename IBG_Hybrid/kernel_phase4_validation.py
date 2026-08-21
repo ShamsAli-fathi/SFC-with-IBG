@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass, replace
 import json
 import multiprocessing
@@ -26,7 +27,11 @@ from .kernel_controller_config import (
     HybridKernelControllerInputDocument,
     load_controller_input_document,
 )
-from .kernel_infrastructure_contract import DEFAULT_HYBRID_KERNEL_OWNERSHIP
+from .kernel_infrastructure_contract import (
+    DEFAULT_HYBRID_KERNEL_OWNERSHIP,
+    HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION,
+    HYBRID_KERNEL_LOOKAHEAD_WORKERS,
+)
 from .kernel_kubernetes_discovery import (
     HybridKubernetesApi,
     HybridKubernetesReplicaDiscovery,
@@ -277,6 +282,16 @@ def _slot_evidence(
         "active_child_processes_after_slot": len(
             multiprocessing.active_children()
         ),
+        "lookahead_process_workers": getattr(
+            outcome,
+            "lookahead_process_workers",
+            0,
+        ),
+        "lookahead_pool_lifecycle_version": getattr(
+            outcome,
+            "lookahead_pool_lifecycle_version",
+            None,
+        ),
         "beliefs_before": _belief_mapping(slot.beliefs_before),
         "beliefs_after": _belief_mapping(slot.beliefs_after),
         "pure_kernel_replay_parity": _replay_kernel_semantics(
@@ -337,9 +352,22 @@ def run_small_live_gate(
         ):
             if not item[required]:
                 raise RuntimeError(f"Phase 4 validation failed: {required}")
-        if item["active_child_processes_after_slot"] != 0:
+        expected_children = item["lookahead_process_workers"]
+        expected_lifecycle = (
+            HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION
+            if expected_children == HYBRID_KERNEL_LOOKAHEAD_WORKERS
+            else None
+        )
+        if (
+            expected_children not in {0, HYBRID_KERNEL_LOOKAHEAD_WORKERS}
+            or item["lookahead_pool_lifecycle_version"]
+            != expected_lifecycle
+            or item["active_child_processes_after_slot"]
+            != expected_children
+        ):
             raise RuntimeError(
-                "Hybrid controller retained an MC child process after the slot"
+                "Hybrid controller child-process count does not match its "
+                "lookahead pool lifecycle"
             )
         expected_path = (
             "monte-carlo"
@@ -471,25 +499,28 @@ def _controller_from_environment(
         )
     )
     ownership = DEFAULT_HYBRID_KERNEL_OWNERSHIP
-    discovery = HybridKubernetesReplicaDiscovery(
-        HybridKubernetesApi(
+    with ExitStack() as pending_resources:
+        api = HybridKubernetesApi(
             ownership=ownership,
             control_plane_meter=control_plane_meter,
-        ),
-        inputs.configuration,
-        ownership=ownership,
-    )
-    flow_generator = HybridKernelFlowGeneratorHttpClient(
-        values.get(
-            "FLOW_GENERATOR_URL",
-            "http://ibg-hybrid-flow-generator.ibg-hybrid-testbed."
-            "svc.cluster.local.:8080",
-        ),
-        control_plane_meter=control_plane_meter,
-    )
-    uniform = (0.25, 0.25, 0.25, 0.25)
-    return (
-        HybridKernelControllerAdapter(
+        )
+        pending_resources.callback(api.close)
+        discovery = HybridKubernetesReplicaDiscovery(
+            api,
+            inputs.configuration,
+            ownership=ownership,
+        )
+        flow_generator = HybridKernelFlowGeneratorHttpClient(
+            values.get(
+                "FLOW_GENERATOR_URL",
+                "http://ibg-hybrid-flow-generator.ibg-hybrid-testbed."
+                "svc.cluster.local.:8080",
+            ),
+            control_plane_meter=control_plane_meter,
+        )
+        pending_resources.callback(flow_generator.close)
+        uniform = (0.25, 0.25, 0.25, 0.25)
+        controller = HybridKernelControllerAdapter(
             controller_inputs=inputs,
             discovery=discovery,
             flow_generator=flow_generator,
@@ -498,22 +529,27 @@ def _controller_from_environment(
             policy_mode=policy_mode,
             mc_workers=mc_workers,
             control_plane_meter=control_plane_meter,
-        ),
-        inputs,
-    )
+        )
+        # Ownership transfers to the finite controller only after its complete
+        # construction. Earlier failures close every already-created client.
+        pending_resources.pop_all()
+        return controller, inputs
 
 
 def main() -> None:
     controller, inputs = _controller_from_environment()
-    run_small_live_gate(
-        controller,
-        inputs,
-        first_slot=int(os.environ.get("SLOT_ID", "1")),
-        iterations=int(os.environ.get("MAX_ITERATIONS", "2")),
-        policy_mode=HYBRID_SLOT_POLICY_LOOKAHEAD,
-        mc_workers=DEFAULT_HYBRID_MC_WORKERS,
-        on_slot_completed=_print_completed_slot,
-    )
+    try:
+        run_small_live_gate(
+            controller,
+            inputs,
+            first_slot=int(os.environ.get("SLOT_ID", "1")),
+            iterations=int(os.environ.get("MAX_ITERATIONS", "2")),
+            policy_mode=HYBRID_SLOT_POLICY_LOOKAHEAD,
+            mc_workers=DEFAULT_HYBRID_MC_WORKERS,
+            on_slot_completed=_print_completed_slot,
+        )
+    finally:
+        controller.close()
 
 
 if __name__ == "__main__":

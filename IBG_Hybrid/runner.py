@@ -6,7 +6,7 @@ import importlib
 import random
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import replace
 from itertools import combinations, product
 from pathlib import Path
@@ -407,6 +407,7 @@ def _place_all_flows(
     policy_mode: str,
     mc_workers: int,
     ordered_flow_ids: list[int],
+    lookahead_executor: Executor | None,
     rollout_executor: ProcessPoolExecutor | None,
 ) -> tuple[tuple[HybridPlacement, ...], GlobalLoadState]:
     """Commit every real focal placement, optionally sharing one MC pool."""
@@ -452,6 +453,7 @@ def _place_all_flows(
                 admission=admission,
                 beliefs=beliefs,
                 known_pair_link_costs=planning_links,
+                branch_executor=lookahead_executor,
             )
         else:
             path = PipelinePath.MONTE_CARLO
@@ -506,6 +508,7 @@ def run_hybrid_slot(
     simulation_adapter: HybridSlotSimulationAdapter | None = None,
     policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
     mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
+    lookahead_executor: Executor | None = None,
 ) -> HybridSlotResult:
     """Place all flows, then simulate, learn, and report one Hybrid slot.
 
@@ -518,6 +521,13 @@ def run_hybrid_slot(
         raise TypeError("slot_input must be HybridSlotInput")
     policy_mode = _require_slot_policy(policy_mode)
     mc_workers = _require_mc_workers(mc_workers)
+    if (
+        lookahead_executor is not None
+        and policy_mode != HYBRID_SLOT_POLICY_LOOKAHEAD
+    ):
+        raise ValueError(
+            "lookahead_executor is valid only for deterministic lookahead"
+        )
     policy = policy or IBGHybridPolicy(
         slot_input.configuration,
         slot_input.parameters,
@@ -549,6 +559,7 @@ def run_hybrid_slot(
                 policy_mode=policy_mode,
                 mc_workers=mc_workers,
                 ordered_flow_ids=ordered_flow_ids,
+                lookahead_executor=None,
                 rollout_executor=rollout_executor,
             )
     else:
@@ -558,6 +569,7 @@ def run_hybrid_slot(
             policy_mode=policy_mode,
             mc_workers=mc_workers,
             ordered_flow_ids=ordered_flow_ids,
+            lookahead_executor=lookahead_executor,
             rollout_executor=None,
         )
     actions_by_flow = {

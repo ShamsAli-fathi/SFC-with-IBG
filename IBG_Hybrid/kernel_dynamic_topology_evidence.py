@@ -6,6 +6,10 @@ from collections import Counter
 from typing import Mapping, Sequence
 
 from .contracts import HybridConfiguration
+from .kernel_infrastructure_contract import (
+    HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION,
+    HYBRID_KERNEL_LOOKAHEAD_WORKERS,
+)
 from .kernel_profile_expansion import assigned_flow_capacity
 
 
@@ -82,9 +86,21 @@ def validate_dynamic_lookahead_slots(
                 raise HybridKernelDynamicTopologyEvidenceError(
                     f"slot failed required semantic boundary: {field}"
                 )
-        if slot.get("active_child_processes_after_slot") != 0:
+        lookahead_workers = slot.get("lookahead_process_workers", 0)
+        expected_lifecycle = (
+            HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION
+            if lookahead_workers == HYBRID_KERNEL_LOOKAHEAD_WORKERS
+            else None
+        )
+        if (
+            lookahead_workers not in {0, HYBRID_KERNEL_LOOKAHEAD_WORKERS}
+            or slot.get("lookahead_pool_lifecycle_version")
+            != expected_lifecycle
+            or slot.get("active_child_processes_after_slot")
+            != lookahead_workers
+        ):
             raise HybridKernelDynamicTopologyEvidenceError(
-                "lookahead slot retained an unexpected child process"
+                "lookahead process-pool lifecycle evidence is inconsistent"
             )
 
         placements = slot.get("placements")
