@@ -174,7 +174,10 @@ def _slot_evidence(
     retained_from_previous: bool,
     policy_mode: str,
     mc_workers: int,
+    parity_replay_enabled: bool = True,
 ) -> dict[str, object]:
+    if not isinstance(parity_replay_enabled, bool):
+        raise TypeError("parity_replay_enabled must be boolean")
     slot = outcome.slot
     planning = {item.pair: item.latency_ms for item in inputs.planning_pair_links}
     action_by_flow = {
@@ -294,14 +297,16 @@ def _slot_evidence(
         ),
         "beliefs_before": _belief_mapping(slot.beliefs_before),
         "beliefs_after": _belief_mapping(slot.beliefs_after),
-        "pure_kernel_replay_parity": _replay_kernel_semantics(
+        "pure_kernel_replay_performed": parity_replay_enabled,
+        "metrics": asdict(slot.metrics),
+    }
+    if parity_replay_enabled:
+        item["pure_kernel_replay_parity"] = _replay_kernel_semantics(
             outcome=outcome,
             inputs=inputs,
             policy_mode=policy_mode,
             mc_workers=mc_workers,
-        ),
-        "metrics": asdict(slot.metrics),
-    }
+        )
     control_plane = getattr(outcome, "control_plane", None)
     if control_plane is not None:
         validate_hybrid_control_plane_data_snapshot(control_plane)
@@ -401,6 +406,7 @@ def run_kernel_experiment(
     max_iterations: int,
     policy_mode: str = HYBRID_SLOT_POLICY_LOOKAHEAD,
     mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
+    parity_replay_enabled: bool = False,
     on_slot_completed: CompletedSlotCallback | None = None,
 ) -> HybridKernelExperimentResult:
     """Run sequential slots until frozen equilibrium or the explicit limit.
@@ -418,6 +424,8 @@ def run_kernel_experiment(
     ):
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f"{field} must be a positive integer")
+    if not isinstance(parity_replay_enabled, bool):
+        raise TypeError("parity_replay_enabled must be boolean")
 
     evidence: list[dict[str, object]] = []
     previous_beliefs = None
@@ -439,7 +447,13 @@ def run_kernel_experiment(
             retained_from_previous=retained,
             policy_mode=policy_mode,
             mc_workers=mc_workers,
+            parity_replay_enabled=parity_replay_enabled,
         )
+        if (
+            parity_replay_enabled
+            and item.get("pure_kernel_replay_parity") is not True
+        ):
+            raise RuntimeError("Hybrid Pure/Kernel parity replay failed")
         item["experiment_contract_version"] = (
             HYBRID_KERNEL_EXPERIMENT_LIFECYCLE_VERSION
         )

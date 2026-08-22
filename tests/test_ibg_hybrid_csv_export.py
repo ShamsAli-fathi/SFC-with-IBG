@@ -159,6 +159,13 @@ def _footprint(value):
     }
     return {
         "schema": HYBRID_CONTROL_PLANE_DATA_SCHEMA,
+        "timing_ms": {
+            "discovery": value / 100,
+            "admission": value / 10,
+            "feedback": value / 20,
+            "active": value / 10 + value / 20,
+            "data_plane_wait": value / 5,
+        },
         "payload_bytes": {**payload, "total": sum(payload.values())},
         "messages": {**messages, "total": sum(messages.values())},
     }
@@ -296,7 +303,7 @@ def test_production_cli_csv_is_explicit_and_defaults_off():
         launcher.parse_args([*base, "--csv", "2"])
 
 
-def test_footprint_export_creates_one_data_only_csv_per_category(tmp_path):
+def test_footprint_export_creates_wall_time_and_data_csvs_per_category(tmp_path):
     events = _trace_events()
     events[1]["control_plane"] = _footprint(100)
     events[2]["control_plane"] = _footprint(200)
@@ -314,9 +321,13 @@ def test_footprint_export_creates_one_data_only_csv_per_category(tmp_path):
     assert footprint_dir.is_dir()
     assert [path.name for path in paths[6:]] == expected_names
     assert sorted(path.name for path in footprint_dir.iterdir()) == sorted(expected_names)
-    assert not any("cpu" in name or "time" in name for name in expected_names)
+    assert not any("cpu" in name for name in expected_names)
+    admission_rows = _rows(footprint_dir / "admission_time_ms.csv")
+    run_id = next(iter(admission_rows[0]))
+    assert [row[run_id] for row in admission_rows] == ["10.0", "20.0"]
+    wait_rows = _rows(footprint_dir / "data_plane_wait_ms.csv")
+    assert [row[run_id] for row in wait_rows] == ["20.0", "40.0"]
     total_rows = _rows(footprint_dir / "control_plane_payload_total_bytes.csv")
-    run_id = next(iter(total_rows[0]))
     assert [row[run_id] for row in total_rows] == ["330", "630"]
     belief_rows = _rows(footprint_dir / "belief_exchange_total_bytes.csv")
     assert [row[run_id] for row in belief_rows] == ["0", "0"]

@@ -412,7 +412,11 @@ def test_phase8_gate1_runner_reconciles_without_scale_restart_or_process_change(
         "_validate_live_profile_expansion",
         lambda execute, **kwargs: calls.append(("profile", kwargs["boundary"])),
     )
-    monkeypatch.setattr(runner, "validate_node_images", lambda execute: calls.append("images"))
+    monkeypatch.setattr(
+        runner,
+        "validate_node_images",
+        lambda execute, **kwargs: calls.append("images"),
+    )
     monkeypatch.setattr(runner, "_pod_inventory", lambda execute: pods)
     monkeypatch.setattr(
         runner,
@@ -491,8 +495,8 @@ def test_phase8_gate1_overlay_preserves_candidate_resources_and_job_boundary():
     assert "ibg-hybrid-controller-phase8-gate1" in job
     assert "MAX_ITERATIONS" in job and 'value: "2"' in job
     assert "--policy" not in job and "--mc-workers" not in job
-    assert 'requests: {cpu: "1", memory: 256Mi}' in job
-    assert 'limits: {cpu: "2", memory: 1Gi}' in job
+    assert 'requests: {cpu: "2", memory: 256Mi}' in job
+    assert 'limits: {cpu: "4", memory: 1Gi}' in job
     assert "runtime-profiles" not in job
     assert "hidden_state" not in job and "belief" not in job
 

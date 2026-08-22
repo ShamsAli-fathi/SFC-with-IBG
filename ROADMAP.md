@@ -2976,3 +2976,108 @@ rewritten. No cluster, node, image, Job, Pod, workload, traffic, generated
 trace, or generated CSV was mutated. Because controller runtime code changed,
 the next live run must normally rebuild the controller image before later use
 of `--skip-build`.
+
+
+### Hybrid tc/netem implementation and local verification complete
+
+Completed: 2026-08-22. The two-step local task is complete. Step 1 added the
+default-off production CLI, strict delay/jitter validation, Exact-compatible
+replica-`eth0` qdisc command, bounded `NET_ADMIN` init container, conditional
+offline image build/load validation, dynamic three-StatefulSet patches,
+configuration-drift detection, deliberate replica rollout handling, `--runs`
+propagation, and complete top-level `ibg-hybrid-netem-v1` lifecycle
+provenance. No algorithm or metrics schema was changed.
+
+Step 2 focused verification passes 94 tests. The complete Hybrid suite passes
+372 tests in three memory-bounded groups (153, 123, and 96), and the established
+frozen Exact selection passes 188 tests (84 and 104). Changed Python compiles,
+launcher help/import checks pass, all seven offline Hybrid Kustomize overlays
+render with default-disabled manifests, and `git diff --check` passes.
+
+These gates establish local implementation and regression behavior only. No
+image was built or loaded, no kind node or container was started, and no
+cluster, StatefulSet, Pod, Job, workload, or traffic was mutated. User-run
+matched enabled/disabled experiments remain the next action and must normally
+build the new netem image before later `--skip-build` reuse. No live robustness
+or performance result is claimed.
+
+
+### Hybrid equilibrium threshold updated
+
+Completed: 2026-08-22. The user-directed active Hybrid equilibrium threshold
+is now strict `<0.04` per belief entry instead of `<0.033`. Focused Hybrid
+verification confirms the slot metric uses the new threshold. This is only a
+stopping-time adjustment; no belief update, algorithm, placement, learning,
+utility/SLA, telemetry, runtime, or frozen Exact behavior changed. No live
+validation or resource mutation occurred.
+
+
+### Hybrid control-plane wall-time measurement complete locally
+
+Completed: 2026-08-22. The existing CSV-gated controller footprint now records
+validated per-slot discovery, admission, feedback, active-control, and
+data-plane-wait wall times under `ibg-hybrid-control-plane-wall-time-v2` and
+exports five corresponding wide-layout CSVs. Existing payload/message
+accounting is preserved. No CPU or cgroup measurement was added, and the
+experiment trace remains v3 because metrics and Pure/Kernel semantic parity are
+unchanged.
+
+Focused verification passes 81 tests. The complete Hybrid suite passes 376
+tests in three memory-bounded groups (147, 103, and 126), and the established
+frozen Exact selection passes 188 tests (84 and 104). Changed Python compiles,
+launcher and summary help/import checks pass, all seven offline overlays render,
+and `git diff --check` passes. No cluster, node, container, image, Job, Pod,
+workload, traffic, trace, or CSV was mutated during local implementation.
+
+The next ordered gate is a user-run five-iteration baseline using the current
+one-CPU request, two-CPU limit, and two-process lookahead pool. Only after that
+baseline is preserved should a separately implemented and verified candidate
+resource/pool configuration be run with otherwise identical inputs. Because
+controller runtime code changed, the baseline must normally rebuild before
+later `--skip-build` reuse.
+
+
+### Hybrid four-process CPU candidate complete locally
+
+Completed: 2026-08-22. After the five-slot wall-time baseline showed admission
+accounting for approximately 15.32 seconds versus 177 ms of selected-route
+wait, the authorized candidate increased deterministic lookahead from two to
+four persistent worker processes and changed every controller Job from a
+one/two-CPU request/limit to two/four CPUs. Controller memory and all serving
+resources remain unchanged; resource preflight now includes a 2000m controller
+request.
+
+Focused resource/lifecycle/parity verification passes 80 tests. The complete
+Hybrid suite passes 376 tests in three bounded groups (147, 103, and 126), and
+the established frozen Exact selection passes 188 tests (84 and 104). Changed
+Python compiles, launcher checks pass, all seven offline overlays render, and
+`git diff --check` passes. No live resource or generated evidence was mutated
+during implementation.
+
+The remaining gate is the user-run matched five-slot candidate. Only the
+controller image should be rebuilt and loaded before a `--skip-build` run so
+the existing replica and flow-generator Pods are not deliberately rolled by
+the validation procedure. No speedup is established until the new wall-time
+trace is compared with the baseline.
+
+
+### Hybrid optional production parity replay complete locally
+
+Completed: 2026-08-22. Production `run` and `--runs N` now accept
+`--parity-replay 0|1`, defaulting to zero. The finite controller skips the
+expensive second serial scheduling calculation when disabled and emits
+unambiguous “not performed” evidence. Explicitly enabled replay retains the
+existing Pure/Kernel semantic comparison and fails closed on disagreement.
+The infrastructure-oriented `run-small` validation gate remains unchanged and
+continues to require parity.
+
+Focused lifecycle/trace/pool/netem verification passes 63 tests. The complete
+Hybrid suite passes 383 tests in three bounded groups (154, 103, and 126), and
+the established frozen Exact selection passes 188 tests (87 and 101). Changed
+Python compiles, launcher help/import checks pass, all seven offline Hybrid
+overlays render, and `git diff --check` passes.
+
+No Docker, kind, Kubernetes, image, Job, Pod, traffic, trace, or CSV mutation
+occurred. The runtime change requires a normal controller-image rebuild before
+the option is available live. Local verification establishes control and
+semantic preservation; it does not establish a new live wall-time result.

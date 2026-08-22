@@ -452,6 +452,8 @@ def test_phase5_skip_build_reconciles_waits_and_replaces_only_job(
     assert delete_job < apply_job
     assert capsys.readouterr().out == (
         "Selected Hybrid topology: 2 flows x 3 stages x 1 replica per stage\n"
+        "Hybrid network impairment: schema=ibg-hybrid-netem-v1, "
+        "enabled=false, interface=eth0, delay-ms=0, jitter-ms=0\n"
         "Hybrid image mode: --skip-build; reuse validated node-local images\n"
     )
 
@@ -580,6 +582,8 @@ def test_phase5_normal_path_builds_offline_loads_and_restarts(monkeypatch, capsy
     assert sum("restart" in command for command in commands) == 1
     assert capsys.readouterr().out == (
         "Selected Hybrid topology: 2 flows x 3 stages x 1 replica per stage\n"
+        "Hybrid network impairment: schema=ibg-hybrid-netem-v1, "
+        "enabled=false, interface=eth0, delay-ms=0, jitter-ms=0\n"
         "Hybrid image mode: build offline from validated local wheelhouses\n"
     )
 
@@ -623,6 +627,8 @@ def test_phase5_mocked_multibatch_applies_same_target_and_waits_before_job(
     assert cluster.replicas == 5
     assert capsys.readouterr().out == (
         "Selected Hybrid topology: 2 flows x 3 stages x 1 replica per stage\n"
+        "Hybrid network impairment: schema=ibg-hybrid-netem-v1, "
+        "enabled=false, interface=eth0, delay-ms=0, jitter-ms=0\n"
         "Hybrid image mode: build offline from validated local wheelhouses\n"
     )
 

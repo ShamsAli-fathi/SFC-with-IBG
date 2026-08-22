@@ -157,6 +157,77 @@ def test_production_loop_reaches_limit_and_rejects_belief_discontinuity(
         )
 
 
+def test_production_parity_replay_defaults_off_and_can_be_enabled(monkeypatch):
+    calls = []
+
+    def fake_slot_evidence(**kwargs):
+        enabled = kwargs["parity_replay_enabled"]
+        calls.append(enabled)
+        evidence = {
+            "slot_id": kwargs["outcome"].slot.slot_id,
+            "pure_kernel_replay_performed": enabled,
+        }
+        if enabled:
+            evidence["pure_kernel_replay_parity"] = True
+        return evidence
+
+    monkeypatch.setattr(lifecycle, "_slot_evidence", fake_slot_evidence)
+
+    class Controller:
+        def run_slot(self, slot_id):
+            return _outcome(
+                slot_id,
+                beliefs_before={"replica": (0.25,) * 4},
+                beliefs_after={"replica": (0.25,) * 4},
+                equilibrium=True,
+            )
+
+    disabled = lifecycle.run_kernel_experiment(
+        Controller(), object(), max_iterations=1
+    )
+    enabled = lifecycle.run_kernel_experiment(
+        Controller(),
+        object(),
+        max_iterations=1,
+        parity_replay_enabled=True,
+    )
+
+    assert calls == [False, True]
+    assert disabled.evidence[0]["pure_kernel_replay_performed"] is False
+    assert "pure_kernel_replay_parity" not in disabled.evidence[0]
+    assert enabled.evidence[0]["pure_kernel_replay_performed"] is True
+    assert enabled.evidence[0]["pure_kernel_replay_parity"] is True
+
+
+def test_enabled_production_parity_replay_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        lifecycle,
+        "_slot_evidence",
+        lambda **kwargs: {
+            "slot_id": kwargs["outcome"].slot.slot_id,
+            "pure_kernel_replay_performed": True,
+            "pure_kernel_replay_parity": False,
+        },
+    )
+
+    class Controller:
+        def run_slot(self, slot_id):
+            return _outcome(
+                slot_id,
+                beliefs_before={"replica": (0.25,) * 4},
+                beliefs_after={"replica": (0.25,) * 4},
+                equilibrium=True,
+            )
+
+    with pytest.raises(RuntimeError, match="parity replay failed"):
+        lifecycle.run_kernel_experiment(
+            Controller(),
+            object(),
+            max_iterations=1,
+            parity_replay_enabled=True,
+        )
+
+
 @pytest.mark.parametrize("value", [0, -1, True, 1.5])
 def test_production_loop_rejects_invalid_iteration_bounds(value):
     with pytest.raises(ValueError, match="positive integer"):
@@ -166,19 +237,21 @@ def test_production_loop_rejects_invalid_iteration_bounds(value):
 
 
 @pytest.mark.parametrize(
-    ("reached", "expected"),
+    ("reached", "expected", "parity_setting", "expected_parity"),
     [
-        (True, "Equilibrium reached after 1 iteration(s)."),
-        (False, "Equilibrium not reached after 5 iteration(s)."),
+        (True, "Equilibrium reached after 1 iteration(s).", None, False),
+        (False, "Equilibrium not reached after 5 iteration(s).", "1", True),
     ],
 )
 def test_controller_cli_selects_production_lifecycle_and_reports_final_status(
-    monkeypatch, capsys, reached, expected
+    monkeypatch, capsys, reached, expected, parity_setting, expected_parity
 ):
     monkeypatch.setenv("HYBRID_CONTROLLER_LIFECYCLE", "experiment")
     monkeypatch.setenv("SLOT_ID", "4")
     monkeypatch.setenv("MAX_ITERATIONS", "5")
     monkeypatch.setenv("HYBRID_POLICY_ROOT_SEED", "987654321")
+    if parity_setting is not None:
+        monkeypatch.setenv("HYBRID_PARITY_REPLAY", parity_setting)
     close_calls = []
     controller = SimpleNamespace(
         beliefs={ReplicaChoice(1, 1): (0.25, 0.25, 0.25, 0.25)},
@@ -204,6 +277,7 @@ def test_controller_cli_selects_production_lifecycle_and_reports_final_status(
     def fake_experiment(controller, inputs, **kwargs):
         assert kwargs["first_slot"] == 4
         assert kwargs["max_iterations"] == 5
+        assert kwargs["parity_replay_enabled"] is expected_parity
         kwargs["on_slot_completed"](
             1,
             SimpleNamespace(slot_id=4),
@@ -270,6 +344,20 @@ def test_production_cli_requires_positive_dimensions_and_iteration_limit():
         parsed.max_iterations,
     ) == (10, 3, 5, 42, 100)
     assert parsed.trace_dir == host_runner.DEFAULT_HYBRID_TRACE_DIR
+    assert parsed.parity_replay == 0
+
+    replay_enabled = host_runner.parse_args(
+        [
+            "run",
+            "--flow", "10",
+            "--stage", "3",
+            "--replica", "5",
+            "--profile-seed", "42",
+            "--max-iterations", "100",
+            "--parity-replay", "1",
+        ]
+    )
+    assert replay_enabled.parity_replay == 1
 
     series = host_runner.parse_args(
         [
@@ -357,6 +445,13 @@ def _control_plane_snapshot(value=100):
     }
     return {
         "schema": HYBRID_CONTROL_PLANE_DATA_SCHEMA,
+        "timing_ms": {
+            "discovery": value / 100,
+            "admission": value / 10,
+            "feedback": value / 20,
+            "active": value / 10 + value / 20,
+            "data_plane_wait": value / 5,
+        },
         "payload_bytes": {**payload, "total": sum(payload.values())},
         "messages": {**messages, "total": sum(messages.values())},
     }
@@ -382,6 +477,7 @@ def _trace_slot(slot_id, *, equilibrium=False, root_seed=2050, footprint=False):
                          for flow_id in (1, 2) for stage in (1, 3)],
         "beliefs_before": {"1:1": [0.25, 0.25, 0.25, 0.25]},
         "beliefs_after": {"1:1": [0.25, 0.25, 0.25, 0.25]},
+        "pure_kernel_replay_performed": False,
         "metrics": {
             "elapsed_seconds": 0.25,
             "end_to_end_sla_violations": 1,
@@ -428,6 +524,10 @@ def test_production_trace_persists_lifecycle_and_each_flow_pair(tmp_path):
     assert events[0]["trace_contract_version"] == (
         "ibg-hybrid-experiment-jsonl-v3"
     )
+    assert events[0]["parity_replay_enabled"] is False
+    assert events[1]["pure_kernel_replay_performed"] is False
+    assert "pure_kernel_replay_parity" not in events[1]
+    assert events[-1]["parity_replay_enabled"] is False
     assert events[1]["metrics"]["end_to_end_sla_violations"] == 1
     assert events[1]["metrics"]["end_to_end_sla_excess_ms"] == pytest.approx(
         0.1
@@ -439,6 +539,57 @@ def test_production_trace_persists_lifecycle_and_each_flow_pair(tmp_path):
     } == {1: 4.25, 2: 7.5}
     assert events[-1]["reached_equilibrium"] is True
     assert events[-1]["iterations"] == 2
+
+
+def test_production_trace_records_enabled_parity_replay(tmp_path):
+    slot = _trace_slot(1, equilibrium=True)
+    slot["pure_kernel_replay_performed"] = True
+    slot["pure_kernel_replay_parity"] = True
+
+    trace_path = host_runner._persist_hybrid_experiment_trace(
+        json.dumps(slot),
+        trace_dir=tmp_path,
+        requested_flows=2,
+        requested_stages=3,
+        requested_replicas=1,
+        max_iterations=1,
+        parity_replay_enabled=True,
+    )
+
+    events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert all(event["parity_replay_enabled"] is True for event in events)
+    assert events[1]["pure_kernel_replay_performed"] is True
+    assert events[1]["pure_kernel_replay_parity"] is True
+
+
+@pytest.mark.parametrize(
+    ("enabled", "performed", "parity", "message"),
+    [
+        (False, True, True, "provenance"),
+        (False, False, True, "disabled parity-replay result"),
+        (True, False, None, "provenance"),
+        (True, True, False, "did not pass"),
+    ],
+)
+def test_production_trace_rejects_parity_replay_drift(
+    tmp_path, enabled, performed, parity, message
+):
+    slot = _trace_slot(1)
+    slot["pure_kernel_replay_performed"] = performed
+    if parity is not None:
+        slot["pure_kernel_replay_parity"] = parity
+
+    with pytest.raises(RuntimeError, match=message):
+        host_runner._persist_hybrid_experiment_trace(
+            json.dumps(slot),
+            trace_dir=tmp_path,
+            requested_flows=2,
+            requested_stages=3,
+            requested_replicas=1,
+            max_iterations=1,
+            parity_replay_enabled=enabled,
+        )
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_production_trace_rejects_incorrect_end_to_end_sla_count(tmp_path):
@@ -623,7 +774,10 @@ def test_trace_footprint_activation_is_strict_and_persists_only_when_enabled(tmp
 
 
 def test_production_main_saves_trace_and_prints_path(monkeypatch, tmp_path, capsys):
-    output = json.dumps(_trace_slot(1, equilibrium=True, footprint=True)) + "\n"
+    slot = _trace_slot(1, equilibrium=True, footprint=True)
+    slot["pure_kernel_replay_performed"] = True
+    slot["pure_kernel_replay_parity"] = True
+    output = json.dumps(slot) + "\n"
     run_arguments = {}
 
     def fake_run_experiment(**kwargs):
@@ -652,12 +806,16 @@ def test_production_main_saves_trace_and_prints_path(monkeypatch, tmp_path, caps
             "--max-iterations", "5",
             "--trace-dir", str(tmp_path),
             "--csv", "1",
+            "--parity-replay", "1",
         ]
     ) == 0
     traces = list(tmp_path.glob("ibg-hybrid-experiment-*.jsonl"))
     assert len(traces) == 1
     assert exported == traces
     assert run_arguments["control_plane_footprint_enabled"] is True
+    assert run_arguments["parity_replay_enabled"] is True
+    events = [json.loads(line) for line in traces[0].read_text().splitlines()]
+    assert all(event["parity_replay_enabled"] is True for event in events)
     assert f"Detailed Hybrid JSONL trace: {traces[0]}" in capsys.readouterr().out
 
 
@@ -679,14 +837,18 @@ def test_random_series_reuses_environment_and_generates_unique_run_seeds(
 
     def fake_run_experiment(**kwargs):
         calls.append(kwargs)
-        return json.dumps(
-                _trace_slot(
-                    kwargs["first_slot_id"],
-                    equilibrium=True,
-                    root_seed=kwargs["policy_root_seed"],
-                    footprint=kwargs["control_plane_footprint_enabled"],
-                )
-        ) + "\n"
+        slot = _trace_slot(
+            kwargs["first_slot_id"],
+            equilibrium=True,
+            root_seed=kwargs["policy_root_seed"],
+            footprint=kwargs["control_plane_footprint_enabled"],
+        )
+        slot["pure_kernel_replay_performed"] = kwargs[
+            "parity_replay_enabled"
+        ]
+        if kwargs["parity_replay_enabled"]:
+            slot["pure_kernel_replay_parity"] = True
+        return json.dumps(slot) + "\n"
 
     monkeypatch.setattr(host_runner, "run_experiment", fake_run_experiment)
     traces = host_runner.run_experiment_series(
@@ -699,6 +861,7 @@ def test_random_series_reuses_environment_and_generates_unique_run_seeds(
         rollout_batch_size=1,
         max_iterations=5,
         csv_enabled=True,
+        parity_replay_enabled=True,
         csv_output_dir=tmp_path / "figures",
     )
 
@@ -707,6 +870,7 @@ def test_random_series_reuses_environment_and_generates_unique_run_seeds(
     assert [call["policy_root_seed"] for call in calls] == [101, 202, 303]
     assert [call["first_slot_id"] for call in calls] == [101, 202, 303]
     assert [call["skip_build"] for call in calls] == [False, True, True]
+    assert all(call["parity_replay_enabled"] is True for call in calls)
     assert [path.name.rsplit("-", 1)[-1] for path in traces] == [
         "run001.jsonl",
         "run002.jsonl",
@@ -721,6 +885,8 @@ def test_random_series_reuses_environment_and_generates_unique_run_seeds(
         assert events[0]["series_run_index"] == index
         assert events[0]["series_run_count"] == 3
         assert events[1]["slot_id"] == seed
+        assert all(event["parity_replay_enabled"] is True for event in events)
+        assert events[1]["pure_kernel_replay_parity"] is True
         assert events[-1]["experiment_seed"] == seed
     assert len(
         {
@@ -826,7 +992,9 @@ def test_production_main_routes_runs_to_automatic_series(monkeypatch, tmp_path):
     assert "profile_seed" not in captured
 
 
-def test_run_experiment_forwards_footprint_activation_to_job_lifecycle(monkeypatch):
+def test_run_experiment_forwards_optional_instrumentation_to_job_lifecycle(
+    monkeypatch,
+):
     captured = {}
 
     def fake_run_small(**kwargs):
@@ -840,9 +1008,11 @@ def test_run_experiment_forwards_footprint_activation_to_job_lifecycle(monkeypat
         requested_replicas=1,
         max_iterations=2,
         control_plane_footprint_enabled=True,
+        parity_replay_enabled=True,
     ) == "evidence"
     assert captured["production_experiment"] is True
     assert captured["control_plane_footprint_enabled"] is True
+    assert captured["parity_replay_enabled"] is True
 
 def test_production_job_receives_iteration_limit_without_gate_deadline(tmp_path):
     applied = {}

@@ -543,7 +543,7 @@ def _names(names):
     return {"items": [{"metadata": {"name": name}} for name in names]}
 
 
-def _nodes(*, worker_cpu="4", worker_memory="16Gi"):
+def _nodes(*, worker_cpu="8", worker_memory="16Gi"):
     return {
         "items": [
             {
@@ -1636,7 +1636,7 @@ def test_resource_preflight_uses_only_the_worker_allocatable_envelope():
     def execute(command, capture_output):
         assert capture_output
         if command == runner._kubectl("get", "nodes", "-o", "json"):
-            return json.dumps(_nodes(worker_cpu="2", worker_memory="2Gi"))
+            return json.dumps(_nodes(worker_cpu="3", worker_memory="2Gi"))
         if command == runner._kubectl("get", "pods", "-A", "-o", "json"):
             return json.dumps(pods)
         raise AssertionError(command)
@@ -1646,8 +1646,8 @@ def test_resource_preflight_uses_only_the_worker_allocatable_envelope():
         existing_replica_count=0,
         requested_replica_count=1,
     )
-    assert result.requested_cpu_milli == 1475
-    assert result.allocatable_cpu_milli == 2000
+    assert result.requested_cpu_milli == 2475
+    assert result.allocatable_cpu_milli == 3000
     assert result.requested_memory_bytes == 1024 * 1024**2
     assert result.allocatable_memory_bytes == 2 * 1024**3
     assert result.added_stage_pods == 3

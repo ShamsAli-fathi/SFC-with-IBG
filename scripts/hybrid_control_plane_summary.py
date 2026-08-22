@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize data-only Hybrid controller footprint traces."""
+"""Summarize Hybrid controller data and wall-time footprint traces."""
 
 from __future__ import annotations
 
@@ -12,16 +12,17 @@ from IBG_Hybrid.control_plane_footprint import (
     HYBRID_CONTROL_PLANE_DATA_SCHEMA,
     HYBRID_CONTROL_PLANE_MESSAGE_FIELDS,
     HYBRID_CONTROL_PLANE_PAYLOAD_FIELDS,
+    HYBRID_CONTROL_PLANE_TIMING_FIELDS,
     validate_hybrid_control_plane_data_snapshot,
 )
 
 
 HYBRID_CONTROL_PLANE_SUMMARY_SCHEMA = (
-    "ibg-hybrid-control-plane-data-summary-v1"
+    "ibg-hybrid-control-plane-summary-v2"
 )
 
 
-def _percentile(values: Sequence[int], percentile: float) -> float:
+def _percentile(values: Sequence[int | float], percentile: float) -> float:
     ordered = sorted(values)
     position = (len(ordered) - 1) * percentile
     lower = int(position)
@@ -30,7 +31,7 @@ def _percentile(values: Sequence[int], percentile: float) -> float:
     return float(ordered[lower] + (ordered[upper] - ordered[lower]) * fraction)
 
 
-def _summary(values: Sequence[int]) -> dict[str, float]:
+def _summary(values: Sequence[int | float]) -> dict[str, float]:
     if not values:
         raise ValueError("Hybrid footprint summary requires at least one value")
     return {
@@ -62,6 +63,10 @@ def summarize_trace(path: Path) -> dict[str, object]:
         snapshots.append(validate_hybrid_control_plane_data_snapshot(snapshot))
 
     metrics = {}
+    for field in HYBRID_CONTROL_PLANE_TIMING_FIELDS:
+        metrics[f"{field}_time_ms"] = _summary(
+            [snapshot["timing_ms"][field] for snapshot in snapshots]
+        )
     for group, fields in (
         ("payload_bytes", HYBRID_CONTROL_PLANE_PAYLOAD_FIELDS),
         ("messages", HYBRID_CONTROL_PLANE_MESSAGE_FIELDS),
@@ -97,7 +102,7 @@ def summarize_trace(path: Path) -> dict[str, object]:
 def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Validate and summarize data-only IBG-Hybrid controller payload "
+            "Validate and summarize IBG-Hybrid controller wall-time, payload, "
             "and message footprint traces"
         )
     )

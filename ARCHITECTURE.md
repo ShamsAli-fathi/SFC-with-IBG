@@ -694,7 +694,7 @@ outcome selector and `SLA_v` enforce the active physical-only `110`-ms SLA.
 Exactly one simulated measured-pair latency per flow is added only to the raw
 end-to-end latency and physical-plus-pair reference utility. Planning and
 measured pair values are never substituted for one another. Jain fairness
-and strict `<0.033` equilibrium call the unchanged Exact helpers. Slot timing
+and strict `<0.04` equilibrium call the unchanged Exact helpers. Slot timing
 is monotonic and covers placement, simulation, learning, and metric
 calculation.
 
@@ -3380,3 +3380,138 @@ This reporting addition changes no threshold, violation count semantics,
 physical-only realized utility, raw end-to-end reference utility, placement,
 learning, beliefs, telemetry, latency generation/measurement, routing,
 scheduling, resources, or frozen Exact behavior.
+
+
+## Hybrid opt-in replica-egress transport impairment
+
+Implemented and locally verified: 2026-08-22. Hybrid now has one versioned,
+host-selected `ibg-hybrid-netem-v1` transport configuration. The production
+launcher defaults it off. When enabled, deterministic dynamic Kustomize
+patches add one short-lived init container to each of the three replica
+StatefulSet Pod templates. That container applies `tc qdisc replace` only to
+the replica Pod network namespace's `eth0` egress, has `NET_ADMIN` as its only
+added capability, drops all other capabilities, and is not privileged. The
+ordinary private-processor and public-forwarder containers remain non-root and
+unchanged. Controller, flow-generator, kind-node, host, and Kubernetes
+management interfaces are outside this boundary.
+
+The bounded init image is Hybrid-owned as `ibg-hybrid-testbed:netem-v1` and is
+rebased offline from the already-local frozen Exact runtime image solely to
+reuse its validated `/usr/sbin/tc`. It is built and image-identity checked only
+for enabled runs. Disabled rendering contains no netem init container,
+capability, annotation, or qdisc command. A configuration transition is a
+deliberate replica StatefulSet template rollout; the launcher rejects mixed,
+malformed, or silently reused impaired/unimpaired templates and preserves the
+flow-generator Pod across that transition.
+
+Every persisted lifecycle event receives the complete top-level
+`network_impairment` record, including explicit disabled provenance. The host
+boundary requires one identical configuration across the trace and rejects
+missing, malformed, mixed, drifted, or controller-supplied provenance. The
+active trace remains `ibg-hybrid-experiment-jsonl-v3` because this is additive
+run provenance outside `HybridSlotMetrics`; Pure/Kernel metrics and parity are
+unchanged.
+
+Netem remains external transport impairment, separate from physical processing
+jitter and observation-only learning noise. It does not directly alter policy,
+placement, beliefs, learning, physical-only realized utility, or pair
+measurement semantics. Because the existing raw end-to-end boundary includes
+measured consecutive-pair latency, injected delay may legitimately affect raw
+end-to-end latency, end-to-end violation count and excess, and raw end-to-end
+reference utility. That observed effect is neither suppressed nor counted a
+second time. Packet loss, retries, imputation, and partial-slot acceptance are
+not part of this feature.
+
+
+## Hybrid equilibrium stopping tolerance
+
+Updated: 2026-08-22. The active Hybrid equilibrium check now stops only when
+every belief-vector entry changes by strictly less than `0.04` from the prior
+completed timeslot. Equality at `0.04` does not pass. The existing Exact
+equilibrium helper remains the implementation boundary; Hybrid supplies the
+new threshold explicitly. This changes stopping time only and does not alter
+belief updates, placement, learning, utility/SLA, telemetry, seeds, traffic,
+or any per-slot algorithm result.
+
+
+## Hybrid control-plane phase wall time
+
+Implemented and locally verified: 2026-08-22. When `--csv 1` enables the
+existing Hybrid controller-footprint boundary, every successfully completed
+slot now includes monotonic `timing_ms` alongside its retained application-body
+payload and message counters. Discovery spans the complete Ready-Pod discovery
+call. Admission spans slot start through discovery, policy/pruning/lookahead,
+placement, and serialized route-request preparation, ending immediately before
+the flow-generator POST. `data_plane_wait` spans that POST through response
+receipt. Feedback spans response receipt through telemetry conversion,
+learning, metrics, equilibrium handling, and valid slot completion. Active
+control time is exactly admission plus feedback; selected-route waiting remains
+separate.
+
+The versioned footprint schema is now
+`ibg-hybrid-control-plane-wall-time-v2`. The enclosing experiment trace remains
+`ibg-hybrid-experiment-jsonl-v3` because `HybridSlotMetrics` and its semantic
+contract are unchanged. Five wide-layout reports are added under
+`figures/IBG_hybrid/footprint/`: `discovery_time_ms.csv`,
+`admission_time_ms.csv`, `feedback_time_ms.csv`,
+`active_control_time_ms.csv`, and `data_plane_wait_ms.csv`. Existing payload
+and message reports retain their categories and arithmetic.
+
+This measurement intentionally contains no CPU, child-process CPU, cgroup,
+memory, NIC, or wire-byte field. It can identify whether controller admission
+or selected-route waiting dominates wall time, but it cannot by itself prove
+that the two lookahead processes saturate their CPU limit. Failed or partial
+slots cannot finish or persist a timing snapshot. The measurement does not
+enter Pure/Kernel metric parity and changes no policy, random stream, placement,
+learning, utility/SLA, telemetry, resource, topology, or scheduling behavior.
+
+
+## Hybrid four-process lookahead candidate envelope
+
+Implemented locally: 2026-08-22. The finite deterministic-lookahead controller
+now owns one spawn-isolated pool of four worker processes instead of two. The
+same pool remains persistent across every sequential real flow and completed
+timeslot. Only independent focal candidate branches run concurrently;
+projected future flows inside each branch, real flow commits, traffic,
+telemetry, and learning remain sequential. Results are still restored to
+canonical order before selection, preserving strict improvement and first-
+canonical tie behavior. Manual MC retains its separate two-worker boundary.
+
+Every retained production controller Job now requests two CPUs and has a
+four-CPU limit, with its 256-MiB request and 1-GiB memory limit unchanged. The
+worker preflight adds 2000 millicpus for the future finite controller and still
+uses actual Kubernetes allocatable/request arithmetic. These are shared soft
+scheduler resources, not exclusive cores, pinning, cpusets, new nodes, or
+guaranteed physical capacity. Idle CPU remains available to serving workloads.
+
+The candidate targets the measured admission bottleneck from the preceding
+five-slot 20x3x10 baseline, where mean admission was about 15.32 seconds while
+mean selected-route wait was about 177 ms. That baseline motivates the test but
+does not predict or prove improvement. A matched user-run candidate trace is
+required before any speedup or serving-non-regression conclusion.
+
+
+## Hybrid optional Pure/Kernel parity replay
+
+Implemented locally: 2026-08-22. Normal production experiments now perform
+each Kernel timeslot once. The previously unconditional post-slot
+`_replay_kernel_semantics` calculation is controlled by the production option
+`--parity-replay 0|1` and defaults to disabled. Disabling it does not remove
+traffic, telemetry validation, belief updates, metrics, JSONL, CSV, placement,
+or controller-lifetime lookahead processing; it removes only the second serial
+policy calculation over the completed slot's already-returned telemetry.
+
+The host launcher propagates the selection as `HYBRID_PARITY_REPLAY` into the
+finite controller Job. A disabled completed slot records
+`pure_kernel_replay_performed=false` and contains no parity result. An enabled
+slot records `pure_kernel_replay_performed=true`, recomputes the unchanged
+serial Pure decision, requires `pure_kernel_replay_parity=true`, and fails
+closed if the comparison disagrees. The historical `run-small` validation gate
+continues to perform and require replay because parity is part of that gate.
+
+Trace lifecycle events record `parity_replay_enabled`; persistence rejects
+missing, mixed, disabled-result, or failed enabled provenance. This additive
+evidence remains outside `HybridSlotMetrics`, so the active SLA metrics trace
+contract stays `ibg-hybrid-experiment-jsonl-v3` and historical traces are not
+rewritten. Dedicated tests retain continuous serial/parallel semantic parity
+coverage even when ordinary experiments use the default-off setting.

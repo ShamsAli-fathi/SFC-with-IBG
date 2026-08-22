@@ -3360,3 +3360,108 @@ and runtime architecture are unchanged. No live resource, image, workload,
 traffic, trace, or CSV was mutated. The next live run requires a normal
 controller-image build before that rebuilt image can later be reused with
 `--skip-build`.
+
+
+## Hybrid tc/netem complete locally
+
+Updated: 2026-08-22. The opt-in `ibg-hybrid-netem-v1` feature is implemented
+and locally verified. `--netem` defaults to zero; enabled runs accept strict
+finite delay/jitter values and dynamically add a non-privileged, `NET_ADMIN`-
+only init container to all replica StatefulSets. Its qdisc affects only each
+replica Pod's `eth0` egress. Disabled templates contain no impairment fields.
+The launcher detects enabled/disabled/value drift, requires a deliberate
+replica rollout, preserves the flow generator, propagates one configuration
+through `--runs`, and records matching explicit provenance on every host-side
+lifecycle event without changing the v3 metrics contract.
+
+Focused verification passes 94 tests. All 372 Hybrid tests pass in three
+memory-bounded groups (153, 123, and 96), and all 188 established frozen Exact
+regressions pass (84 and 104). Changed Python compiles, launcher help/import
+checks pass, all seven offline overlays render, and `git diff --check` passes.
+
+No image build/load, Docker or kind startup, Kubernetes command, Job, Pod,
+traffic run, or live experiment occurred. Therefore no live robustness claim
+is recorded. The next action belongs to the user: first build the new
+Hybrid-owned netem image in a normal enabled run, then execute matched disabled
+and enabled runs with identical dimensions and seeds. Netem may legitimately
+raise measured pair latency and the dependent raw end-to-end SLA/reference
+metrics; it does not change physical jitter, observation noise, policy,
+learning, beliefs, placement, or physical-only utility.
+
+
+## Hybrid equilibrium threshold set to 0.04
+
+Updated: 2026-08-22. The active Hybrid runner now declares equilibrium only
+when every belief entry changes by strictly less than `0.04` between completed
+timeslots. Exactly `0.04` remains non-equilibrium. This supersedes the prior
+Hybrid `<0.033` threshold and affects stopping time only. No live cluster,
+image, workload, Job, Pod, or traffic mutation occurred.
+
+
+## Hybrid phase wall-time footprint complete locally
+
+Updated: 2026-08-22. `--csv 1` now records monotonic wall time for Ready-Pod
+discovery, admission/planning through route dispatch, the separate
+flow-generator/data-plane wait, and feedback through completed-slot validation.
+Active control time is the exact admission-plus-feedback sum. The footprint is
+versioned `ibg-hybrid-control-plane-wall-time-v2`; enclosing traces remain v3,
+and five timing CSVs are written under `figures/IBG_hybrid/footprint/` beside
+the unchanged payload/message reports.
+
+The instrumentation contains no CPU, child-process CPU, cgroup, memory, NIC,
+or wire measurement and therefore identifies phase dominance rather than CPU
+saturation. It remains outside `HybridSlotMetrics` and changes no algorithm,
+placement, learning, utility/SLA, telemetry, resources, process pool, or
+scheduling behavior.
+
+Focused verification passes 81 tests. All 376 Hybrid tests pass in bounded
+groups (147, 103, and 126), all 188 frozen Exact regressions pass, changed
+Python compiles, launcher/summary checks pass, seven offline overlays render,
+and `git diff --check` passes. No live or generated state was mutated. The next
+action is a user-run five-slot current-configuration baseline after a normal
+controller-image rebuild; the future CPU/pool candidate remains unimplemented
+until that baseline is captured.
+
+
+## Hybrid four-process CPU candidate ready for user gate
+
+Updated: 2026-08-22. The local candidate now uses four persistent deterministic-
+lookahead child processes, a two-CPU controller request, and a four-CPU limit.
+Manual MC remains capped at two workers. Controller memory, serving resources,
+topology, placement and learning semantics, policy parameters, telemetry, and
+wall-time instrumentation are unchanged. Resource preflight accounts for the
+new 2000m request.
+
+The reference trace is
+`runs/ibg-hybrid-experiment-20260822T122453.268408Z.jsonl`: five completed
+20x3x10 lookahead slots, netem disabled, Pure/Kernel parity true, two persistent
+workers, mean total slot time 15.49 seconds, mean admission 15.32 seconds, mean
+data-plane wait 177 ms, and mean feedback 14 ms. It did not equilibrate within
+the deliberate five-slot cap. This is baseline evidence, not a speed claim.
+
+Focused candidate verification passes 80 tests; all 376 Hybrid tests and 188
+frozen Exact regressions pass. Compilation, launcher checks, seven offline
+renders, and `git diff --check` pass. No live mutation occurred. The next action
+is a user-run candidate after rebuilding/loading only the controller image,
+then comparing its five timing rows and serving health against the baseline.
+
+
+## Hybrid ordinary parity replay is now optional locally
+
+Updated: 2026-08-22. Ordinary production experiments now default to
+`--parity-replay 0`. They execute the real four-process Kernel scheduling,
+traffic, telemetry, belief update, metrics, and persistence once, then proceed
+to the next timeslot without repeating the full scheduling calculation through
+the serial parity oracle. `--parity-replay 1` explicitly restores that oracle
+and fails the run if it does not match.
+
+Disabled evidence records `pure_kernel_replay_performed=false` and omits a
+parity value; enabled evidence records performed/true. Trace persistence and
+all lifecycle events enforce the selected mode. The active metrics schema
+remains v3, and the `run-small` correctness gate still mandates replay.
+
+Focused verification passes 63 tests; all 383 Hybrid tests and 188 frozen
+Exact regressions pass. Compilation, launcher help/import checks, seven
+offline renders, and `git diff --check` pass. No live or generated state was
+mutated. A normal controller-image rebuild is required before using the option
+in the cluster; no live runtime reduction is claimed by this local result.

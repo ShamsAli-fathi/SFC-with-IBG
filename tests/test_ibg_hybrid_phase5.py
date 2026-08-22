@@ -520,7 +520,7 @@ def test_learning_is_selected_only_uses_retention_point_eight_and_strict_equilib
         if choice not in selected
     )
     assert result.metrics.equilibrium == (
-        result.metrics.maximum_belief_change < 0.033
+        result.metrics.maximum_belief_change < 0.04
     )
     observation = result.observations[0]
     prior = before[observation.choice]

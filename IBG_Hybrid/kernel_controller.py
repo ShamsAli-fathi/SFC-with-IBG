@@ -114,10 +114,15 @@ class HybridKernelFlowGeneratorHttpClient:
     ) -> HybridKernelRunSlotResponse:
         if self.is_closed:
             raise RuntimeError("Hybrid flow-generator HTTP client is closed")
+        payload = request.model_dump(mode="json")
+        if self.control_plane_meter is not None:
+            self.control_plane_meter.mark_route_dispatch()
         response = self._client.post(
             f"{self.base_url}/run-slot",
-            json=request.model_dump(mode="json"),
+            json=payload,
         )
+        if self.control_plane_meter is not None:
+            self.control_plane_meter.mark_telemetry_received()
         response.raise_for_status()
         if self.control_plane_meter is not None:
             self.control_plane_meter.record_exchange(
@@ -483,9 +488,14 @@ class HybridKernelControllerAdapter:
             raise RuntimeError("Hybrid Kernel controller is closed")
         if self.control_plane_meter is not None:
             self.control_plane_meter.begin_slot()
-        snapshot = self.discovery.wait_for_complete_ready(
-            **dict(discovery_wait or {})
-        )
+            self.control_plane_meter.begin_discovery()
+        try:
+            snapshot = self.discovery.wait_for_complete_ready(
+                **dict(discovery_wait or {})
+            )
+        finally:
+            if self.control_plane_meter is not None:
+                self.control_plane_meter.end_discovery()
         configuration = self.controller_inputs.configuration
         if snapshot.configuration != configuration:
             raise RuntimeError("Ready snapshot configuration does not match controller")

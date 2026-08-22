@@ -97,12 +97,12 @@ def _capacity_executor(*, worker_cpu: str, worker_memory: str):
     return execute
 
 
-def test_every_controller_job_uses_the_same_soft_cpu_request():
+def test_every_controller_job_uses_the_same_candidate_cpu_envelope():
     assert len(CONTROLLER_JOBS) == len(set(CONTROLLER_JOBS)) == 7
     for path in CONTROLLER_JOBS:
         job = path.read_text(encoding="utf-8")
-        assert job.count('requests: {cpu: "1", memory: 256Mi}') == 1
-        assert job.count('limits: {cpu: "2", memory: 1Gi}') == 1
+        assert job.count('requests: {cpu: "2", memory: 256Mi}') == 1
+        assert job.count('limits: {cpu: "4", memory: 1Gi}') == 1
         assert "cpu: 100m" not in job
         assert job.count("nodeSelector:") == 1
         assert f'{runner.WORKLOAD_NODE_LABEL}: "true"' in job
@@ -133,8 +133,8 @@ def test_mc_and_deterministic_lookahead_templates_share_resources():
     lookahead = runner.PHASE7_CONTROLLER_JOB.read_text(encoding="utf-8")
     manual_mc = runner.PHASE75_CONTROLLER_JOB.read_text(encoding="utf-8")
     for job in (lookahead, manual_mc):
-        assert 'requests: {cpu: "1", memory: 256Mi}' in job
-        assert 'limits: {cpu: "2", memory: 1Gi}' in job
+        assert 'requests: {cpu: "2", memory: 256Mi}' in job
+        assert 'limits: {cpu: "4", memory: 1Gi}' in job
     assert runner._phase75_controller_arguments("lookahead", None) == (
         "--policy",
         "lookahead",
@@ -147,25 +147,25 @@ def test_mc_and_deterministic_lookahead_templates_share_resources():
     )
 
 
-def test_resource_preflight_accounts_for_one_cpu_and_accepts_exact_fit():
+def test_resource_preflight_accounts_for_two_cpus_and_accepts_exact_fit():
     result = runner._validate_node_resource_capacity(
-        _capacity_executor(worker_cpu="1475m", worker_memory="1Gi"),
+        _capacity_executor(worker_cpu="2475m", worker_memory="1Gi"),
         existing_replica_count=0,
         requested_replica_count=1,
     )
 
-    assert runner.CONTROLLER_CPU_REQUEST_MILLI == 1000
+    assert runner.CONTROLLER_CPU_REQUEST_MILLI == 2000
     assert runner.CONTROLLER_MEMORY_REQUEST_BYTES == 256 * 1024**2
-    assert result.requested_cpu_milli == result.allocatable_cpu_milli == 1475
+    assert result.requested_cpu_milli == result.allocatable_cpu_milli == 2475
     assert result.requested_memory_bytes == result.allocatable_memory_bytes
     assert result.requested_memory_bytes == 1024**3
     assert result.added_stage_pods == 3
 
 
 def test_resource_preflight_rejects_cpu_one_millicpu_below_request():
-    with pytest.raises(RuntimeError, match=r"cpu=1475m/1474m"):
+    with pytest.raises(RuntimeError, match=r"cpu=2475m/2474m"):
         runner._validate_node_resource_capacity(
-            _capacity_executor(worker_cpu="1474m", worker_memory="1Gi"),
+            _capacity_executor(worker_cpu="2474m", worker_memory="1Gi"),
             existing_replica_count=0,
             requested_replica_count=1,
         )
@@ -178,7 +178,7 @@ def test_resource_preflight_rejects_memory_one_byte_below_request():
     ):
         runner._validate_node_resource_capacity(
             _capacity_executor(
-                worker_cpu="1475m",
+                worker_cpu="2475m",
                 worker_memory=str(1024**3 - 1),
             ),
             existing_replica_count=0,

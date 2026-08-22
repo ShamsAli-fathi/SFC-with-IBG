@@ -189,7 +189,7 @@ class RecordingExecutor(Executor):
         )
 
 
-def test_full_slot_two_process_lookahead_matches_serial_oracle_exactly():
+def test_full_slot_four_process_lookahead_matches_serial_oracle_exactly():
     slot_input = _slot_input()
     global_random_state = random.getstate()
     serial = run_hybrid_slot(slot_input)
@@ -263,15 +263,15 @@ def test_controller_reuses_same_spawn_workers_across_flows_and_slots(
             child.pid for child in multiprocessing.active_children()
         } - baseline_children
 
-        assert first.lookahead_process_workers == 2
-        assert second.lookahead_process_workers == 2
+        assert first.lookahead_process_workers == 4
+        assert second.lookahead_process_workers == 4
         assert (
             first.lookahead_pool_lifecycle_version
             == second.lookahead_pool_lifecycle_version
             == HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION
         )
         assert executor_ids == [id(owned_executor), id(owned_executor)]
-        assert len(worker_pid_sets[0]) == len(worker_pid_sets[1]) == 2
+        assert len(worker_pid_sets[0]) == len(worker_pid_sets[1]) == 4
         assert worker_pid_sets[0] == worker_pid_sets[1]
         assert children_after_first == children_after_second == set(
             worker_pid_sets[0]

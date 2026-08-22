@@ -13,8 +13,11 @@ from IBG_Hybrid.control_plane_footprint import (
 
 
 def _snapshot():
-    meter = HybridControlPlaneDataMeter()
+    timestamps = iter((0, 1_000_000, 2_000_000, 10_000_000, 20_000_000, 25_000_000))
+    meter = HybridControlPlaneDataMeter(wall_clock_ns=lambda: next(timestamps))
     meter.begin_slot()
+    meter.begin_discovery()
+    meter.end_discovery()
     meter.record_exchange(
         request_field="kubernetes_discovery_tx",
         response_field="kubernetes_discovery_rx",
@@ -27,14 +30,23 @@ def _snapshot():
         request_payload_bytes=80,
         response_payload_bytes=220,
     )
+    meter.mark_route_dispatch()
+    meter.mark_telemetry_received()
     return meter.finish_slot()
 
 
-def test_data_meter_matches_exact_categories_without_timing_or_cpu():
+def test_meter_matches_exact_data_categories_and_phase_wall_times_without_cpu():
     snapshot = _snapshot()
 
     assert snapshot == {
         "schema": HYBRID_CONTROL_PLANE_DATA_SCHEMA,
+        "timing_ms": {
+            "discovery": 1.0,
+            "admission": 10.0,
+            "feedback": 5.0,
+            "active": 15.0,
+            "data_plane_wait": 10.0,
+        },
         "payload_bytes": {
             "kubernetes_discovery_tx": 0,
             "kubernetes_discovery_rx": 120,
@@ -54,7 +66,6 @@ def test_data_meter_matches_exact_categories_without_timing_or_cpu():
             "total": 4,
         },
     }
-    assert "timing_ms" not in snapshot
     assert "cpu_ms" not in snapshot
 
 
@@ -71,6 +82,9 @@ def test_data_only_categories_match_frozen_exact_control_plane_v1():
         lambda value: value["messages"].__setitem__("kubernetes_discovery_tx", 2),
         lambda value: value["payload_bytes"].__setitem__("belief_tx", 1),
         lambda value: value["messages"].__setitem__("belief_rx", 1),
+        lambda value: value["timing_ms"].__setitem__("active", 14.0),
+        lambda value: value["timing_ms"].__setitem__("data_plane_wait", -1.0),
+        lambda value: value["timing_ms"].__setitem__("feedback", float("nan")),
     ],
 )
 def test_data_snapshot_rejects_incorrect_totals_messages_and_belief_exchange(mutate):
@@ -90,6 +104,8 @@ def test_data_meter_resets_between_slots_and_requires_complete_exchange():
         request_payload_bytes=0,
         response_payload_bytes=1,
     )
+    meter.mark_route_dispatch()
+    meter.mark_telemetry_received()
     with pytest.raises(ValueError, match="route_command_tx"):
         meter.finish_slot()
 
@@ -106,4 +122,18 @@ def test_data_meter_resets_between_slots_and_requires_complete_exchange():
         request_payload_bytes=3,
         response_payload_bytes=4,
     )
+    meter.mark_route_dispatch()
+    meter.mark_telemetry_received()
     assert meter.finish_slot()["payload_bytes"]["total"] == 9
+
+
+def test_wall_time_lifecycle_rejects_partial_or_out_of_order_markers():
+    meter = HybridControlPlaneDataMeter()
+    with pytest.raises(RuntimeError, match="not active"):
+        meter.begin_discovery()
+    meter.begin_slot()
+    with pytest.raises(RuntimeError, match="precede telemetry"):
+        meter.mark_telemetry_received()
+    meter.begin_discovery()
+    with pytest.raises(RuntimeError, match="finish before route dispatch"):
+        meter.mark_route_dispatch()

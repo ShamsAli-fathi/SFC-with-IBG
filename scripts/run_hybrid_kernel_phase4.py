@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -51,6 +52,12 @@ from IBG_Hybrid.kernel_resource_evidence import (
     detect_resource_profile,
     validate_processor_only_transition,
 )
+from IBG_Hybrid.network_impairment import (
+    HYBRID_NETEM_INIT_CONTAINER_NAME,
+    HYBRID_NETWORK_IMPAIRMENT_ANNOTATION,
+    HybridNetworkImpairment,
+    validate_hybrid_network_impairment_events,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +77,11 @@ HYBRID_CSV_FILENAMES = (
 )
 HYBRID_FOOTPRINT_CSV_OUTPUT_DIR = HYBRID_CSV_OUTPUT_DIR / "footprint"
 HYBRID_FOOTPRINT_CSV_FIELDS = (
+    ("discovery_time_ms.csv", "timing_ms", "discovery"),
+    ("admission_time_ms.csv", "timing_ms", "admission"),
+    ("feedback_time_ms.csv", "timing_ms", "feedback"),
+    ("active_control_time_ms.csv", "timing_ms", "active"),
+    ("data_plane_wait_ms.csv", "timing_ms", "data_plane_wait"),
     ("kubernetes_discovery_tx_bytes.csv", "payload_bytes", "kubernetes_discovery_tx"),
     ("kubernetes_discovery_rx_bytes.csv", "payload_bytes", "kubernetes_discovery_rx"),
     ("route_command_tx_bytes.csv", "payload_bytes", "route_command_tx"),
@@ -89,6 +101,7 @@ HYBRID_FOOTPRINT_CSV_FIELDS = (
 )
 HYBRID_RANDOM_SERIES_SEED_BITS = 63
 HYBRID_POLICY_ROOT_SEED_ENV = "HYBRID_POLICY_ROOT_SEED"
+HYBRID_PARITY_REPLAY_ENV = "HYBRID_PARITY_REPLAY"
 KIND_NODE_IMAGE = (
     "kindest/node:v1.36.1@"
     "sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5"
@@ -134,12 +147,15 @@ PHASE75_CONTROLLER_SOURCES = (
 MAX_HYBRID_KERNEL_MC_WORKERS = 2
 SERVICE_IMAGE = "ibg-hybrid-testbed:kernel-service-v1"
 CONTROLLER_IMAGE = "ibg-hybrid-testbed:kernel-controller-v1"
+NETEM_IMAGE = "ibg-hybrid-testbed:netem-v1"
+NETEM_BASE_IMAGE = "ibg-testbed:kernel-phase3"
 NORMALIZED_SERVICE_IMAGE = (
     "docker.io/library/ibg-hybrid-testbed:kernel-service-v1"
 )
 NORMALIZED_CONTROLLER_IMAGE = (
     "docker.io/library/ibg-hybrid-testbed:kernel-controller-v1"
 )
+NORMALIZED_NETEM_IMAGE = "docker.io/library/ibg-hybrid-testbed:netem-v1"
 PYTHON_BASE_IMAGE = "mcr.microsoft.com/azurelinux/base/python:3.12"
 CONTROL_PLANE_NODE_NAME = "ibg-hybrid-control-plane"
 WORKER_NODE_NAME = "ibg-hybrid-worker"
@@ -160,7 +176,10 @@ SERVICE_DOCKERFILE = (
 CONTROLLER_DOCKERFILE = (
     ROOT / "deploy" / "hybrid-kubernetes" / "Dockerfile.controller"
 )
-CONTROLLER_CPU_REQUEST_MILLI = 1000
+NETEM_DOCKERFILE = (
+    ROOT / "deploy" / "hybrid-kubernetes" / "Dockerfile.netem"
+)
+CONTROLLER_CPU_REQUEST_MILLI = 2000
 CONTROLLER_MEMORY_REQUEST_BYTES = 256 * 1024**2
 
 Command = tuple[str, ...]
@@ -471,17 +490,28 @@ def _validate_offline_wheelhouses() -> None:
 
 
 def _build_images_offline(
-    execute: Executor, *, wheelhouses_validated: bool = False
+    execute: Executor,
+    *,
+    wheelhouses_validated: bool = False,
+    network_impairment: HybridNetworkImpairment | None = None,
 ) -> None:
-    """Build both images without pulls or build-step network access."""
+    """Build required images without pulls or build-step network access."""
 
+    if network_impairment is None:
+        network_impairment = HybridNetworkImpairment.disabled()
+    if not isinstance(network_impairment, HybridNetworkImpairment):
+        raise RuntimeError("Hybrid network impairment setting is invalid")
     if not wheelhouses_validated:
         _validate_offline_wheelhouses()
     _require_local_image(execute, PYTHON_BASE_IMAGE)
-    for dockerfile, image in (
+    images = [
         (SERVICE_DOCKERFILE, SERVICE_IMAGE),
         (CONTROLLER_DOCKERFILE, CONTROLLER_IMAGE),
-    ):
+    ]
+    if network_impairment.enabled:
+        _require_local_image(execute, NETEM_BASE_IMAGE)
+        images.append((NETEM_DOCKERFILE, NETEM_IMAGE))
+    for dockerfile, image in images:
         if not dockerfile.is_file():
             raise RuntimeError(f"missing Hybrid Dockerfile: {dockerfile}")
         execute(
@@ -581,15 +611,27 @@ def _local_platform_image_id(execute: Executor, image: str) -> str:
             return _linux_amd64_config_id(archive)
 
 
-def validate_node_images(execute: Executor) -> None:
+def validate_node_images(
+    execute: Executor,
+    *,
+    network_impairment: HybridNetworkImpairment | None = None,
+) -> None:
     """Match normalized node tags to the locally selected platform images."""
 
+    if network_impairment is None:
+        network_impairment = HybridNetworkImpairment.disabled()
+    if not isinstance(network_impairment, HybridNetworkImpairment):
+        raise RuntimeError("Hybrid network impairment setting is invalid")
     expected = {
         NORMALIZED_SERVICE_IMAGE: _local_platform_image_id(execute, SERVICE_IMAGE),
         NORMALIZED_CONTROLLER_IMAGE: _local_platform_image_id(
             execute, CONTROLLER_IMAGE
         ),
     }
+    if network_impairment.enabled:
+        expected[NORMALIZED_NETEM_IMAGE] = _local_platform_image_id(
+            execute, NETEM_IMAGE
+        )
     node_names = frozenset(
         line.strip()
         for line in execute(
@@ -848,6 +890,52 @@ def _validate_deliberate_processor_rollout(
             )
 
 
+def _validate_network_impairment_rollout(
+    before: tuple[ServingPodProcessSnapshot, ...],
+    after: tuple[ServingPodProcessSnapshot, ...],
+    *,
+    requested_count: int,
+) -> None:
+    """Require a netem template transition to replace replicas, not traffic."""
+
+    before_by_name = {item.pod_name: item for item in before}
+    after_by_name = {item.pod_name: item for item in after}
+    flow_generators = {
+        name
+        for name in before_by_name
+        if name.startswith("ibg-hybrid-flow-generator-")
+    }
+    if len(flow_generators) != 1:
+        raise RuntimeError(
+            "network-impairment rollout has no unique flow generator"
+        )
+    flow_generator_name = next(iter(flow_generators))
+    if after_by_name.get(flow_generator_name) != before_by_name[flow_generator_name]:
+        raise RuntimeError(
+            "network-impairment rollout changed the flow generator"
+        )
+    expected_replicas = {
+        f"hybrid-stage-{stage}-{ordinal}"
+        for stage in range(1, 4)
+        for ordinal in range(requested_count)
+    }
+    if set(after_by_name) != expected_replicas | {flow_generator_name}:
+        raise RuntimeError(
+            "network-impairment rollout changed the requested serving Pod set"
+        )
+    for name in sorted(expected_replicas):
+        new = after_by_name[name]
+        old = before_by_name.get(name)
+        if old is not None and new.pod_uid == old.pod_uid:
+            raise RuntimeError(
+                f"network-impairment rollout did not replace {name}"
+            )
+        if any(restarts for _container, restarts in new.container_restarts):
+            raise RuntimeError(
+                f"network-impairment rollout produced restarts in {name}"
+            )
+
+
 def _runtime_profile_refresh_pod_names(
     choices: Sequence[ReplicaChoice],
 ) -> tuple[str, ...]:
@@ -1073,7 +1161,7 @@ def _validate_node_resource_capacity(
     # Accepted Phase 7 candidate requests: processor 50m with 64 binary MiB,
     # plus forwarder 25m with 128 binary MiB. A fresh cluster also adds the
     # flow generator at 50m/128 binary MiB. The finite controller adds
-    # 1000m/256 binary MiB after old Jobs are deleted. Current Running Pods are
+    # 2000m/256 binary MiB after old Jobs are deleted. Current Running Pods are
     # already included above.
     added_flow_generators = 1 if existing_replica_count == 0 else 0
     requested_cpu += (
@@ -1323,6 +1411,193 @@ def _validate_reconciled_profiles(
         raise RuntimeError("reconciled controller input does not match target")
 
 
+def _statefulset_network_impairment(
+    document: Mapping[str, object],
+) -> HybridNetworkImpairment:
+    """Read one strict, stage-consistent netem template configuration."""
+
+    items = document.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("StatefulSet impairment inventory has no item list")
+    statefulsets = {
+        "items": [
+            item
+            for item in items
+            if isinstance(item, dict) and item.get("kind") == "StatefulSet"
+        ]
+    }
+    discover_existing_replica_state(statefulsets)
+    resolved = []
+    for item in statefulsets["items"]:
+        spec = item.get("spec")
+        template = spec.get("template") if isinstance(spec, Mapping) else None
+        template_metadata = (
+            template.get("metadata") if isinstance(template, Mapping) else None
+        )
+        pod_spec = template.get("spec") if isinstance(template, Mapping) else None
+        if not isinstance(template_metadata, Mapping) or not isinstance(
+            pod_spec, Mapping
+        ):
+            raise RuntimeError(
+                "Hybrid StatefulSet has no network-impairment template boundary"
+            )
+        annotations = template_metadata.get("annotations", {})
+        if annotations is None:
+            annotations = {}
+        if not isinstance(annotations, Mapping):
+            raise RuntimeError("Hybrid StatefulSet template annotations are invalid")
+        annotation = annotations.get(HYBRID_NETWORK_IMPAIRMENT_ANNOTATION)
+        init_containers = pod_spec.get("initContainers", [])
+        if not isinstance(init_containers, list) or any(
+            not isinstance(container, Mapping) for container in init_containers
+        ):
+            raise RuntimeError("Hybrid StatefulSet init containers are invalid")
+        netem_containers = [
+            container
+            for container in init_containers
+            if container.get("name") == HYBRID_NETEM_INIT_CONTAINER_NAME
+        ]
+        if annotation is None:
+            if init_containers:
+                raise RuntimeError(
+                    "disabled Hybrid StatefulSet must not retain init containers"
+                )
+            impairment = HybridNetworkImpairment.disabled()
+        else:
+            if not isinstance(annotation, str):
+                raise RuntimeError(
+                    "Hybrid StatefulSet impairment annotation is not JSON text"
+                )
+            try:
+                impairment = HybridNetworkImpairment.from_json(annotation)
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Hybrid StatefulSet impairment annotation is invalid: {error}"
+                ) from error
+            if not impairment.enabled:
+                raise RuntimeError(
+                    "disabled Hybrid StatefulSet must not retain netem provenance"
+                )
+            if len(init_containers) != 1 or len(netem_containers) != 1:
+                raise RuntimeError(
+                    "enabled Hybrid StatefulSet must have exactly one netem init "
+                    "container"
+                )
+            actual = copy.deepcopy(dict(netem_containers[0]))
+            # Kubernetes defaults these presentation-only fields after apply.
+            actual.pop("terminationMessagePath", None)
+            actual.pop("terminationMessagePolicy", None)
+            expected = impairment.init_container(image=NETEM_IMAGE)
+            if actual != expected:
+                raise RuntimeError(
+                    "Hybrid StatefulSet netem init container drifted from its "
+                    "versioned configuration"
+                )
+        resolved.append(impairment)
+    if not resolved or any(item != resolved[0] for item in resolved[1:]):
+        raise RuntimeError(
+            "Hybrid StatefulSets have mixed network-impairment configurations"
+        )
+    return resolved[0]
+
+
+def _without_network_impairment(
+    document: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Remove only the bounded netem fields for unrelated-drift comparison."""
+
+    stripped = copy.deepcopy(document)
+    items = stripped.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("StatefulSet template inventory has no item list")
+    for item in items:
+        if not isinstance(item, dict) or item.get("kind") != "StatefulSet":
+            continue
+        spec = item.get("spec")
+        template = spec.get("template") if isinstance(spec, dict) else None
+        metadata = template.get("metadata") if isinstance(template, dict) else None
+        pod_spec = template.get("spec") if isinstance(template, dict) else None
+        if not isinstance(metadata, dict) or not isinstance(pod_spec, dict):
+            raise RuntimeError("StatefulSet has no stable Pod template")
+        annotations = metadata.get("annotations")
+        if annotations is not None:
+            if not isinstance(annotations, dict):
+                raise RuntimeError("StatefulSet template annotations are invalid")
+            annotations.pop(HYBRID_NETWORK_IMPAIRMENT_ANNOTATION, None)
+            if not annotations:
+                metadata.pop("annotations", None)
+        init_containers = pod_spec.get("initContainers")
+        if init_containers is not None:
+            if not isinstance(init_containers, list) or any(
+                not isinstance(container, dict) for container in init_containers
+            ):
+                raise RuntimeError("StatefulSet init containers are invalid")
+            retained = [
+                container
+                for container in init_containers
+                if container.get("name") != HYBRID_NETEM_INIT_CONTAINER_NAME
+            ]
+            if retained:
+                pod_spec["initContainers"] = retained
+            else:
+                pod_spec.pop("initContainers", None)
+    return stripped
+
+
+def _network_impairment_patch_document(
+    *, stage: int, network_impairment: HybridNetworkImpairment
+) -> Mapping[str, object]:
+    if not network_impairment.enabled:
+        raise RuntimeError("disabled Hybrid network impairment has no manifest patch")
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+            "name": f"hybrid-stage-{stage}",
+            "namespace": HYBRID_NAMESPACE,
+        },
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        HYBRID_NETWORK_IMPAIRMENT_ANNOTATION: (
+                            network_impairment.to_json()
+                        )
+                    }
+                },
+                "spec": {
+                    "initContainers": [
+                        network_impairment.init_container(image=NETEM_IMAGE)
+                    ]
+                },
+            }
+        },
+    }
+
+
+def _write_network_impairment_patches(
+    root: Path, network_impairment: HybridNetworkImpairment
+) -> str:
+    if not network_impairment.enabled:
+        return ""
+    patch_lines = []
+    for stage in range(1, 4):
+        name = f"netem-stage-{stage}.json"
+        (root / name).write_text(
+            json.dumps(
+                _network_impairment_patch_document(
+                    stage=stage,
+                    network_impairment=network_impairment,
+                ),
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        patch_lines.append(f"  - path: {name}")
+    return "patches:\n" + "\n".join(patch_lines) + "\n"
+
+
 def _statefulset_template_snapshot(
     document: Mapping[str, object],
 ) -> tuple[StatefulSetPodTemplateSnapshot, ...]:
@@ -1360,6 +1635,7 @@ def _apply_reconciled_boundary(
     execute: Executor,
     *,
     replica_count: int,
+    network_impairment: HybridNetworkImpairment | None = None,
     boundary: HybridProfileBoundary = PHASE4_PROFILE_BOUNDARY,
     deployment_overlay: Path | None = None,
     expected_templates: tuple[StatefulSetPodTemplateSnapshot, ...] | None = None,
@@ -1368,6 +1644,10 @@ def _apply_reconciled_boundary(
     apply_resources: bool = True,
     bootstrap_namespace: bool = False,
 ) -> None:
+    if network_impairment is None:
+        network_impairment = HybridNetworkImpairment.disabled()
+    if not isinstance(network_impairment, HybridNetworkImpairment):
+        raise RuntimeError("Hybrid network impairment setting is invalid")
     deploy_root = ROOT / "deploy"
     with tempfile.TemporaryDirectory(
         prefix=".ibg-hybrid-phase5-", dir=deploy_root
@@ -1411,6 +1691,9 @@ def _apply_reconciled_boundary(
                 "generatorOptions:\n"
                 "  disableNameSuffixHash: true\n"
             )
+        network_patches = _write_network_impairment_patches(
+            temporary_root, network_impairment
+        )
         kustomization.write_text(
             "apiVersion: kustomize.config.k8s.io/v1beta1\n"
             "kind: Kustomization\n"
@@ -1418,7 +1701,8 @@ def _apply_reconciled_boundary(
             f"  - ../{(deployment_overlay or boundary.overlay).relative_to(deploy_root)}\n"
             "replicas:\n"
             f"{replica_lines}\n"
-            f"{dynamic_config_maps}",
+            f"{dynamic_config_maps}"
+            f"{network_patches}",
             encoding="utf-8",
         )
         if bootstrap_namespace:
@@ -1437,22 +1721,35 @@ def _apply_reconciled_boundary(
                 "json",
             ),
         )
+        rendered_network_impairment = _statefulset_network_impairment(dry_run)
+        if rendered_network_impairment != network_impairment:
+            raise RuntimeError(
+                "rendered Hybrid StatefulSets do not match the requested "
+                "network impairment"
+            )
+        dry_run_without_network = _without_network_impairment(dry_run)
+        existing_without_network = (
+            None
+            if existing_statefulsets is None
+            else _without_network_impairment(existing_statefulsets)
+        )
         if (
             processor_memory_profile is not None
-            and existing_statefulsets is not None
+            and existing_without_network is not None
         ):
             validate_processor_only_transition(
-                existing_statefulsets,
-                dry_run,
+                existing_without_network,
+                dry_run_without_network,
                 processor_memory_profile,
             )
         elif (
             expected_templates is not None
-            and _statefulset_template_snapshot(dry_run) != expected_templates
+            and _statefulset_template_snapshot(dry_run_without_network)
+            != expected_templates
         ):
             raise RuntimeError(
-                "refusing ConfigMap reconciliation that changes a StatefulSet "
-                "Pod template"
+                "refusing reconciliation that changes a StatefulSet Pod template "
+                "outside the requested network impairment"
             )
         if apply_resources:
             execute(_kubectl("apply", "-k", str(Path(directory))), False)
@@ -1689,9 +1986,15 @@ def _persist_hybrid_experiment_trace(
     series_run_count: int = 1,
     series_id: str | None = None,
     control_plane_footprint_enabled: bool = False,
+    parity_replay_enabled: bool = False,
+    network_impairment: HybridNetworkImpairment | None = None,
 ) -> Path:
     """Validate and persist completed-slot evidence as a host-side JSONL run."""
 
+    if network_impairment is None:
+        network_impairment = HybridNetworkImpairment.disabled()
+    if not isinstance(network_impairment, HybridNetworkImpairment):
+        raise RuntimeError("Hybrid network impairment setting is invalid")
     documents = []
     for line in output.splitlines():
         if not line.strip():
@@ -1699,6 +2002,11 @@ def _persist_hybrid_experiment_trace(
         document = json.loads(line)
         if not isinstance(document, dict):
             raise RuntimeError("Hybrid trace evidence line is not an object")
+        if "network_impairment" in document:
+            raise RuntimeError(
+                "Hybrid controller evidence must not supply host impairment "
+                "provenance"
+            )
         documents.append(document)
     if not documents:
         raise RuntimeError("Hybrid production run emitted no slot evidence")
@@ -1708,6 +2016,8 @@ def _persist_hybrid_experiment_trace(
         raise RuntimeError("Hybrid trace has invalid series-run provenance")
     if not isinstance(control_plane_footprint_enabled, bool):
         raise RuntimeError("Hybrid control-plane footprint setting must be boolean")
+    if not isinstance(parity_replay_enabled, bool):
+        raise RuntimeError("Hybrid parity-replay setting must be boolean")
 
     expected_configuration = {
         "num_flows": requested_flows,
@@ -1733,6 +2043,18 @@ def _persist_hybrid_experiment_trace(
         ):
             raise RuntimeError("Hybrid trace slot identities are not contiguous")
         previous_slot = slot_id
+        replay_performed = document.get("pure_kernel_replay_performed")
+        if replay_performed is not parity_replay_enabled:
+            raise RuntimeError(
+                "Hybrid trace parity-replay provenance is inconsistent"
+            )
+        if parity_replay_enabled:
+            if document.get("pure_kernel_replay_parity") is not True:
+                raise RuntimeError("Hybrid trace parity replay did not pass")
+        elif "pure_kernel_replay_parity" in document:
+            raise RuntimeError(
+                "Hybrid trace contains a disabled parity-replay result"
+            )
         placements = document.get("placements")
         if not isinstance(placements, list) or len(placements) != requested_flows:
             raise RuntimeError("Hybrid trace has incomplete per-flow placements")
@@ -1880,6 +2202,7 @@ def _persist_hybrid_experiment_trace(
         "series_run_index": series_run_index,
         "series_run_count": series_run_count,
         "series_id": resolved_series_id,
+        "parity_replay_enabled": parity_replay_enabled,
     }
     completed_slots = [
         {
@@ -1887,6 +2210,7 @@ def _persist_hybrid_experiment_trace(
             "event": "iteration_completed",
             "trace_contract_version": HYBRID_TRACE_CONTRACT_VERSION,
             "iteration": iteration,
+            "parity_replay_enabled": parity_replay_enabled,
         }
         for iteration, document in enumerate(documents, start=1)
     ]
@@ -1903,8 +2227,21 @@ def _persist_hybrid_experiment_trace(
         "series_run_index": series_run_index,
         "series_run_count": series_run_count,
         "series_id": resolved_series_id,
+        "parity_replay_enabled": parity_replay_enabled,
     }
-    events = [started, *completed_slots, completed]
+    impairment_provenance = network_impairment.to_dict()
+    events = [
+        {**event, "network_impairment": impairment_provenance}
+        for event in (started, *completed_slots, completed)
+    ]
+    try:
+        validate_hybrid_network_impairment_events(
+            events, expected=network_impairment
+        )
+    except ValueError as error:
+        raise RuntimeError(
+            f"Hybrid trace has invalid network-impairment provenance: {error}"
+        ) from error
     with trace_path.open("x", encoding="utf-8") as trace:
         for event in events:
             trace.write(json.dumps(event, sort_keys=True, separators=(",", ":")))
@@ -1978,7 +2315,7 @@ def _hybrid_csv_belief_snapshot(value: object) -> dict[tuple[int, int], list[flo
 
 def _hybrid_footprint_csv_rows(
     iterations: Sequence[Mapping[str, object]],
-) -> list[dict[str, dict[str, int]]] | None:
+) -> list[dict[str, dict[str, int | float]]] | None:
     present = ["control_plane" in event for event in iterations]
     if any(present) and not all(present):
         raise ValueError(
@@ -1991,13 +2328,20 @@ def _hybrid_footprint_csv_rows(
     for event in iterations:
         snapshot = event["control_plane"]
         validate_hybrid_control_plane_data_snapshot(snapshot)
+        timing = dict(snapshot["timing_ms"])
         payload = dict(snapshot["payload_bytes"])
         messages = dict(snapshot["messages"])
         payload["belief_exchange_total"] = payload["belief_tx"] + payload["belief_rx"]
         messages["belief_exchange_total"] = (
             messages["belief_tx"] + messages["belief_rx"]
         )
-        rows.append({"payload_bytes": payload, "messages": messages})
+        rows.append(
+            {
+                "timing_ms": timing,
+                "payload_bytes": payload,
+                "messages": messages,
+            }
+        )
     return rows
 
 
@@ -2208,10 +2552,20 @@ def run_small(
     policy_root_seed: int | None = None,
     first_slot_id: int | None = None,
     control_plane_footprint_enabled: bool = False,
+    parity_replay_enabled: bool = False,
+    network_impairment: HybridNetworkImpairment | None = None,
     execute: Executor = _execute,
 ) -> str:
+    if network_impairment is None:
+        network_impairment = HybridNetworkImpairment.disabled()
+    if not isinstance(network_impairment, HybridNetworkImpairment):
+        raise RuntimeError("Hybrid network impairment setting is invalid")
     if not isinstance(control_plane_footprint_enabled, bool):
         raise RuntimeError("Hybrid control-plane footprint setting must be boolean")
+    if not isinstance(parity_replay_enabled, bool):
+        raise RuntimeError("Hybrid parity-replay setting must be boolean")
+    if parity_replay_enabled and not production_experiment:
+        raise RuntimeError("parity replay belongs to the production run command")
     if production_experiment:
         if (
             isinstance(max_iterations, bool)
@@ -2252,6 +2606,11 @@ def run_small(
         controller_policy,
         mc_workers,
     )
+    if production_experiment:
+        print(
+            "Hybrid Pure/Kernel parity replay: "
+            + ("enabled" if parity_replay_enabled else "disabled")
+        )
     boundary = _validate_static_profile_boundary(
         requested_replicas,
         requested_flows=requested_flows,
@@ -2330,6 +2689,14 @@ def run_small(
             f"version={HYBRID_PROFILE_STATE_ALLOCATION_VERSION}, "
             f"profile-seed={profile_seed}, per-stage={stage_counts}"
         )
+    print(
+        "Hybrid network impairment: "
+        f"schema={network_impairment.to_dict()['schema']}, "
+        f"enabled={str(network_impairment.enabled).lower()}, "
+        f"interface={network_impairment.to_dict()['interface']}, "
+        f"delay-ms={network_impairment.delay_ms:g}, "
+        f"jitter-ms={network_impairment.jitter_ms:g}"
+    )
     if skip_build:
         print(
             "Hybrid image mode: --skip-build; reuse validated node-local images"
@@ -2338,10 +2705,14 @@ def run_small(
         print(
             "Hybrid image mode: build offline from validated local wheelhouses"
         )
-        # Validate both image inputs before even inspecting/creating a cluster.
-        # A normal run must never build one image and discover later that the
-        # other image cannot be reproduced offline.
+        # Validate image inputs before even inspecting/creating a cluster. A
+        # normal run must never build one image and discover later that another
+        # required image cannot be reproduced offline.
         _validate_offline_wheelhouses()
+        if network_impairment.enabled:
+            # The Hybrid-owned init image is rebased offline from Exact's
+            # already-local tc-capable runtime.  Fail before cluster creation.
+            _require_local_image(execute, NETEM_BASE_IMAGE)
     plan_bounded_rollout(
         existing_count=requested_replicas,
         requested_count=requested_replicas,
@@ -2361,6 +2732,7 @@ def run_small(
     existing_statefulsets = None
     bootstrap_namespace = False
     deliberate_resource_rollout = False
+    deliberate_network_rollout = False
     rollout = None
     profile_transition = None
     if cluster_exists:
@@ -2380,7 +2752,15 @@ def run_small(
             statefulsets = _statefulset_inventory(execute)
             existing = discover_existing_replica_state(statefulsets)
             existing_count = existing.replica_count
-            existing_templates = _statefulset_template_snapshot(statefulsets)
+            deployed_network_impairment = _statefulset_network_impairment(
+                statefulsets
+            )
+            deliberate_network_rollout = (
+                deployed_network_impairment != network_impairment
+            )
+            existing_templates = _statefulset_template_snapshot(
+                _without_network_impairment(statefulsets)
+            )
             existing_statefulsets = statefulsets
             if resource_profile is not None:
                 deliberate_resource_rollout = (
@@ -2499,12 +2879,21 @@ def run_small(
 
     before_processes = None
     if skip_build:
-        validate_node_images(execute)
+        validate_node_images(
+            execute, network_impairment=network_impairment
+        )
         before_processes = _serving_process_snapshot(
             _pod_inventory(execute), replica_count=existing_count
         )
     else:
-        _build_images_offline(execute, wheelhouses_validated=True)
+        _build_images_offline(
+            execute,
+            wheelhouses_validated=True,
+            network_impairment=network_impairment,
+        )
+        loaded_images = [SERVICE_IMAGE, CONTROLLER_IMAGE]
+        if network_impairment.enabled:
+            loaded_images.append(NETEM_IMAGE)
         execute(
             (
                 "kind",
@@ -2512,8 +2901,7 @@ def run_small(
                 "docker-image",
                 "--name",
                 CLUSTER_NAME,
-                SERVICE_IMAGE,
-                CONTROLLER_IMAGE,
+                *loaded_images,
             ),
             False,
         )
@@ -2522,6 +2910,7 @@ def run_small(
         _apply_reconciled_boundary(
             execute,
             replica_count=initial_count,
+            network_impairment=network_impairment,
             boundary=boundary,
             deployment_overlay=deployment_overlay,
             expected_templates=None,
@@ -2537,6 +2926,7 @@ def run_small(
         _apply_reconciled_boundary(
             execute,
             replica_count=requested_replicas,
+            network_impairment=network_impairment,
             boundary=boundary,
             deployment_overlay=deployment_overlay,
             expected_templates=existing_templates,
@@ -2548,6 +2938,7 @@ def run_small(
         _apply_reconciled_boundary(
             execute,
             replica_count=existing_count,
+            network_impairment=network_impairment,
             boundary=boundary,
             deployment_overlay=deployment_overlay,
             expected_templates=existing_templates,
@@ -2559,7 +2950,7 @@ def run_small(
         _validate_reconciled_profiles(execute, boundary=boundary)
 
     refreshed_processes = None
-    if profile_refresh:
+    if profile_refresh and not deliberate_network_rollout:
         changed_identities = profile_transition.changed_runtime_identities
         print(
             "Hybrid runtime profile refresh: affected serving Pods="
@@ -2583,6 +2974,11 @@ def run_small(
                 refreshed_processes,
                 changed_identities=changed_identities,
             )
+    elif profile_refresh:
+        print(
+            "Hybrid runtime profile refresh: covered by the requested all-replica "
+            "network-impairment rollout"
+        )
 
     if not skip_build:
         execute(
@@ -2634,6 +3030,7 @@ def run_small(
         _apply_reconciled_boundary(
             execute,
             replica_count=requested_replicas,
+            network_impairment=network_impairment,
             boundary=boundary,
             deployment_overlay=deployment_overlay,
             expected_templates=existing_templates,
@@ -2642,6 +3039,15 @@ def run_small(
         )
         _validate_reconciled_profiles(execute, boundary=boundary)
         _wait_for_target(execute, replica_count=requested_replicas)
+
+    deployed_network_impairment = _statefulset_network_impairment(
+        _statefulset_inventory(execute)
+    )
+    if deployed_network_impairment != network_impairment:
+        raise RuntimeError(
+            "reconciled Hybrid StatefulSets do not match the requested network "
+            "impairment"
+        )
 
     preflight(execute=execute)
     if boundary.runtime_document is not None or controller_arguments is not None:
@@ -2671,6 +3077,9 @@ def run_small(
                 "MAX_ITERATIONS": str(max_iterations),
                 HYBRID_CONTROL_PLANE_DATA_ENV: (
                     "1" if control_plane_footprint_enabled else "0"
+                ),
+                HYBRID_PARITY_REPLAY_ENV: (
+                    "1" if parity_replay_enabled else "0"
                 ),
                 **(
                     {}
@@ -2727,7 +3136,13 @@ def run_small(
         after_processes = _serving_process_snapshot(
             _pod_inventory(execute), replica_count=requested_replicas
         )
-        if scale_down:
+        if deliberate_network_rollout:
+            _validate_network_impairment_rollout(
+                before_processes,
+                after_processes,
+                requested_count=requested_replicas,
+            )
+        elif scale_down:
             _validate_scale_down_process_preservation(
                 before_processes,
                 after_processes,
@@ -2765,6 +3180,8 @@ def run_experiment(
     policy_root_seed: int | None = None,
     first_slot_id: int | None = None,
     control_plane_footprint_enabled: bool = False,
+    parity_replay_enabled: bool = False,
+    network_impairment: HybridNetworkImpairment | None = None,
     before_controller_job: RunHook | None = None,
     controller_job_started: RunHook | None = None,
     after_controller_job: RunHook | None = None,
@@ -2799,6 +3216,8 @@ def run_experiment(
         policy_root_seed=policy_root_seed,
         first_slot_id=first_slot_id,
         control_plane_footprint_enabled=control_plane_footprint_enabled,
+        parity_replay_enabled=parity_replay_enabled,
+        network_impairment=network_impairment,
         execute=execute,
     )
 
@@ -2849,12 +3268,18 @@ def run_experiment_series(
     controller_policy: str | None = None,
     mc_workers: int | None = None,
     csv_enabled: bool = False,
+    parity_replay_enabled: bool = False,
+    network_impairment: HybridNetworkImpairment | None = None,
     csv_output_dir: Path = HYBRID_CSV_OUTPUT_DIR,
     execute: Executor = _execute,
     stream_controller_logs: ControllerLogStreamer | None = None,
 ) -> tuple[Path, ...]:
     """Run independent random-seed Jobs in one fixed runtime environment."""
 
+    if network_impairment is None:
+        network_impairment = HybridNetworkImpairment.disabled()
+    if not isinstance(network_impairment, HybridNetworkImpairment):
+        raise RuntimeError("Hybrid network impairment setting is invalid")
     if isinstance(runs, bool) or not isinstance(runs, int) or runs < 1:
         raise RuntimeError("--runs must be a positive integer")
     profile_seed = _resolve_random_series_profile_seed(execute)
@@ -2892,6 +3317,8 @@ def run_experiment_series(
             policy_root_seed=experiment_seed,
             first_slot_id=experiment_seed,
             control_plane_footprint_enabled=csv_enabled,
+            parity_replay_enabled=parity_replay_enabled,
+            network_impairment=network_impairment,
             stream_controller_logs=stream_controller_logs,
             execute=execute,
         )
@@ -2907,6 +3334,8 @@ def run_experiment_series(
             series_run_count=runs,
             series_id=series_id,
             control_plane_footprint_enabled=csv_enabled,
+            parity_replay_enabled=parity_replay_enabled,
+            network_impairment=network_impairment,
         )
         trace_paths.append(trace_path)
         print(f"Detailed Hybrid JSONL trace: {trace_path}")
@@ -2932,6 +3361,40 @@ def _nonnegative_integer(value: str) -> int:
     if parsed < 0:
         raise argparse.ArgumentTypeError("value must be a nonnegative integer")
     return parsed
+
+
+def _nonnegative_finite_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "value must be a finite nonnegative number"
+        ) from error
+    if not isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError(
+            "value must be a finite nonnegative number"
+        )
+    return parsed
+
+
+def network_impairment_from_args(
+    args: argparse.Namespace,
+) -> HybridNetworkImpairment:
+    enabled = getattr(args, "netem", 0)
+    delay_ms = getattr(args, "netem_delay_ms", None)
+    jitter_ms = getattr(args, "netem_jitter_ms", None)
+    if isinstance(enabled, bool) or enabled not in (0, 1):
+        raise ValueError("--netem must be 0 or 1")
+    if enabled == 0:
+        if delay_ms is not None or jitter_ms is not None:
+            raise ValueError(
+                "--netem-delay-ms and --netem-jitter-ms require --netem 1"
+            )
+        return HybridNetworkImpairment.disabled()
+    return HybridNetworkImpairment.enabled_with(
+        delay_ms=10.0 if delay_ms is None else delay_ms,
+        jitter_ms=3.0 if jitter_ms is None else jitter_ms,
+    )
 
 
 def _add_run_arguments(
@@ -3060,6 +3523,44 @@ def _add_run_arguments(
                 "(1=enabled, 0=disabled)"
             ),
         )
+        parser.add_argument(
+            "--parity-replay",
+            type=int,
+            choices=(0, 1),
+            default=0,
+            help=(
+                "recompute each completed scheduling decision serially and "
+                "require Pure/Kernel equality (1=enabled, 0=disabled)"
+            ),
+        )
+        parser.add_argument(
+            "--netem",
+            type=int,
+            choices=(0, 1),
+            default=0,
+            help=(
+                "apply opt-in tc/netem delay and jitter to replica-Pod eth0 "
+                "egress (1=enabled, 0=disabled)"
+            ),
+        )
+        parser.add_argument(
+            "--netem-delay-ms",
+            type=_nonnegative_finite_float,
+            default=None,
+            help=(
+                "base replica-Pod egress delay in milliseconds; requires "
+                "--netem 1 (default when enabled: 10)"
+            ),
+        )
+        parser.add_argument(
+            "--netem-jitter-ms",
+            type=_nonnegative_finite_float,
+            default=None,
+            help=(
+                "normal replica-Pod egress jitter in milliseconds; requires "
+                "--netem 1 (default when enabled: 3)"
+            ),
+        )
 
 
 def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
@@ -3090,6 +3591,10 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error("--runs generates seeds automatically; do not pass --profile-seed")
         if parsed.runs is not None and parsed.refresh_runtime_profiles:
             parser.error("--runs cannot be combined with --refresh-runtime-profiles")
+        try:
+            parsed.network_impairment = network_impairment_from_args(parsed)
+        except ValueError as error:
+            parser.error(str(error))
     return parsed
 
 
@@ -3111,6 +3616,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     controller_policy=args.policy,
                     mc_workers=args.mc_workers,
                     csv_enabled=bool(args.csv),
+                    parity_replay_enabled=bool(args.parity_replay),
+                    network_impairment=args.network_impairment,
                 )
             else:
                 output = run_experiment(
@@ -3126,6 +3633,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     controller_policy=args.policy,
                     mc_workers=args.mc_workers,
                     control_plane_footprint_enabled=bool(args.csv),
+                    parity_replay_enabled=bool(args.parity_replay),
+                    network_impairment=args.network_impairment,
                 )
                 trace_path = _persist_hybrid_experiment_trace(
                     output,
@@ -3135,6 +3644,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     requested_replicas=args.requested_replicas,
                     max_iterations=args.max_iterations,
                     control_plane_footprint_enabled=bool(args.csv),
+                    parity_replay_enabled=bool(args.parity_replay),
+                    network_impairment=args.network_impairment,
                 )
                 print(f"Detailed Hybrid JSONL trace: {trace_path}")
                 if args.csv == 1:

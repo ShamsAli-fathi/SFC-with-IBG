@@ -1,0 +1,10 @@
+# The frozen Exact runtime already carries Azure Linux's iproute/iproute-tc
+# packages.  Rebase it under a Hybrid-owned tag without any network access so
+# the bounded init container can invoke the same /usr/sbin/tc implementation.
+FROM ibg-testbed:kernel-phase3
+
+USER root
+
+RUN test -x /usr/sbin/tc
+
+ENTRYPOINT ["/usr/sbin/tc"]

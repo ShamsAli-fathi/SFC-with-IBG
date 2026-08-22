@@ -651,7 +651,25 @@ def test_controller_footprint_counts_actual_http_bodies_and_exact_messages():
 
     footprint = outcome.control_plane
     assert footprint["schema"] == HYBRID_CONTROL_PLANE_DATA_SCHEMA
-    assert set(footprint) == {"schema", "payload_bytes", "messages"}
+    assert set(footprint) == {
+        "schema",
+        "timing_ms",
+        "payload_bytes",
+        "messages",
+    }
+    assert set(footprint["timing_ms"]) == {
+        "discovery",
+        "admission",
+        "feedback",
+        "active",
+        "data_plane_wait",
+    }
+    assert footprint["timing_ms"]["discovery"] <= footprint["timing_ms"]["admission"]
+    assert footprint["timing_ms"]["active"] == (
+        footprint["timing_ms"]["admission"]
+        + footprint["timing_ms"]["feedback"]
+    )
+    assert all(value >= 0 for value in footprint["timing_ms"].values())
     assert footprint["payload_bytes"] == {
         "kubernetes_discovery_tx": observed["kubernetes_request"],
         "kubernetes_discovery_rx": observed["kubernetes_response"],

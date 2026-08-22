@@ -329,8 +329,8 @@ def test_phase7_manifests_preserve_job_and_runtime_boundaries():
     assert "containerPort: 8081" in candidate
     assert "containerPort: 8080" in candidate
     assert "MAX_ITERATIONS" in job and 'value: "5"' in job
-    assert 'requests: {cpu: "1", memory: 256Mi}' in job
-    assert 'limits: {cpu: "2", memory: 1Gi}' in job
+    assert 'requests: {cpu: "2", memory: 256Mi}' in job
+    assert 'limits: {cpu: "4", memory: 1Gi}' in job
     assert "--policy" not in job and "--mc-workers" not in job
 
 

@@ -29,6 +29,7 @@ HYBRID_CONTROLLER_LIFECYCLE_ENV = "HYBRID_CONTROLLER_LIFECYCLE"
 HYBRID_CONTROLLER_LIFECYCLE_EXPERIMENT = "experiment"
 HYBRID_CONTROLLER_LIFECYCLE_VALIDATION = "validation"
 HYBRID_POLICY_ROOT_SEED_ENV = "HYBRID_POLICY_ROOT_SEED"
+HYBRID_PARITY_REPLAY_ENV = "HYBRID_PARITY_REPLAY"
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,10 @@ def parse_policy_arguments(
 
 def main(arguments: Sequence[str] | None = None) -> int:
     selection = parse_policy_arguments(arguments)
+    parity_replay_setting = os.environ.get(HYBRID_PARITY_REPLAY_ENV, "0")
+    if parity_replay_setting not in {"0", "1"}:
+        raise ValueError(f"{HYBRID_PARITY_REPLAY_ENV} must be 0 or 1")
+    parity_replay_enabled = parity_replay_setting == "1"
     controller, inputs = _controller_from_environment(
         policy_mode=selection.policy_mode,
         mc_workers=selection.effective_workers,
@@ -128,6 +133,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 max_iterations=max_iterations,
                 policy_mode=selection.policy_mode,
                 mc_workers=selection.effective_workers,
+                parity_replay_enabled=parity_replay_enabled,
                 on_slot_completed=print_completed_slot,
             )
             status = "reached" if outcome.reached_equilibrium else "not reached"

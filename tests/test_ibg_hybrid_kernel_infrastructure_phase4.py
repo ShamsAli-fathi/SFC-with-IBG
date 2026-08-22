@@ -677,6 +677,8 @@ def test_phase4_runner_reuses_cluster_and_recreates_only_controller_job(
     assert not any("logs" in command for command in command_values)
     assert capsys.readouterr().out == (
         "Selected Hybrid topology: 2 flows x 3 stages x 1 replica per stage\n"
+        "Hybrid network impairment: schema=ibg-hybrid-netem-v1, "
+        "enabled=false, interface=eth0, delay-ms=0, jitter-ms=0\n"
         "Hybrid image mode: build offline from validated local wheelhouses\n"
     )
     assert output == '{"slot_id":1}\n'

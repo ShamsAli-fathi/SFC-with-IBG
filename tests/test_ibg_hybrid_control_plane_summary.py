@@ -25,6 +25,13 @@ def _snapshot(value):
     }
     return {
         "schema": HYBRID_CONTROL_PLANE_DATA_SCHEMA,
+        "timing_ms": {
+            "discovery": value / 100,
+            "admission": value / 10,
+            "feedback": value / 20,
+            "active": value / 10 + value / 20,
+            "data_plane_wait": value / 5,
+        },
         "payload_bytes": {**payload, "total": sum(payload.values())},
         "messages": {**messages, "total": sum(messages.values())},
     }
@@ -61,7 +68,7 @@ def _trace(path, *, second_footprint=True):
     )
 
 
-def test_summary_reports_every_data_category_and_exact_totals(tmp_path):
+def test_summary_reports_wall_time_every_data_category_and_exact_totals(tmp_path):
     path = tmp_path / "trace.jsonl"
     _trace(path)
 
@@ -69,6 +76,11 @@ def test_summary_reports_every_data_category_and_exact_totals(tmp_path):
 
     assert report["iterations"] == 2
     metrics = report["metrics"]
+    assert metrics["admission_time_ms"] == {
+        "median": 15.0,
+        "p95": pytest.approx(19.5),
+    }
+    assert metrics["data_plane_wait_time_ms"]["median"] == 30.0
     assert metrics["kubernetes_discovery_rx_bytes"] == {
         "median": 150.0,
         "p95": pytest.approx(195.0),
@@ -83,7 +95,7 @@ def test_summary_reports_every_data_category_and_exact_totals(tmp_path):
         "median": 4.0,
         "p95": 4.0,
     }
-    assert not any("cpu" in name or "time" in name for name in metrics)
+    assert not any("cpu" in name for name in metrics)
 
 
 def test_summary_rejects_mixed_enabled_and_disabled_trace(tmp_path):

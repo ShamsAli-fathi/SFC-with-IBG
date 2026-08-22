@@ -374,7 +374,7 @@ Additional accepted decisions:
   `Replica.local_update`/`Replica.aggregation` methods as the selected-only
   posterior/aggregation implementation. Apply the complete observation batch
   once, retain `0.8`, and keep strict equilibrium at every entry change
-  `<0.033`.
+  `<0.04`.
 - Compute expected Hybrid utility from the two selected stages at final loads
   minus configured planning link. Compute active realized utility and SLA
   only from selected physical processing. Preserve one simulated measured
@@ -2499,3 +2499,116 @@ Accepted and implemented locally: 2026-08-21.
   physical-only realized utility, raw end-to-end reference utility, pair and
   observation telemetry separation, all algorithm/runtime semantics, Phase 4
   soft CPU priority, and frozen Exact behavior.
+
+
+## Hybrid tc/netem transport-impairment decisions
+
+Accepted, implemented, and locally verified: 2026-08-22.
+
+- Keep transport impairment opt-in and off by default through `--netem 0|1`,
+  with finite nonnegative delay and jitter arguments. An enabled configuration
+  requires positive delay and jitter no greater than delay; disabled runs must
+  not carry delay/jitter values.
+- Apply delay and optional normally distributed jitter only to replica-Pod
+  `eth0` egress through a short-lived init container. Grant only `NET_ADMIN`,
+  drop all other capabilities, and do not use privileged mode, host networking,
+  host namespaces, device mounts, CPU pinning, affinity, or additional nodes.
+- Reuse Exact's validated `tc` syntax and already-local runtime image as the
+  offline base for a separate Hybrid-owned init image. Do not modify Exact or
+  introduce an unpinned online dependency.
+- Treat any enabled/disabled/value change as an intentional replica template
+  rollout. Require all three StatefulSets to agree exactly and reject malformed
+  or silently stale templates. Preserve the flow generator during this rollout.
+- Store `ibg-hybrid-netem-v1` as complete top-level provenance on every host
+  lifecycle event, including explicit disabled state. Keep trace contract v3
+  and `HybridSlotMetrics` unchanged because this additive provenance is outside
+  the semantic metrics boundary.
+- Keep physical jitter, observation-only noise, planning, learning, beliefs,
+  placement, and physical-only utility unchanged. Permit netem to affect the
+  already-authoritative measured-pair component of raw end-to-end latency and
+  consequently the end-to-end SLA count, excess, and reference utility; never
+  suppress, normalize, or double-count that observed effect.
+- Do not add packet loss, retries, imputation, missing-observation handling, or
+  partial-slot acceptance. Live experimentation remains user-owned and is not
+  part of local implementation verification.
+
+
+## Hybrid equilibrium threshold update
+
+Accepted and implemented: 2026-08-22.
+
+- Set the active Hybrid per-belief-entry equilibrium tolerance to strict
+  `<0.04`, superseding Hybrid's preceding `<0.033` setting.
+- Keep equality non-equilibrium: a maximum entry change of exactly `0.04`
+  does not satisfy the stopping rule.
+- Treat this exclusively as a stopping-time change. Do not alter the belief
+  calculation, policy, placement, learning, latency, utility/SLA, telemetry,
+  seeds, scheduling, or frozen Exact implementation.
+
+
+## Hybrid performance wall-time measurement decisions
+
+Accepted and implemented: 2026-08-22.
+
+- Extend the opt-in `--csv 1` controller footprint with monotonic discovery,
+  admission, feedback, active-control, and selected-route-wait wall times.
+- End admission immediately before the one flow-generator POST and begin
+  feedback immediately after its response returns. Keep request preparation in
+  admission and keep response conversion, learning, metrics, and equilibrium
+  handling in feedback.
+- Require active time to equal admission plus feedback exactly and keep
+  `data_plane_wait` separate. Reject missing, negative, non-finite,
+  out-of-order, malformed, or inconsistent completed timing evidence.
+- Version the footprint as `ibg-hybrid-control-plane-wall-time-v2` while
+  retaining experiment JSONL v3 because the complete slot-metrics semantic
+  boundary is unchanged. Do not reinterpret historical data-only footprints.
+- Export one existing-format CSV for each timing category under the footprint
+  directory. Preserve all payload/message CSVs and create no CPU CSV.
+- Do not add process CPU, cgroup, memory, NIC, or wire measurements. Use these
+  wall times first to decide whether a later matched CPU/pool experiment is
+  warranted; do not claim CPU saturation or speedup from them alone.
+
+
+## Hybrid four-process CPU candidate decisions
+
+Accepted and implemented locally: 2026-08-22.
+
+- Increase only deterministic lookahead's persistent controller-owned pool
+  from two to four spawn-isolated processes. Preserve explicit task inputs,
+  private branch state, canonical result ordering, serial real flows, serial
+  projected flows within a branch, failure propagation, and shutdown waiting.
+- Set every retained controller Job to a two-CPU soft request and four-CPU
+  limit. Keep controller memory unchanged and make resource preflight account
+  for 2000 millicpus before mutation.
+- Keep manual MC at its existing maximum of two workers and do not add a
+  user-facing lookahead-worker flag.
+- Treat the request and limit as shared Kubernetes scheduling/cgroup controls,
+  not exclusive CPU ownership. Do not add affinity, pinning, cpusets, topology
+  changes, or an artificial host CPU ceiling.
+- Preserve all policy parameters, `D`, `C`, pruning, candidate accounting,
+  branch recurrence, flow order, tie-breaking, seeds, jitter, beliefs,
+  learning, utility/SLA, telemetry, footprint, routing, and serving resources.
+- Compare the candidate against the accepted five-slot current-envelope trace
+  before making a speed claim. Use identical dimensions, profile seed, policy,
+  netem state, slot count, and serving environment, and report the small sample
+  limitation.
+
+
+## Hybrid production parity-replay decision
+
+Accepted and implemented locally: 2026-08-22.
+
+- Default ordinary production runs to `--parity-replay 0`, avoiding a second
+  serial scheduling calculation after every completed Kernel timeslot.
+- Retain `--parity-replay 1` as an explicit correctness diagnostic. Enabled
+  replay uses the existing serial semantic oracle and must pass; there is no
+  fallback, approximation, or tolerance change.
+- Record disabled replay as “not performed,” never as a successful or failed
+  comparison. Persist explicit lifecycle/slot provenance and reject drift.
+- Keep the historical `run-small` validation gate replay-enabled and preserve
+  dedicated Pure/Kernel parity tests.
+- Keep the feature outside slot metrics and retain trace v3. Do not rewrite or
+  reinterpret historical evidence.
+- Preserve traffic count, telemetry, learning, beliefs, placement, flow order,
+  lookahead, MC, random streams, utility/SLA, fairness, equilibrium, CSV,
+  footprint, resources, topology, and frozen Exact behavior.
