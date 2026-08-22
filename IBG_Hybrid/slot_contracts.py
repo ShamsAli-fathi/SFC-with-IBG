@@ -375,7 +375,8 @@ class HybridSlotMetrics:
     raw_end_to_end_reference_utility: float
     raw_end_to_end_reference_utility_per_flow: tuple[tuple[int, float], ...]
     sla_latency_threshold_ms: float
-    physical_only_sla_violations: int
+    end_to_end_sla_violations: int
+    end_to_end_sla_excess_ms: float
     jain_fairness: float
     elapsed_seconds: float
     maximum_belief_change: float

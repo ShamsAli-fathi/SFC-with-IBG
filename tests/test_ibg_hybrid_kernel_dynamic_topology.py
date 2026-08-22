@@ -1646,7 +1646,7 @@ def test_resource_preflight_uses_only_the_worker_allocatable_envelope():
         existing_replica_count=0,
         requested_replica_count=1,
     )
-    assert result.requested_cpu_milli == 575
+    assert result.requested_cpu_milli == 1475
     assert result.allocatable_cpu_milli == 2000
     assert result.requested_memory_bytes == 1024 * 1024**2
     assert result.allocatable_memory_bytes == 2 * 1024**3

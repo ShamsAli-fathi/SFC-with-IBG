@@ -64,7 +64,7 @@ spec:
               subPath: console_output.py
               readOnly: true
           resources:
-            requests: {cpu: 100m, memory: 256Mi}
+            requests: {cpu: "1", memory: 256Mi}
             limits: {cpu: "2", memory: 1Gi}
       volumes:
         - name: controller-inputs

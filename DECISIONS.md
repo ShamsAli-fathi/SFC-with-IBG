@@ -2409,3 +2409,93 @@ Accepted from the 2026-08-16 live gate:
   performed. Phase 4 soft CPU priority therefore remains conditional and is
   not authorized or justified by this gate alone.
 - Make no multi-host, cross-worker, NIC, line-rate, or exclusive-CPU claim.
+
+
+## Hybrid soft controller CPU-priority decisions
+
+Accepted and implemented locally: 2026-08-21.
+
+- Set the CPU request in every retained production Hybrid controller Job to
+  one CPU while keeping the controller CPU limit at two CPUs and keeping its
+  256-MiB request and 1-GiB memory limit unchanged.
+- Treat the one-CPU request only as shared Kubernetes admission/accounting and
+  CPU weighting. Do not describe it as an exclusive core, pinning, cpuset,
+  additional capacity, an added worker, or uninterrupted access to a physical
+  CPU. Unused CPU remains available to other worker workloads.
+- Make the finite-controller resource preflight add 1000 millicpus, preserve
+  the existing Pod-request arithmetic, and compare against the worker's actual
+  Kubernetes allocatable values. Do not impose an artificial host CPU cap.
+- Keep deterministic lookahead and manual MC on consistent controller resource
+  templates. Do not change either process-pool lifecycle, pool size, algorithm,
+  service resources, node selector, topology, or any experiment semantics.
+- Require a separately approved matched live A/B before judging runtime effect:
+  100m and one-CPU requests must use the same two-CPU limit, image/code,
+  serving-Pod identities, topology, seeds, first slot, flow order, and slot
+  count, without a serving rollout between runs. Report variance and sample
+  limitations and use the word speedup only if that comparison is valid.
+
+
+## Hybrid end-to-end SLA decisions
+
+Accepted plan: 2026-08-21.
+
+- Change the active Hybrid SLA violation count from selected physical-only
+  latency to the already-recorded raw end-to-end latency, which is selected
+  physical processing plus measured consecutive-pair latency.
+- Keep the threshold at 80 ms and retain strict violation semantics: count a
+  flow only when raw end-to-end latency is greater than 80 ms.
+- Name the active trace/metric field `end_to_end_sla_violations`; do not retain
+  a physically labelled field with end-to-end semantics.
+- Export the active count to `end_to_end_sla_violations.csv`. Leave historical
+  `sla_violations.csv` files untouched rather than mixing physical-only and
+  end-to-end columns in one unversioned CSV.
+- Keep the count separate from physical-only realized utility and from raw
+  end-to-end reference utility. Do not feed pair latency into placement,
+  learning, beliefs, or the selected processing signal.
+- Defer the quality metric `end_to_end_sla_excess_ms`, defined as the per-slot
+  sum of positive raw end-to-end excess above 80 ms, and its separate CSV until
+  the user gives a later explicit implementation instruction.
+
+Implementation completion: 2026-08-21.
+
+- Version active persisted Hybrid traces as
+  `ibg-hybrid-experiment-jsonl-v2` because the SLA field name and latency basis
+  changed. Reject an inconsistent count, malformed raw end-to-end coverage, a
+  threshold other than 80 ms, or the retired physical-only field before saving
+  a v2 trace.
+- Keep strict boundary behavior: exactly 80 ms is not a violation; any finite
+  positive excess is a violation.
+- Keep historical `sla_violations.csv` and pre-v2 traces intact and outside the
+  active exporter rather than relabelling or backfilling them.
+- Confirm that this completion does not authorize or implement SLA excess
+  magnitude, a quality CSV, utility changes, or any algorithm/runtime change.
+
+
+## Hybrid end-to-end SLA excess decisions
+
+Accepted and implemented locally: 2026-08-21.
+
+- Define `end_to_end_sla_excess_ms` as the per-completed-timeslot sum of each
+  flow's positive raw end-to-end latency difference above the unchanged 80-ms
+  threshold. Preserve full floating-point precision and do not round individual
+  excesses before summation.
+- Derive both the existing strict violation count and the new quality sum from
+  the same already-computed `raw_end_to_end_latency_ms_per_flow` map. Exactly
+  80 ms contributes zero to both; do not independently rebuild latency or add
+  a redundant per-flow excess field.
+- Include the quality value in `HybridSlotMetrics`, complete Pure/Kernel metric
+  parity, completed Kernel JSON evidence, and explicitly labelled console
+  output. Do not use it for planning, admission, utility, learning, or belief
+  updates.
+- Advance active persisted evidence to `ibg-hybrid-experiment-jsonl-v3` and
+  reject missing, negative, non-finite, threshold-drifted, incomplete, legacy,
+  or arithmetically inconsistent evidence before persistence.
+- Under the existing `--csv 1` switch, write
+  `end_to_end_sla_excess_ms.csv` beside the retained Hybrid CSVs with the same
+  wide atomic table contract. CSV-disabled runs create no quality file. Never
+  create or modify `results.csv` or historical `sla_violations.csv`, and do not
+  relabel or backfill v1/v2 traces.
+- Keep the 80-ms threshold and `end_to_end_sla_violations` unchanged. Preserve
+  physical-only realized utility, raw end-to-end reference utility, pair and
+  observation telemetry separation, all algorithm/runtime semantics, Phase 4
+  soft CPU priority, and frozen Exact behavior.

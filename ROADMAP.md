@@ -2884,3 +2884,95 @@ the live gate. No code correction was required, so the already-passing focused,
 325-Hybrid, and 188-Exact local regression results remain the applicable code
 gate. Phase 3 is complete. Phase 4 CPU priority remains conditional and needs
 new explicit authorization.
+
+
+### Hybrid optimization Phase 4 complete locally
+
+Completed: 2026-08-21. All seven retained finite-controller Job templates now
+request one CPU, retain their two-CPU limit, and retain their 256-MiB/1-GiB
+memory boundary. The worker resource preflight now includes 1000 millicpus for
+the future controller and still fails before mutation against actual worker
+allocatable CPU or memory. Exact-fit CPU/memory admission and independent CPU
+and memory rejection are covered explicitly.
+
+Focused Phase 4 plus Phase 3 lifecycle verification passes 15 tests. The
+complete Hybrid suite passes 331 tests in memory-bounded groups, and the
+established frozen Exact selection passes 188 tests. Changed Python compiles,
+all seven Hybrid Kustomize overlays render offline, and `git diff --check`
+passes. No live cluster, node, image, Job, Pod, workload, or traffic mutation
+occurred during local implementation.
+
+One CPU is a soft shared request, not exclusive or pinned capacity. No service
+resource, topology, node selector, process pool, algorithm, seed, jitter,
+learning, utility/SLA, telemetry, pair latency, footprint, route, or scheduling
+behavior changed, and local tests do not establish faster slots. The remaining
+gate is read-only live preflight followed by a separately approved matched
+100m-versus-1-CPU controller A/B with identical code, serving Pods, dimensions,
+seeds, first slot, flow order, and iteration count.
+
+
+### Hybrid end-to-end SLA work ordered
+
+Planned: 2026-08-21.
+
+1. Authorized now: migrate the existing Hybrid SLA violation count to strict
+   raw end-to-end latency above the unchanged 80-ms threshold. Rename the
+   active metric to `end_to_end_sla_violations`, update trace/console/CSV and
+   Pure/Kernel parity boundaries, write `end_to_end_sla_violations.csv` without
+   modifying historical `sla_violations.csv`, and preserve all non-SLA
+   semantics.
+2. Deferred until a later explicit user instruction: add the quality metric
+   `end_to_end_sla_excess_ms` as the per-timeslot sum of positive end-to-end
+   excess above 80 ms, with its own wide-layout Hybrid CSV.
+
+The second step must not be pulled into the first implementation. Neither step
+changes placement, learning, belief updates, jitter, physical-only realized
+utility, the raw end-to-end reference utility, or pair measurement itself.
+
+
+### Hybrid end-to-end SLA count complete locally
+
+Completed: 2026-08-21. Step 1 now counts strict raw end-to-end latency above
+80 ms under the explicit `end_to_end_sla_violations` field. The count flows
+through slot metrics, Pure/Kernel replay, v2 JSONL evidence, human console
+output, and the isolated `end_to_end_sla_violations.csv` wide-layout report.
+Trace persistence recomputes the count from complete raw per-flow values and
+rejects inconsistent or legacy physical-only evidence.
+
+Focused semantic/trace/CSV/Phase-3 parity verification passes 65 tests. The
+complete Hybrid suite passes 334 tests in memory-bounded groups, and the
+unchanged frozen Exact selection passes 188 tests. Changed Python compiles,
+the launcher help path succeeds, all seven offline Kustomize overlays render,
+and `git diff --check` passes. No live cluster, image, Job, Pod, workload,
+traffic, generated trace, or CSV was changed.
+
+Step 2 remains deferred. `end_to_end_sla_excess_ms` and its quality CSV have
+not been implemented and require a new explicit user instruction. Because the
+controller runner and slot contract changed, the next live use must build the
+updated controller image rather than relying on the pre-change image.
+
+
+### Hybrid end-to-end SLA excess complete locally
+
+Completed: 2026-08-21. The deferred second SLA step is now implemented.
+`end_to_end_sla_excess_ms` is the per-timeslot sum of unrounded positive raw
+end-to-end latency excess above 80 ms. It is present in slot metrics, complete
+Pure/Kernel parity, completed Kernel JSON evidence, explicit console output,
+and the opt-in wide-layout `end_to_end_sla_excess_ms.csv`. Active traces are
+versioned `ibg-hybrid-experiment-jsonl-v3` and validate count and excess against
+the same complete raw per-flow map.
+
+Focused SLA/trace/CSV/Phase-3 verification passes 81 tests. The complete
+Hybrid suite now collects and passes 350 tests in three memory-bounded groups
+(143, 111, and 96). The established frozen Exact selection passes 188 tests
+(84 and 104). Changed Python compiles, launcher help and imports succeed, all
+seven offline Hybrid Kustomize overlays render, and `git diff --check` passes.
+
+The violation count and 80-ms threshold are unchanged. Physical-only realized
+utility, raw end-to-end reference utility, placement, learning, beliefs,
+telemetry, scheduling, resources, HTTP and process lifecycles, and frozen Exact
+behavior are unchanged. Historical traces and `sla_violations.csv` were not
+rewritten. No cluster, node, image, Job, Pod, workload, traffic, generated
+trace, or generated CSV was mutated. Because controller runtime code changed,
+the next live run must normally rebuild the controller image before later use
+of `--skip-build`.

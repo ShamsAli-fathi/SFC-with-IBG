@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 
 from IBG import latency_model as exact_latency
-from IBG.outcome_latency import outcome_latency_ms_per_flow
 from IBG.report import SLA_v
 from IBG_Hybrid import (
     DEFAULT_HYBRID_POLICY_PARAMETERS,
@@ -425,23 +424,86 @@ def test_physical_and_observation_jitter_use_exact_separate_helpers():
         )
 
 
-def test_observation_jitter_is_excluded_from_physical_utility_and_sla():
+def test_observation_jitter_is_excluded_from_end_to_end_sla():
     result = run_hybrid_slot(make_input(flows=2, measured_pair=200.0))
     physical_latency = dict(
         result.metrics.physical_processing_latency_ms_per_flow
     )
     pair_latency = dict(result.metrics.measured_pair_latency_ms_per_flow)
 
-    assert result.metrics.physical_only_sla_violations == SLA_v(
-        outcome_latency_ms_per_flow(physical_latency, pair_latency),
+    raw_end_to_end = {
+        flow: physical_latency[flow] + pair_latency[flow]
+        for flow in physical_latency
+    }
+    assert result.metrics.end_to_end_sla_violations == SLA_v(
+        raw_end_to_end,
+        HYBRID_SLA_LATENCY_THRESHOLD_MS,
+    )
+    assert result.metrics.end_to_end_sla_violations == 2
+    assert result.metrics.end_to_end_sla_excess_ms == sum(
+        max(0.0, value - HYBRID_SLA_LATENCY_THRESHOLD_MS)
+        for value in raw_end_to_end.values()
+    )
+    assert result.metrics.end_to_end_sla_violations > SLA_v(
+        physical_latency,
         HYBRID_SLA_LATENCY_THRESHOLD_MS,
     )
     assert result.metrics.sla_latency_threshold_ms == 80.0
     assert exact_latency.DEFAULT_SLA_LATENCY_MS == 110.0
-    assert dict(result.metrics.raw_end_to_end_latency_ms_per_flow) == {
-        flow: physical_latency[flow] + pair_latency[flow]
-        for flow in physical_latency
-    }
+    assert dict(result.metrics.raw_end_to_end_latency_ms_per_flow) == raw_end_to_end
+
+
+def test_end_to_end_sla_is_strictly_greater_than_80_ms():
+    baseline = run_hybrid_slot(make_input(flows=1, measured_pair=0.0))
+    physical = dict(
+        baseline.metrics.physical_processing_latency_ms_per_flow
+    )[1]
+    assert physical < HYBRID_SLA_LATENCY_THRESHOLD_MS
+    pair_to_boundary = HYBRID_SLA_LATENCY_THRESHOLD_MS - physical
+
+    boundary = run_hybrid_slot(
+        make_input(flows=1, measured_pair=pair_to_boundary)
+    )
+    above = run_hybrid_slot(
+        make_input(flows=1, measured_pair=pair_to_boundary + 1e-6)
+    )
+
+    assert dict(boundary.metrics.raw_end_to_end_latency_ms_per_flow)[1] == (
+        pytest.approx(HYBRID_SLA_LATENCY_THRESHOLD_MS)
+    )
+    assert boundary.metrics.end_to_end_sla_violations == 0
+    assert boundary.metrics.end_to_end_sla_excess_ms == pytest.approx(0.0)
+    assert above.metrics.end_to_end_sla_violations == 1
+    assert above.metrics.end_to_end_sla_excess_ms == pytest.approx(1e-6)
+
+
+def test_end_to_end_sla_excess_is_zero_without_violations():
+    result = run_hybrid_slot(make_input(flows=3, measured_pair=0.0))
+
+    assert result.metrics.end_to_end_sla_violations == 0
+    assert result.metrics.end_to_end_sla_excess_ms == 0.0
+
+
+def test_end_to_end_sla_excess_sums_all_violating_flows_without_rounding():
+    baseline = run_hybrid_slot(make_input(flows=3, measured_pair=0.0))
+    raw_baseline = dict(
+        baseline.metrics.raw_end_to_end_latency_ms_per_flow
+    )
+    pair_latency = max(
+        HYBRID_SLA_LATENCY_THRESHOLD_MS - value
+        for value in raw_baseline.values()
+    ) + 7.25
+    result = run_hybrid_slot(make_input(flows=3, measured_pair=pair_latency))
+    raw = dict(result.metrics.raw_end_to_end_latency_ms_per_flow)
+    expected_excess = sum(
+        max(0.0, raw[flow_id] - HYBRID_SLA_LATENCY_THRESHOLD_MS)
+        for flow_id in sorted(raw)
+    )
+
+    assert result.metrics.end_to_end_sla_violations == sum(
+        value > HYBRID_SLA_LATENCY_THRESHOLD_MS for value in raw.values()
+    )
+    assert result.metrics.end_to_end_sla_excess_ms == expected_excess
 
 
 def test_learning_is_selected_only_uses_retention_point_eight_and_strict_equilibrium():
@@ -531,8 +593,8 @@ def test_physical_utility_fairness_and_sla_match_exact_helpers():
         fairness_input,
         sum(expected_by_flow.values()),
     )
-    assert result.metrics.physical_only_sla_violations == SLA_v(
-        dict(result.metrics.physical_processing_latency_ms_per_flow),
+    assert result.metrics.end_to_end_sla_violations == SLA_v(
+        dict(result.metrics.raw_end_to_end_latency_ms_per_flow),
         HYBRID_SLA_LATENCY_THRESHOLD_MS,
     )
     assert result.metrics.sla_latency_threshold_ms == 80.0
@@ -634,7 +696,9 @@ def test_completed_slot_output_is_human_readable_and_has_no_file_side_effects(
     assert "  Realized utility:\n    total=" in rendered
     assert "  Physical utility:\n    total=" in rendered
     assert "  Raw end-to-end utility:\n    total=" in rendered
-    assert "SLA violations=" in rendered
+    assert "End-to-end SLA violations=" in rendered
+    assert "end-to-end SLA excess=" in rendered
+    assert " ms" in rendered
     assert "fairness=" in rendered and "time=" in rendered
     assert "equilibrium=" in rendered
     for forbidden in (
@@ -700,7 +764,7 @@ def test_importing_phase5_is_silent_and_does_not_run_a_slot(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_physical_only_80ms_sla_uses_two_selected_stages():
+def test_end_to_end_80ms_sla_uses_two_selected_stages():
     configuration = HybridConfiguration(num_flows=8, num_replicas=1)
     ready = {
         ReplicaChoice(1, 1): True,
@@ -716,19 +780,17 @@ def test_physical_only_80ms_sla_uses_two_selected_stages():
             measured_pair=0.0,
         )
     )
-    physical = dict(
-        result.metrics.physical_processing_latency_ms_per_flow
-    )
+    raw_end_to_end = dict(result.metrics.raw_end_to_end_latency_ms_per_flow)
 
     assert all(
         len(placement.action.choices) == 2
         for placement in result.placements
     )
-    assert result.metrics.physical_only_sla_violations == sum(
+    assert result.metrics.end_to_end_sla_violations == sum(
         latency > HYBRID_SLA_LATENCY_THRESHOLD_MS
-        for latency in physical.values()
+        for latency in raw_end_to_end.values()
     )
-    assert result.metrics.physical_only_sla_violations > 0
+    assert result.metrics.end_to_end_sla_violations > 0
 
 
 def test_seeded_default_20x3x10_slot_keeps_production_parameters():

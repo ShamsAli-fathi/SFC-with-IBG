@@ -174,6 +174,12 @@ def test_phase4_validator_proves_retention_skips_and_replay_parity():
     assert evidence[0]["metrics"][
         "raw_end_to_end_latency_ms_per_flow"
     ] == first.metrics.raw_end_to_end_latency_ms_per_flow
+    assert evidence[0]["metrics"][
+        "end_to_end_sla_violations"
+    ] == first.metrics.end_to_end_sla_violations
+    assert evidence[0]["metrics"][
+        "end_to_end_sla_excess_ms"
+    ] == first.metrics.end_to_end_sla_excess_ms
     assert evidence[1]["beliefs_before"] == evidence[0]["beliefs_after"]
     assert lifecycle == ["run-1", "print-1-1-1", "run-2", "print-2-2-2"]
 

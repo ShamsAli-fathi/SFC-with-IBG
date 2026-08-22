@@ -30,7 +30,7 @@ def SLA_v(embed_dict, replica_list):
 def csv_gen_SLA(
     violation_count,
     hash_value,
-    filename='sla_violations.csv',
+    filename='end_to_end_sla_violations.csv',
     *,
     announce=True,
 ):
@@ -40,7 +40,7 @@ def csv_gen_SLA(
     Args:
         violation_count: The numeric value to append
         hash_value: The hash string to use as column name
-        filename: Name of the CSV file (default: 'sla_violations.csv')
+        filename: Name of the CSV file (default: 'end_to_end_sla_violations.csv')
     """
 
     if (

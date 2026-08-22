@@ -3279,3 +3279,104 @@ inside slot metrics); the Kubernetes controller Pod ran for approximately 58
 seconds and the Job completed in 61 seconds. This is lifecycle and correctness
 evidence only because no matched live serial baseline was run. It is not a
 speedup, multi-host, cross-worker, NIC, line-rate, or exclusive-CPU result.
+
+
+## Hybrid finite-controller soft CPU priority
+
+Implemented locally: 2026-08-21. Every retained finite Hybrid controller Job
+template now requests one CPU and retains its existing two-CPU limit and
+256-MiB/1-GiB memory request/limit. The request is ordinary Kubernetes shared
+scheduler accounting and Linux CPU weighting. It neither reserves an exclusive
+physical core nor enables pinning, cpusets, static CPU-manager allocation,
+affinity, another worker, or another node. CPU not used by the controller
+remains available to the replica and flow-generator processes.
+
+The worker resource preflight uses the same 1000-millicpu controller request
+when summing the current nonterminal worker Pods, any new replica Pods, a fresh
+flow generator when applicable, and the future finite controller. It continues
+to compare that exact Pod-request sum against the Kubernetes worker's reported
+allocatable CPU and memory and fails before mutation when either resource is
+insufficient. No host CPU ceiling or synthetic four-CPU cap is introduced.
+
+This phase changes only controller request accounting. The two-process
+lookahead pool, manual-MC pool, HTTP-client lifecycles, service resources,
+topology and worker selector, and every algorithm, random, latency, learning,
+utility/SLA, telemetry, footprint, route, and scheduling semantic remain
+unchanged. Local tests establish template/preflight consistency and regression
+parity; a separately approved matched 100m-versus-1-CPU live A/B is still
+required before making any runtime-improvement claim.
+
+
+## Planned Hybrid end-to-end SLA metrics
+
+Planned: 2026-08-21. SLA reporting is ordered into two explicit steps. The
+authorized first step replaces the active Hybrid violation count's physical-
+only input with each flow's already-recorded raw end-to-end latency: selected
+physical processing latency plus measured consecutive-pair latency. A flow is
+an end-to-end SLA violation only when that value is strictly greater than the
+unchanged 80-ms threshold. The active metric is named
+`end_to_end_sla_violations`; physical processing, measured pair, and raw end-
+to-end latency remain separately recorded.
+
+The active wide-layout count export is named
+`end_to_end_sla_violations.csv`. The historical generic
+`sla_violations.csv` is not reused for new columns, preventing physical-only
+and end-to-end counts from being mixed in one unversioned table.
+
+This SLA-count change does not make pair latency a planning, learning, or
+utility input. Placement, beliefs, observation-only jitter, physical jitter,
+realized utility, raw end-to-end reference utility, and all traffic/telemetry
+boundaries remain unchanged.
+
+The second step is planned but not authorized for implementation. It will add
+`end_to_end_sla_excess_ms`, calculated per completed timeslot as
+`sum(max(0, raw_end_to_end_latency_ms - 80))` across flows, and a separate CSV
+with one timeslot value per row. It must remain distinct from the violation
+count and must not be implemented until the user explicitly requests it.
+
+Implemented locally: 2026-08-21. The first step is complete. Hybrid slot
+metrics now derive `end_to_end_sla_violations` directly from the recorded raw
+end-to-end per-flow map. Kernel evidence serializes the renamed field, Pure/
+Kernel replay compares it as part of the complete metrics value, and host trace
+persistence uses `ibg-hybrid-experiment-jsonl-v2`. Persistence validates the
+80-ms threshold, complete finite nonnegative per-flow raw values, strict
+greater-than counting, and absence of the retired physical-only field.
+
+Console output labels the count as end-to-end. Active CSV export reads only the
+new field and writes `end_to_end_sla_violations.csv`; it rejects legacy
+physical-only trace fields and never creates or modifies historical
+`sla_violations.csv`. No accumulated SLA excess value or quality CSV exists.
+
+
+## Hybrid end-to-end SLA excess quality metric
+
+Implemented locally: 2026-08-21. Every completed Hybrid slot now carries
+`end_to_end_sla_excess_ms`, the per-timeslot sum of
+`max(0, raw_end_to_end_latency_ms - 80)` across all configured flows. The
+calculation consumes the existing canonical raw end-to-end per-flow map after
+physical processing and measured consecutive-pair latency have already been
+combined. It preserves full floating-point precision and does not construct a
+second latency path or retain a separate per-flow excess field.
+
+The count and quality values therefore share one evidence source: exactly
+80 ms contributes neither a violation nor excess, and values above 80 ms
+contribute one violation plus only their positive difference. The metric is a
+slot result value, so the existing complete-metrics Pure/Kernel replay
+comparison includes it automatically. Kernel evidence serialization includes
+it in every completed metrics block, and human output labels the sum explicitly
+as end-to-end milliseconds.
+
+Active host traces are now `ibg-hybrid-experiment-jsonl-v3`. Persistence
+requires complete finite nonnegative raw per-flow coverage, the unchanged
+80-ms threshold, a matching strict violation count, and a finite nonnegative
+excess value exactly recomputed from that same raw map. Active `--csv 1`
+export adds `figures/IBG_hybrid/end_to_end_sla_excess_ms.csv` with the existing
+six-character run-column, timeslot-row, blank-padding, duplicate-rejection,
+malformed-file rejection, and atomic-write behavior. CSV-disabled runs create
+no quality report. The five preceding Hybrid reports retain their layout and
+meaning, and historical traces and `sla_violations.csv` remain untouched.
+
+This reporting addition changes no threshold, violation count semantics,
+physical-only realized utility, raw end-to-end reference utility, placement,
+learning, beliefs, telemetry, latency generation/measurement, routing,
+scheduling, resources, or frozen Exact behavior.

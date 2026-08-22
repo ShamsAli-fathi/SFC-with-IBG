@@ -57,15 +57,16 @@ ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_NAME = "ibg-hybrid"
 KUBECTL_CONTEXT = "kind-ibg-hybrid"
 HYBRID_NAMESPACE = "ibg-hybrid-testbed"
-HYBRID_TRACE_CONTRACT_VERSION = "ibg-hybrid-experiment-jsonl-v1"
+HYBRID_TRACE_CONTRACT_VERSION = "ibg-hybrid-experiment-jsonl-v3"
 DEFAULT_HYBRID_TRACE_DIR = ROOT / "runs"
 HYBRID_CSV_OUTPUT_DIR = ROOT / "figures" / "IBG_hybrid"
 HYBRID_CSV_FILENAMES = (
     "time.csv",
-    "sla_violations.csv",
+    "end_to_end_sla_violations.csv",
     "aggregate_utility.csv",
     "jain_index.csv",
     "replica_results.csv",
+    "end_to_end_sla_excess_ms.csv",
 )
 HYBRID_FOOTPRINT_CSV_OUTPUT_DIR = HYBRID_CSV_OUTPUT_DIR / "footprint"
 HYBRID_FOOTPRINT_CSV_FIELDS = (
@@ -159,6 +160,8 @@ SERVICE_DOCKERFILE = (
 CONTROLLER_DOCKERFILE = (
     ROOT / "deploy" / "hybrid-kubernetes" / "Dockerfile.controller"
 )
+CONTROLLER_CPU_REQUEST_MILLI = 1000
+CONTROLLER_MEMORY_REQUEST_BYTES = 256 * 1024**2
 
 Command = tuple[str, ...]
 Executor = Callable[[Command, bool], str]
@@ -1070,14 +1073,18 @@ def _validate_node_resource_capacity(
     # Accepted Phase 7 candidate requests: processor 50m with 64 binary MiB,
     # plus forwarder 25m with 128 binary MiB. A fresh cluster also adds the
     # flow generator at 50m/128 binary MiB. The finite controller adds
-    # 100m/256 binary MiB after old Jobs are deleted. Current Running Pods are
+    # 1000m/256 binary MiB after old Jobs are deleted. Current Running Pods are
     # already included above.
     added_flow_generators = 1 if existing_replica_count == 0 else 0
-    requested_cpu += added_stage_pods * 75 + added_flow_generators * 50 + 100
+    requested_cpu += (
+        added_stage_pods * 75
+        + added_flow_generators * 50
+        + CONTROLLER_CPU_REQUEST_MILLI
+    )
     requested_memory += (
         added_stage_pods * (64 + 128) * 1024**2
         + added_flow_generators * 128 * 1024**2
-        + 256 * 1024**2
+        + CONTROLLER_MEMORY_REQUEST_BYTES
     )
     result = HybridNodeResourcePreflight(
         requested_cpu_milli=requested_cpu,
@@ -1756,10 +1763,75 @@ def _persist_hybrid_experiment_trace(
         ):
             raise RuntimeError("Hybrid trace has incomplete selected observations")
         metrics = document.get("metrics")
-        if not isinstance(metrics, dict) or not isinstance(
-            metrics.get("equilibrium"), bool
+        violations = (
+            metrics.get("end_to_end_sla_violations")
+            if isinstance(metrics, dict)
+            else None
+        )
+        excess_ms = (
+            metrics.get("end_to_end_sla_excess_ms")
+            if isinstance(metrics, dict)
+            else None
+        )
+        threshold = (
+            metrics.get("sla_latency_threshold_ms")
+            if isinstance(metrics, dict)
+            else None
+        )
+        raw_end_to_end = (
+            metrics.get("raw_end_to_end_latency_ms_per_flow")
+            if isinstance(metrics, dict)
+            else None
+        )
+        if (
+            not isinstance(metrics, dict)
+            or not isinstance(metrics.get("equilibrium"), bool)
+            or "physical_only_sla_violations" in metrics
+            or isinstance(violations, bool)
+            or not isinstance(violations, int)
+            or violations < 0
+            or isinstance(excess_ms, bool)
+            or not isinstance(excess_ms, (int, float))
+            or not isfinite(float(excess_ms))
+            or excess_ms < 0
+            or isinstance(threshold, bool)
+            or not isinstance(threshold, (int, float))
+            or float(threshold) != 80.0
+            or not isinstance(raw_end_to_end, list)
+            or len(raw_end_to_end) != requested_flows
         ):
             raise RuntimeError("Hybrid trace has invalid slot metrics")
+        raw_by_flow = {}
+        for pair in raw_end_to_end:
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or isinstance(pair[0], bool)
+                or not isinstance(pair[0], int)
+                or pair[0] < 1
+                or pair[0] in raw_by_flow
+                or isinstance(pair[1], bool)
+                or not isinstance(pair[1], (int, float))
+                or not isfinite(float(pair[1]))
+                or pair[1] < 0
+            ):
+                raise RuntimeError("Hybrid trace has invalid slot metrics")
+            raw_by_flow[pair[0]] = float(pair[1])
+        expected_flow_ids = set(range(1, requested_flows + 1))
+        if set(raw_by_flow) != expected_flow_ids:
+            raise RuntimeError("Hybrid trace has invalid slot metrics")
+        expected_violations = sum(
+            raw_by_flow[flow_id] > float(threshold)
+            for flow_id in sorted(raw_by_flow)
+        )
+        if violations != expected_violations:
+            raise RuntimeError("Hybrid trace has invalid end-to-end SLA count")
+        expected_excess_ms = sum(
+            max(0.0, raw_by_flow[flow_id] - float(threshold))
+            for flow_id in sorted(raw_by_flow)
+        )
+        if float(excess_ms) != expected_excess_ms:
+            raise RuntimeError("Hybrid trace has invalid end-to-end SLA excess")
         control_plane = document.get("control_plane")
         if control_plane_footprint_enabled:
             if control_plane is None:
@@ -1933,7 +2005,7 @@ def export_hybrid_csv(
     trace_path: Path,
     output_dir: Path = HYBRID_CSV_OUTPUT_DIR,
 ) -> tuple[Path, ...]:
-    """Export one completed Hybrid trace into the five retained CSV layouts."""
+    """Export one completed Hybrid trace into the retained CSV layouts."""
 
     from IBG_Hybrid.csv_storage import append_metric_value, read_csv_table
     from IBG_Hybrid.header import create_belief_csv
@@ -1953,13 +2025,19 @@ def export_hybrid_csv(
     completed = [event for event in events if event.get("event") == "run_completed"]
     if len(started) != 1 or not iterations or len(completed) != 1:
         raise ValueError("Hybrid CSV export requires one complete experiment trace")
+    if any(
+        event.get("trace_contract_version") != HYBRID_TRACE_CONTRACT_VERSION
+        for event in events
+    ):
+        raise ValueError("Hybrid CSV export requires an active v3 experiment trace")
     if completed[0].get("iterations") != len(iterations):
         raise ValueError("Hybrid CSV trace completion count is inconsistent")
 
     metric_rows = []
     required_metrics = (
         "elapsed_seconds",
-        "physical_only_sla_violations",
+        "end_to_end_sla_violations",
+        "end_to_end_sla_excess_ms",
         "raw_end_to_end_reference_utility",
         "jain_fairness",
     )
@@ -1969,10 +2047,11 @@ def export_hybrid_csv(
         metrics = event.get("metrics")
         if not isinstance(metrics, Mapping) or any(
             name not in metrics for name in required_metrics
-        ):
+        ) or "physical_only_sla_violations" in metrics:
             raise ValueError("Hybrid CSV trace lacks required metrics")
         elapsed = metrics["elapsed_seconds"]
-        violations = metrics["physical_only_sla_violations"]
+        violations = metrics["end_to_end_sla_violations"]
+        excess_ms = metrics["end_to_end_sla_excess_ms"]
         end_to_end_utility = metrics["raw_end_to_end_reference_utility"]
         fairness = metrics["jain_fairness"]
         if (
@@ -1983,6 +2062,10 @@ def export_hybrid_csv(
             or isinstance(violations, bool)
             or not isinstance(violations, int)
             or violations < 0
+            or isinstance(excess_ms, bool)
+            or not isinstance(excess_ms, (int, float))
+            or not isfinite(float(excess_ms))
+            or excess_ms < 0
             or isinstance(end_to_end_utility, bool)
             or not isinstance(end_to_end_utility, (int, float))
             or not isfinite(float(end_to_end_utility))
@@ -1992,7 +2075,9 @@ def export_hybrid_csv(
             or not 0 <= fairness <= 1
         ):
             raise ValueError("Hybrid CSV trace contains an invalid metric value")
-        metric_rows.append((elapsed, violations, end_to_end_utility, fairness))
+        metric_rows.append(
+            (elapsed, violations, excess_ms, end_to_end_utility, fairness)
+        )
 
     belief_snapshots = [
         _hybrid_csv_belief_snapshot(iterations[0].get("beliefs_before"))
@@ -2013,6 +2098,12 @@ def export_hybrid_csv(
             raise ValueError(f"Hybrid CSV run identifier already exists in {path}: {run_id}")
     belief_path = output_dir / HYBRID_CSV_FILENAMES[4]
     read_csv_table(belief_path)
+    excess_path = output_dir / HYBRID_CSV_FILENAMES[5]
+    excess_fieldnames, _excess_rows = read_csv_table(excess_path)
+    if run_id in excess_fieldnames:
+        raise ValueError(
+            f"Hybrid CSV run identifier already exists in {excess_path}: {run_id}"
+        )
     footprint_paths: tuple[Path, ...] = ()
     if footprint_rows is not None:
         footprint_dir = output_dir / "footprint"
@@ -2028,13 +2119,14 @@ def export_hybrid_csv(
                 )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    for elapsed, violations, end_to_end_utility, fairness in metric_rows:
+    for elapsed, violations, excess_ms, end_to_end_utility, fairness in metric_rows:
         csv_gen_time(elapsed, run_id, metric_paths[0], announce=False)
         csv_gen_SLA(violations, run_id, metric_paths[1], announce=False)
         csv_gen_util(
             end_to_end_utility, run_id, metric_paths[2], announce=False
         )
         csv_gen_jain(fairness, run_id, metric_paths[3], announce=False)
+        append_metric_value(excess_path, run_id, float(excess_ms))
     for snapshot in belief_snapshots:
         create_belief_csv(snapshot, belief_path)
     if footprint_rows is not None:
@@ -2045,7 +2137,7 @@ def export_hybrid_csv(
                 strict=True,
             ):
                 append_metric_value(path, run_id, row[section][field])
-    return (*metric_paths, belief_path, *footprint_paths)
+    return (*metric_paths, belief_path, excess_path, *footprint_paths)
 
 
 def _report_hybrid_csv(paths: Sequence[Path]) -> None:

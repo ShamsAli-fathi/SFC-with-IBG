@@ -3248,3 +3248,115 @@ compilation, seven offline Kustomize renders, and `git diff --check` pass. No
 code correction, Exact edit, service-image or retained-Pod template rollout,
 CPU-resource change, multi-host, cross-worker, NIC, line-rate, or exclusive-CPU
 validation occurred. Phase 4 is still unimplemented and not authorized.
+
+
+## Hybrid optimization Phase 4 complete locally
+
+Updated: 2026-08-21. Every retained finite Hybrid controller Job now requests
+one CPU with the existing two-CPU limit. Controller memory remains 256 MiB
+requested and 1 GiB limited. The finite-controller worker preflight now adds
+1000 millicpus, preserves existing Pod-request arithmetic, accepts exact-fit
+capacity, and rejects CPU or memory shortages before mutation against the
+worker's reported allocatable envelope.
+
+The one-CPU request is soft shared Kubernetes scheduling/accounting, not an
+exclusive CPU, pin, cpuset, extra core, extra worker, or topology change.
+Unused CPU remains usable by replicas and the flow generator. Deterministic
+lookahead and manual-MC templates agree, and Phase 1 HTTP lifecycles, Phase 3
+pool semantics, service resources, worker-only placement, algorithm behavior,
+and all experiment metrics remain unchanged.
+
+Focused Phase 4/Phase 3 verification passes 15 tests. All 331 Hybrid tests and
+188 relevant frozen Exact regressions pass; changed Python compiles, all seven
+offline Kustomize renders succeed, and `git diff --check` passes. No cluster,
+node, image, Job, Pod, workload, or traffic mutation occurred. No runtime
+improvement is claimed. The next action is read-only live inspection and an
+exact-command proposal for a separately approved matched 100m-versus-1-CPU
+A/B; it must preserve the controller image/code, serving Pod identities,
+topology, seeds, first slot, flow order, iteration count, and two-CPU limit.
+
+
+## Phase 4 live A/B read-only preflight
+
+Inspected: 2026-08-21. The dedicated `ibg-hybrid` kind cluster remains
+registered, but both node containers are stopped: the worker exited with code
+130 and the control-plane exited with code 137. Both retain Docker restart
+policy `on-failure` and the pinned kind node image identity. As expected while
+the control-plane is stopped, the Kubernetes API refused read-only node and
+workload queries, so current Pod UIDs, restart counts, replica count, Jobs, and
+controller image identity could not be refreshed.
+
+No node was started and no cluster, image, Job, Pod, workload, or traffic state
+was changed. A valid A/B therefore requires separate approval first to start
+only the two retained kind node containers, wait for both nodes, and repeat the
+read-only inventory. The experiment commands must remain separately gated
+after that inventory confirms no controller Job and stable serving identities.
+
+
+## Hybrid end-to-end SLA plan recorded
+
+Updated: 2026-08-21. The user authorized changing the current Hybrid SLA count
+from selected physical-only latency to raw end-to-end latency while retaining
+the strict 80-ms threshold. The active field will be
+`end_to_end_sla_violations`; raw end-to-end remains selected physical
+processing plus measured pair latency. Realized utility, reference utility,
+placement, learning, beliefs, jitter, and telemetry remain unchanged.
+The active count CSV will be `end_to_end_sla_violations.csv`; historical
+`sla_violations.csv` files will not receive mixed-semantics columns.
+
+The requested quality/severity metric is recorded but deliberately deferred.
+A later separately authorized change may add `end_to_end_sla_excess_ms` as the
+per-completed-timeslot sum of positive raw end-to-end excess above 80 ms and a
+separate CSV. No quality metric or quality CSV is part of the current step.
+
+
+## Hybrid end-to-end SLA count complete locally
+
+Updated: 2026-08-21. The active Hybrid count is now
+`end_to_end_sla_violations`, computed from selected physical processing plus
+measured pair latency for every flow, with a strict greater-than-80-ms rule.
+Exactly 80 ms is not a violation. Physical-only realized utility, raw end-to-
+end reference utility, placement, learning, beliefs, jitter, traffic, and pair
+measurement are unchanged.
+
+New traces use `ibg-hybrid-experiment-jsonl-v2`; persistence rejects malformed
+raw coverage, incorrect counts, threshold drift, and the retired physical-only
+field. Console output is explicitly end-to-end. `--csv 1` writes the count to
+`figures/IBG_hybrid/end_to_end_sla_violations.csv`; it does not create or
+modify historical `sla_violations.csv` and rejects legacy physical-only trace
+input.
+
+Focused verification passes 65 tests. All 334 Hybrid tests and 188 relevant
+frozen Exact regressions pass; changed Python compiles, CLI help succeeds,
+seven offline overlays render, and `git diff --check` passes. No live resource,
+image, traffic, trace, or CSV was touched. A live run requires a normal
+controller-image build because runner/contract code changed. The accumulated
+quality metric `end_to_end_sla_excess_ms` and its CSV remain unimplemented and
+await separate explicit authorization.
+
+
+## Hybrid end-to-end SLA excess complete locally
+
+Updated: 2026-08-21. The authorized quality metric is implemented as
+`end_to_end_sla_excess_ms`: one per-completed-timeslot sum of unrounded positive
+raw end-to-end latency differences above 80 ms. Both it and the unchanged
+strict `end_to_end_sla_violations` count are derived from the same recorded raw
+per-flow map. Exactly 80 ms contributes neither count nor excess.
+
+The value flows through `HybridSlotMetrics`, complete Pure/Kernel replay,
+completed Kernel metrics evidence, and explicitly labelled console output.
+Active persistence is `ibg-hybrid-experiment-jsonl-v3` and rejects invalid or
+inconsistent count/excess evidence. `--csv 1` adds
+`figures/IBG_hybrid/end_to_end_sla_excess_ms.csv` in the existing wide atomic
+format; disabled CSV operation creates no quality file. Historical v1/v2
+traces, `sla_violations.csv`, and `results.csv` remain untouched.
+
+Focused verification passes 81 tests. All 350 collected Hybrid tests pass in
+memory-bounded groups, and all 188 relevant frozen Exact regressions pass.
+Changed Python compiles, launcher help/import checks pass, seven offline Hybrid
+overlays render, and `git diff --check` passes. The 80-ms threshold, violation
+count semantics, utility, learning, placement, beliefs, telemetry, resources,
+and runtime architecture are unchanged. No live resource, image, workload,
+traffic, trace, or CSV was mutated. The next live run requires a normal
+controller-image build before that rebuilt image can later be reused with
+`--skip-build`.

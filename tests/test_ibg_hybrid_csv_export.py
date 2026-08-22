@@ -24,7 +24,7 @@ def _rows(path):
 
 def test_metric_helpers_preserve_wide_run_columns_and_unequal_lengths(tmp_path):
     functions = (
-        (csv_gen_SLA, "sla_violations.csv", (1, 2, 3)),
+        (csv_gen_SLA, "end_to_end_sla_violations.csv", (1, 2, 3)),
         (csv_gen_util, "aggregate_utility.csv", (12.5, 13.5, 14.5)),
         (csv_gen_jain, "jain_index.csv", (0.8, 0.9, 1.0)),
         (csv_gen_time, "time.csv", (0.1, 0.2, 0.3)),
@@ -89,6 +89,7 @@ def _trace_events():
     return [
         {
             "event": "run_started",
+            "trace_contract_version": launcher.HYBRID_TRACE_CONTRACT_VERSION,
             "configuration": {
                 "num_flows": 2,
                 "num_stages": 3,
@@ -101,12 +102,14 @@ def _trace_events():
         },
         {
             "event": "iteration_completed",
+            "trace_contract_version": launcher.HYBRID_TRACE_CONTRACT_VERSION,
             "iteration": 1,
             "beliefs_before": beliefs0,
             "beliefs_after": beliefs1,
             "metrics": {
                 "elapsed_seconds": 0.2,
-                "physical_only_sla_violations": 1,
+                "end_to_end_sla_violations": 1,
+                "end_to_end_sla_excess_ms": 12.25,
                 "aggregate_expected_utility": 999.0,
                 "physical_realized_utility": 888.0,
                 "raw_end_to_end_reference_utility": 77.5,
@@ -115,19 +118,25 @@ def _trace_events():
         },
         {
             "event": "iteration_completed",
+            "trace_contract_version": launcher.HYBRID_TRACE_CONTRACT_VERSION,
             "iteration": 2,
             "beliefs_before": beliefs1,
             "beliefs_after": beliefs2,
             "metrics": {
                 "elapsed_seconds": 0.3,
-                "physical_only_sla_violations": 0,
+                "end_to_end_sla_violations": 0,
+                "end_to_end_sla_excess_ms": 0.0,
                 "aggregate_expected_utility": 998.0,
                 "physical_realized_utility": 887.0,
                 "raw_end_to_end_reference_utility": 78.5,
                 "jain_fairness": 0.95,
             },
         },
-        {"event": "run_completed", "iterations": 2},
+        {
+            "event": "run_completed",
+            "trace_contract_version": launcher.HYBRID_TRACE_CONTRACT_VERSION,
+            "iterations": 2,
+        },
     ]
 
 
@@ -172,10 +181,18 @@ def test_export_hybrid_csv_writes_only_requested_legacy_reports(tmp_path):
     utility_rows = _rows(output_dir / "aggregate_utility.csv")
     run_id = next(iter(utility_rows[0]))
     assert [row[run_id] for row in utility_rows] == ["77.5", "78.5"]
-    assert [row[run_id] for row in _rows(output_dir / "sla_violations.csv")] == [
+    assert [
+        row[run_id]
+        for row in _rows(output_dir / "end_to_end_sla_violations.csv")
+    ] == [
         "1",
         "0",
     ]
+    assert not (output_dir / "sla_violations.csv").exists()
+    assert [
+        row[run_id]
+        for row in _rows(output_dir / "end_to_end_sla_excess_ms.csv")
+    ] == ["12.25", "0.0"]
     belief_rows = _rows(output_dir / "replica_results.csv")
     assert len(belief_rows) == 3
     assert list(belief_rows[0]) == ["(1, 1)", "(1, 2)"]
@@ -184,6 +201,81 @@ def test_export_hybrid_csv_writes_only_requested_legacy_reports(tmp_path):
 
     with pytest.raises(ValueError, match="already exists"):
         launcher.export_hybrid_csv(trace_path, output_dir)
+
+
+def test_export_rejects_legacy_physical_only_sla_field(tmp_path):
+    events = _trace_events()
+    for event in events[1:3]:
+        metrics = event["metrics"]
+        metrics["physical_only_sla_violations"] = metrics.pop(
+            "end_to_end_sla_violations"
+        )
+    trace_path = tmp_path / "legacy-trace.jsonl"
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "figures" / "IBG_hybrid"
+
+    with pytest.raises(ValueError, match="lacks required metrics"):
+        launcher.export_hybrid_csv(trace_path, output_dir)
+    assert not output_dir.exists()
+
+
+def test_export_rejects_invalid_sla_excess_before_writing(tmp_path):
+    events = _trace_events()
+    events[1]["metrics"]["end_to_end_sla_excess_ms"] = -0.1
+    trace_path = tmp_path / "invalid-excess.jsonl"
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "figures" / "IBG_hybrid"
+
+    with pytest.raises(ValueError, match="invalid metric value"):
+        launcher.export_hybrid_csv(trace_path, output_dir)
+    assert not output_dir.exists()
+
+
+def test_export_rejects_historical_v2_trace_without_relabelling(tmp_path):
+    events = _trace_events()
+    for event in events:
+        event["trace_contract_version"] = "ibg-hybrid-experiment-jsonl-v2"
+    trace_path = tmp_path / "v2-trace.jsonl"
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "figures" / "IBG_hybrid"
+
+    with pytest.raises(ValueError, match="active v3"):
+        launcher.export_hybrid_csv(trace_path, output_dir)
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "contents",
+    ("abc,abc\n1,2\n", "abc\n1,2\n"),
+)
+def test_export_rejects_malformed_sla_excess_csv_before_other_writes(
+    tmp_path,
+    contents,
+):
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in _trace_events()),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "figures" / "IBG_hybrid"
+    output_dir.mkdir(parents=True)
+    (output_dir / "end_to_end_sla_excess_ms.csv").write_text(
+        contents,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HybridCsvError):
+        launcher.export_hybrid_csv(trace_path, output_dir)
+    assert not (output_dir / "time.csv").exists()
 
 
 def test_production_cli_csv_is_explicit_and_defaults_off():
@@ -220,7 +312,7 @@ def test_footprint_export_creates_one_data_only_csv_per_category(tmp_path):
     footprint_dir = output_dir / "footprint"
     expected_names = [item[0] for item in launcher.HYBRID_FOOTPRINT_CSV_FIELDS]
     assert footprint_dir.is_dir()
-    assert [path.name for path in paths[5:]] == expected_names
+    assert [path.name for path in paths[6:]] == expected_names
     assert sorted(path.name for path in footprint_dir.iterdir()) == sorted(expected_names)
     assert not any("cpu" in name or "time" in name for name in expected_names)
     total_rows = _rows(footprint_dir / "control_plane_payload_total_bytes.csv")
@@ -230,7 +322,75 @@ def test_footprint_export_creates_one_data_only_csv_per_category(tmp_path):
     assert [row[run_id] for row in belief_rows] == ["0", "0"]
     message_rows = _rows(footprint_dir / "control_plane_messages_total.csv")
     assert [row[run_id] for row in message_rows] == ["4", "4"]
-    assert len(paths) == 5 + len(expected_names)
+    assert len(paths) == 6 + len(expected_names)
+
+
+def test_export_leaves_historical_sla_violations_csv_untouched(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in _trace_events()),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "figures" / "IBG_hybrid"
+    output_dir.mkdir(parents=True)
+    historical_path = output_dir / "sla_violations.csv"
+    historical_contents = "legacy\n4\n"
+    historical_path.write_text(historical_contents, encoding="utf-8")
+
+    launcher.export_hybrid_csv(trace_path, output_dir)
+
+    assert historical_path.read_text(encoding="utf-8") == historical_contents
+
+
+def test_sla_excess_csv_preserves_wide_layout_and_blank_padding(tmp_path):
+    first_events = _trace_events()
+    second_events = _trace_events()
+    second_events[0]["experiment_seed"] = 54321
+    second_events[0]["series_run_index"] = 2
+    second_events.pop(2)
+    second_events[-1]["iterations"] = 1
+    first_trace = tmp_path / "first.jsonl"
+    second_trace = tmp_path / "second.jsonl"
+    first_trace.write_text(
+        "".join(json.dumps(event) + "\n" for event in first_events),
+        encoding="utf-8",
+    )
+    second_trace.write_text(
+        "".join(json.dumps(event) + "\n" for event in second_events),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "figures" / "IBG_hybrid"
+
+    launcher.export_hybrid_csv(first_trace, output_dir)
+    launcher.export_hybrid_csv(second_trace, output_dir)
+
+    rows = _rows(output_dir / "end_to_end_sla_excess_ms.csv")
+    assert len(rows) == 2
+    first_run, second_run = rows[0]
+    assert rows == [
+        {first_run: "12.25", second_run: "12.25"},
+        {first_run: "0.0", second_run: ""},
+    ]
+
+
+def test_sla_excess_csv_rejects_duplicate_run_hash_before_writing(tmp_path):
+    events = _trace_events()
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "figures" / "IBG_hybrid"
+    output_dir.mkdir(parents=True)
+    run_id = launcher._hybrid_csv_run_hash(events[0])
+    (output_dir / "end_to_end_sla_excess_ms.csv").write_text(
+        f"{run_id}\n12.25\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="already exists"):
+        launcher.export_hybrid_csv(trace_path, output_dir)
+    assert not (output_dir / "time.csv").exists()
 
 
 def test_footprint_export_rejects_mixed_slots_before_writing(tmp_path):

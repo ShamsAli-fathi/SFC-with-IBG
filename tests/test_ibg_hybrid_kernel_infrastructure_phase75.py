@@ -340,7 +340,7 @@ def test_phase75_job_and_overlay_preserve_service_resources_and_image():
     assert "IBG_Hybrid.kernel_controller_cli" in job
     assert "--policy" not in job and "--mc-workers" not in job
     assert "ibg-hybrid-testbed:kernel-controller-v1" in job
-    assert "requests: {cpu: 100m, memory: 256Mi}" in job
+    assert 'requests: {cpu: "1", memory: 256Mi}' in job
     assert 'limits: {cpu: "2", memory: 1Gi}' in job
     assert "runtime-profiles" not in job
     assert "hidden_state" not in job and "belief" not in job

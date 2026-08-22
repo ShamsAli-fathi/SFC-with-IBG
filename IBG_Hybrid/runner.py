@@ -14,10 +14,6 @@ from typing import Mapping
 
 from IBG import latency_model as exact_latency
 from IBG import learning as exact_learning
-from IBG.outcome_latency import (
-    DEFAULT_OUTCOME_LATENCY_MODE,
-    outcome_latency_ms_per_flow,
-)
 from IBG.report import SLA_v
 
 from .contracts import GlobalLoadState, HybridConfiguration, ReplicaChoice
@@ -342,14 +338,17 @@ def _compute_metrics(
         - HYBRID_LINK_WEIGHT_UTILITY_PER_MS * pair_latency[flow_id]
         for flow_id in physical_utility
     }
-    active_outcome_latency = outcome_latency_ms_per_flow(
-        physical_latency,
-        pair_latency,
-        DEFAULT_OUTCOME_LATENCY_MODE,
-    )
     sla_violations = SLA_v(
-        active_outcome_latency,
+        raw_end_to_end_latency,
         HYBRID_SLA_LATENCY_THRESHOLD_MS,
+    )
+    sla_excess_ms = sum(
+        max(
+            0.0,
+            raw_end_to_end_latency[flow_id]
+            - HYBRID_SLA_LATENCY_THRESHOLD_MS,
+        )
+        for flow_id in sorted(raw_end_to_end_latency)
     )
 
     fairness_input = {
@@ -392,7 +391,8 @@ def _compute_metrics(
             raw_reference_utility
         ),
         sla_latency_threshold_ms=HYBRID_SLA_LATENCY_THRESHOLD_MS,
-        physical_only_sla_violations=sla_violations,
+        end_to_end_sla_violations=sla_violations,
+        end_to_end_sla_excess_ms=sla_excess_ms,
         jain_fairness=fairness,
         elapsed_seconds=elapsed_seconds,
         maximum_belief_change=maximum_change,

@@ -113,7 +113,8 @@ def format_hybrid_slot_metrics(
         f"    per flow: {_per_flow_text(raw_utility)}",
         "  Metrics:",
         "    "
-        f"SLA violations={metrics.physical_only_sla_violations}, "
+        f"End-to-end SLA violations={metrics.end_to_end_sla_violations}, "
+        f"end-to-end SLA excess={metrics.end_to_end_sla_excess_ms:.6f} ms, "
         f"fairness={metrics.jain_fairness:.6f}, "
         f"time={metrics.elapsed_seconds:.3f}s, "
         f"equilibrium={'yes' if metrics.equilibrium else 'no'}",

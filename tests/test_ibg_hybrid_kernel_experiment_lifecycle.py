@@ -384,7 +384,10 @@ def _trace_slot(slot_id, *, equilibrium=False, root_seed=2050, footprint=False):
         "beliefs_after": {"1:1": [0.25, 0.25, 0.25, 0.25]},
         "metrics": {
             "elapsed_seconds": 0.25,
-            "physical_only_sla_violations": 1,
+            "end_to_end_sla_violations": 1,
+            "end_to_end_sla_excess_ms": 80.1 - 80.0,
+            "sla_latency_threshold_ms": 80.0,
+            "raw_end_to_end_latency_ms_per_flow": [[1, 80.0], [2, 80.1]],
             "raw_end_to_end_reference_utility": 17.5,
             "jain_fairness": 0.9,
             "equilibrium": equilibrium,
@@ -422,12 +425,146 @@ def test_production_trace_persists_lifecycle_and_each_flow_pair(tmp_path):
     ]
     assert events[1]["iteration"] == 1
     assert events[1]["slot_id"] == 4
+    assert events[0]["trace_contract_version"] == (
+        "ibg-hybrid-experiment-jsonl-v3"
+    )
+    assert events[1]["metrics"]["end_to_end_sla_violations"] == 1
+    assert events[1]["metrics"]["end_to_end_sla_excess_ms"] == pytest.approx(
+        0.1
+    )
+    assert "physical_only_sla_violations" not in events[1]["metrics"]
     assert {
         placement["flow_id"]: placement["measured_pair_ms"]
         for placement in events[1]["placements"]
     } == {1: 4.25, 2: 7.5}
     assert events[-1]["reached_equilibrium"] is True
     assert events[-1]["iterations"] == 2
+
+
+def test_production_trace_rejects_incorrect_end_to_end_sla_count(tmp_path):
+    slot = _trace_slot(1)
+    slot["metrics"]["end_to_end_sla_violations"] = 0
+
+    with pytest.raises(RuntimeError, match="end-to-end SLA count"):
+        host_runner._persist_hybrid_experiment_trace(
+            json.dumps(slot),
+            trace_dir=tmp_path,
+            requested_flows=2,
+            requested_stages=3,
+            requested_replicas=1,
+            max_iterations=1,
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "invalid_excess",
+    (-1.0, float("nan"), float("inf")),
+)
+def test_production_trace_rejects_invalid_end_to_end_sla_excess(
+    tmp_path,
+    invalid_excess,
+):
+    slot = _trace_slot(1)
+    slot["metrics"]["end_to_end_sla_excess_ms"] = invalid_excess
+
+    with pytest.raises(RuntimeError, match="invalid slot metrics"):
+        host_runner._persist_hybrid_experiment_trace(
+            json.dumps(slot),
+            trace_dir=tmp_path,
+            requested_flows=2,
+            requested_stages=3,
+            requested_replicas=1,
+            max_iterations=1,
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_production_trace_rejects_incorrect_end_to_end_sla_excess(tmp_path):
+    slot = _trace_slot(1)
+    slot["metrics"]["end_to_end_sla_excess_ms"] = 0.2
+
+    with pytest.raises(RuntimeError, match="end-to-end SLA excess"):
+        host_runner._persist_hybrid_experiment_trace(
+            json.dumps(slot),
+            trace_dir=tmp_path,
+            requested_flows=2,
+            requested_stages=3,
+            requested_replicas=1,
+            max_iterations=1,
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_production_trace_rejects_threshold_drift_and_incomplete_raw_coverage(
+    tmp_path,
+):
+    drifted = _trace_slot(1)
+    drifted["metrics"]["sla_latency_threshold_ms"] = 81.0
+    incomplete = _trace_slot(1)
+    incomplete["metrics"]["raw_end_to_end_latency_ms_per_flow"].pop()
+
+    for slot in (drifted, incomplete):
+        with pytest.raises(RuntimeError, match="invalid slot metrics"):
+            host_runner._persist_hybrid_experiment_trace(
+                json.dumps(slot),
+                trace_dir=tmp_path,
+                requested_flows=2,
+                requested_stages=3,
+                requested_replicas=1,
+                max_iterations=1,
+            )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_production_trace_rejects_missing_excess_and_legacy_sla_field(tmp_path):
+    missing = _trace_slot(1)
+    del missing["metrics"]["end_to_end_sla_excess_ms"]
+    legacy = _trace_slot(1)
+    legacy["metrics"]["physical_only_sla_violations"] = 0
+
+    for slot in (missing, legacy):
+        with pytest.raises(RuntimeError, match="invalid slot metrics"):
+            host_runner._persist_hybrid_experiment_trace(
+                json.dumps(slot),
+                trace_dir=tmp_path,
+                requested_flows=2,
+                requested_stages=3,
+                requested_replicas=1,
+                max_iterations=1,
+            )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_production_main_without_csv_does_not_export_quality_csv(
+    monkeypatch,
+    tmp_path,
+):
+    output = json.dumps(_trace_slot(1, equilibrium=True)) + "\n"
+    monkeypatch.setattr(host_runner, "run_experiment", lambda **kwargs: output)
+
+    def unexpected_export(*args, **kwargs):
+        raise AssertionError("CSV export must remain disabled")
+
+    monkeypatch.setattr(host_runner, "export_hybrid_csv", unexpected_export)
+
+    assert host_runner.main(
+        [
+            "run",
+            "--flow", "2",
+            "--stage", "3",
+            "--replica", "1",
+            "--profile-seed", "42",
+            "--max-iterations", "1",
+            "--trace-dir", str(tmp_path),
+        ]
+    ) == 0
+    assert not (
+        tmp_path
+        / "figures"
+        / "IBG_hybrid"
+        / "end_to_end_sla_excess_ms.csv"
+    ).exists()
 
 
 def test_production_trace_rejects_missing_per_flow_pair(tmp_path):

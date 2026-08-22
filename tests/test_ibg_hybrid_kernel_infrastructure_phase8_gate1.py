@@ -491,7 +491,7 @@ def test_phase8_gate1_overlay_preserves_candidate_resources_and_job_boundary():
     assert "ibg-hybrid-controller-phase8-gate1" in job
     assert "MAX_ITERATIONS" in job and 'value: "2"' in job
     assert "--policy" not in job and "--mc-workers" not in job
-    assert "requests: {cpu: 100m, memory: 256Mi}" in job
+    assert 'requests: {cpu: "1", memory: 256Mi}' in job
     assert 'limits: {cpu: "2", memory: 1Gi}' in job
     assert "runtime-profiles" not in job
     assert "hidden_state" not in job and "belief" not in job
