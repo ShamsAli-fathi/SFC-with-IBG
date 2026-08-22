@@ -3081,3 +3081,19 @@ No Docker, kind, Kubernetes, image, Job, Pod, traffic, trace, or CSV mutation
 occurred. The runtime change requires a normal controller-image rebuild before
 the option is available live. Local verification establishes control and
 semantic preservation; it does not establish a new live wall-time result.
+
+
+### Hybrid netem missing-image correction complete
+
+Completed: 2026-08-22. A user `--skip-build --netem 1` preflight exposed that
+the new netem image was absent and its Dockerfile depended on an unavailable
+historical Exact base tag. The image is now self-contained from already-local,
+digest-pinned kind-node artifacts and no longer requires that Exact tag or an
+online package installation.
+
+Focused netem/offline/lifecycle verification passes 67 tests; changed Python
+compiles, all seven Hybrid overlays render, and `git diff --check` passes. The
+3.28-MB image built with `--network=none`, passed an ephemeral 7-ms/3-ms normal
+netem command, and was loaded into both retained `ibg-hybrid` nodes. No
+manifest, StatefulSet, Pod, controller Job, or experiment traffic was started
+by the correction.

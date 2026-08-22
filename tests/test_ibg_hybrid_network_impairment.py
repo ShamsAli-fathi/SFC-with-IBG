@@ -397,7 +397,10 @@ def test_enabled_image_build_is_offline_conditional_and_hybrid_owned(monkeypatch
     assert all("--network=none" in command for command in commands)
     dockerfile = runner.NETEM_DOCKERFILE.read_text(encoding="utf-8")
     assert f"FROM {runner.NETEM_BASE_IMAGE}" in dockerfile
+    assert "FROM scratch" in dockerfile
     assert "RUN test -x /usr/sbin/tc" in dockerfile
+    assert "normal.dist" in dockerfile
+    assert "ibg-testbed:kernel-phase3" not in dockerfile
 
 
 def test_trace_records_complete_identical_provenance_without_bumping_v3(tmp_path):

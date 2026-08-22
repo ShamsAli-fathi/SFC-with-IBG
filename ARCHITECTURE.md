@@ -3515,3 +3515,20 @@ evidence remains outside `HybridSlotMetrics`, so the active SLA metrics trace
 contract stays `ibg-hybrid-experiment-jsonl-v3` and historical traces are not
 rewritten. Dedicated tests retain continuous serial/parallel semantic parity
 coverage even when ordinary experiments use the default-off setting.
+
+
+## Hybrid netem image self-containment correction
+
+Corrected and image-validated: 2026-08-22. The Hybrid netem init image no
+longer depends on the optional historical `ibg-testbed:kernel-phase3` host
+tag. Its multi-stage Dockerfile uses the same digest-pinned kind node image as
+the Hybrid cluster, verifies the local `tc` utility and `normal.dist`, and
+copies only `tc`, its runtime libraries, and the normal-distribution table into
+a Hybrid-owned scratch image. The result remains offline-buildable and keeps
+the init-container command, `NET_ADMIN` boundary, replica-`eth0` scope, and
+`ibg-hybrid-netem-v1` provenance unchanged. IBG-Exact is not modified.
+
+The resulting `ibg-hybrid-testbed:netem-v1` image is 3.28 MB, reports
+iproute2 6.15.0, and successfully executed the configured 7-ms delay/3-ms
+normal-jitter qdisc command in an isolated disposable container. It was loaded
+into both existing kind nodes without applying manifests or starting traffic.

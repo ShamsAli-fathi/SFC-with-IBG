@@ -2612,3 +2612,19 @@ Accepted and implemented locally: 2026-08-22.
 - Preserve traffic count, telemetry, learning, beliefs, placement, flow order,
   lookahead, MC, random streams, utility/SLA, fairness, equilibrium, CSV,
   footprint, resources, topology, and frozen Exact behavior.
+
+
+## Hybrid netem image source correction
+
+Accepted and validated: 2026-08-22.
+
+- Remove the runtime dependency on the historical Exact image tag because a
+  Hybrid-only host may legitimately lack that unrelated image.
+- Use the existing digest-pinned kind node image only as a multi-stage source
+  for `tc`, its shared libraries, and `normal.dist`; publish a minimal
+  Hybrid-owned scratch image rather than the complete node image.
+- Keep all image construction offline and retain `imagePullPolicy: Never`.
+- Preserve the existing non-privileged, `NET_ADMIN`-only init-container
+  security boundary and replica-Pod `eth0` egress scope.
+- Do not change impairment values, rollout semantics, metrics, controller
+  behavior, serving containers, topology, or frozen Exact code.

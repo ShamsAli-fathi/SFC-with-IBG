@@ -148,7 +148,7 @@ MAX_HYBRID_KERNEL_MC_WORKERS = 2
 SERVICE_IMAGE = "ibg-hybrid-testbed:kernel-service-v1"
 CONTROLLER_IMAGE = "ibg-hybrid-testbed:kernel-controller-v1"
 NETEM_IMAGE = "ibg-hybrid-testbed:netem-v1"
-NETEM_BASE_IMAGE = "ibg-testbed:kernel-phase3"
+NETEM_BASE_IMAGE = KIND_NODE_IMAGE
 NORMALIZED_SERVICE_IMAGE = (
     "docker.io/library/ibg-hybrid-testbed:kernel-service-v1"
 )

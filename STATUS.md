@@ -3465,3 +3465,20 @@ Exact regressions pass. Compilation, launcher help/import checks, seven
 offline renders, and `git diff --check` pass. No live or generated state was
 mutated. A normal controller-image rebuild is required before using the option
 in the cluster; no live runtime reduction is claimed by this local result.
+
+
+## Hybrid netem image is now available on both nodes
+
+Updated: 2026-08-22. The failed user run stopped before traffic because
+`ibg-hybrid-testbed:netem-v1` did not exist. The deeper cause was repaired: the
+offline netem Dockerfile no longer requires the absent historical
+`ibg-testbed:kernel-phase3` tag. It extracts the required tc/netem userspace
+files from the existing pinned kind node image into a 3.28-MB scratch image.
+
+The corrected image built offline, executed the requested 7-ms delay/3-ms
+normal-jitter command successfully in a disposable container, and is present
+on both `ibg-hybrid-worker` and `ibg-hybrid-control-plane`. All 60 replica Pods
+and the flow generator were observed Running afterward. The existing
+controller Job/Pod is completed, not active. No experiment was rerun and no
+manifest or workload rollout was initiated by this work; the next experiment
+command remains user-owned.
