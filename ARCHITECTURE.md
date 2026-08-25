@@ -4205,3 +4205,178 @@ controller orchestration, timings, and replay. Hybrid pruning, activation,
 planning-link selection, lookahead, Monte Carlo, candidate/depth/worker
 options, process pools, diagnostics/output, and repetition modes remain
 excluded.
+
+### Greedy Phase 4 static image and Kubernetes boundary
+
+Greedy Phase 4 is complete locally. `Greedy/kernel_runtime_profiles.py`
+defines the complete canonical processor-private profile document. The private
+processor resolves its `(stage, ordinal+1)` entry through
+`GREEDY_RUNTIME_PROFILES_PATH`; hidden state and observation seed never enter
+the controller document or policy input. `Greedy/kernel_infrastructure.py`
+owns explicit-dimension static input validation, exact matched resources,
+worker resource preflight, deterministic Kubernetes resource construction,
+security validation, readiness-gated controller Job construction, and
+dependency-free JSON/YAML rendering/parsing. These modules import silently and
+perform no file, container, network, or cluster action.
+
+The long-running resource graph is:
+
+```text
+greedy-testbed Namespace
+  -> greedy-controller ServiceAccount + Pod get/list Role/RoleBinding
+  -> greedy-runtime-profiles ConfigMap (processor-private hidden map)
+  -> greedy-controller-inputs ConfigMap (public finite-run inputs/fingerprint)
+  -> greedy-flow-generator Service + one Deployment
+  -> for every explicit stage 1..K
+       greedy-stage-S headless Service
+       greedy-stage-S StatefulSet with M Pods
+         private-processor :8081, one worker
+         public-forwarder  :8080, two workers, 30s keep-alive
+
+exact replica Ready coverage + Ready flow generator
+  -> separately rendered finite greedy-controller Job
+```
+
+All serving and controller Pods select the sole
+`greedy.workload-node=true` worker. Replica and flow-generator Pods disable
+service-account token mounting; only the controller Job mounts its
+namespace-scoped discovery token. Pod security uses UID/GID 10001,
+`runAsNonRoot`, runtime-default seccomp, no privilege escalation, a read-only
+root filesystem, and all Linux capabilities dropped. The controller mounts
+only `greedy-controller-inputs`; runtime profiles mount only into private
+processors. The long-running render can never contain a Job, while controller
+Job construction fails without exact canonical Ready identities and a Ready
+flow generator.
+
+The deterministic renderer accepts arbitrary explicit `N`, `K>=2`, and `M`.
+It creates exactly `K` headless Services and StatefulSets and labels every
+replica Pod with `greedy.max-assigned-flows=ceil(N/M)`. JSON was selected as
+the emitted format because it is valid Kubernetes YAML and permits strict
+offline parse/round-trip validation without adding a YAML library to either
+image. `scripts/render_greedy_kubernetes.py` renders only long-running or kind
+documents to stdout after validation; it cannot apply them. The explicit
+10x3x5 example under `deploy/greedy-kubernetes/examples/` is a comparison
+fixture, not a topology default.
+
+`deploy/greedy-kubernetes/Dockerfile.service` copies only policy-neutral IBG
+latency/datapath code, shared processor/forwarder code, and Greedy service wire
+modules. It excludes Greedy policy, controller, oracle, legacy driver,
+Hybrid, MILP, Pandas, SciPy, and optimization sources. The separate controller
+image copies the sequential Greedy policy/controller/learning/metric boundary
+and a lean strict-SLA helper, but no service entry point, Hybrid solver,
+lookahead, Monte Carlo, or process-pool source. Both images use Azure Linux
+Python 3.12, install only exact local wheel locks through `--no-index`, and
+finish as UID/GID 10001. `scripts/greedy_offline_wheelhouse.py` validates the
+Greedy-owned CPython 3.12 Linux/AMD64 manifests and rejects missing,
+unexpected, forbidden-solver, ABI/platform, lock, and recorded-digest drift.
+
+The matched workload resources are unchanged:
+
+| Workload | Request | Limit |
+| --- | --- | --- |
+| Private processor | `50m`, `128Mi` | `1` CPU, `768Mi` |
+| Public forwarder | `25m`, `128Mi` | `1` CPU, `256Mi` |
+| Flow generator | `50m`, `128Mi` | `1` CPU, `768Mi` |
+| Sequential Greedy controller | `2` CPU, `256Mi` | `4` CPU, `1Gi` |
+
+For configuration `N/K/M`, worker request preflight counts `K*M` replica Pods,
+the flow generator, and the simultaneously running finite controller. The
+explicit 10x3x5 example therefore requires 3175 millicores and 4224 MiB before
+system reservation/other workloads are considered. This is request
+admission—not a claim about actual consumption or performance.
+
+Phase 4 revalidated the active Hybrid/static boundary at repository HEAD
+`f2e0065204570d9631f26953c94729b451ff92b5`:
+
+| Boundary | Active source | Git blob | Greedy disposition |
+| --- | --- | --- | --- |
+| Service image | `deploy/hybrid-kubernetes/Dockerfile.service:1-38` | `bdb6333a189a8b5a18ad693fd90654b174b32ed5` | Adapt lean contents and ownership |
+| Controller image | `deploy/hybrid-kubernetes/Dockerfile.controller:1-43` | `9c528adffa91311f9eb18582584189b65303a5b4` | Adapt; exclude Hybrid policy/pools |
+| Offline wheel validation | `scripts/hybrid_offline_wheelhouse.py:1-230` | `412e66c89df29b1ea304a2a60fa379b5f981c3b2` | Adapt to Greedy manifests/cache |
+| Namespace/RBAC | `deploy/hybrid-kubernetes/namespace.yaml`; `rbac.yaml` | `f1a892dafcfac954e0ae5820ca950975f95a2b0a`; `e5599da43f04a8d0d55b2dd54e1b4a492cb68b62` | Adapt names; preserve Pod get/list only |
+| Replica template | `deploy/hybrid-kubernetes/replicas.yaml:1-286` | `830abdb9bbe908c74a43ba2437d0d0aef88c4809` | Adapt to arbitrary explicit K/M and Greedy profiles |
+| Flow generator | `deploy/hybrid-kubernetes/flow-generator.yaml:1-57` | `32ec288eeceef9c47ec5f80bcaa294716ac5f4be` | Adapt ownership; preserve runtime envelope |
+| Controller Job | `deploy/hybrid-kubernetes/dynamic-controller-job.yaml:1-75` | `1e4dbde99f3d76ee529192aae624a6ec87a05f61` | Adapt without planning/source overlays |
+| Long-running separation | `deploy/hybrid-kubernetes/kustomization.yaml:1-20` | `2e4fcdfdf039837d74d57c9919b44a4a192e297e` | Adapt to deterministic renderer |
+| One-worker kind topology | `deploy/hybrid-kubernetes-phase4-small/kind-config.yaml:1-8` | `e756783e3923bf87d69b9df2dc0df613ea1ba727` | Adapt worker label only |
+| Runtime constants | `IBG_Hybrid/kernel_infrastructure_contract.py:490-535` | `b4b2d651c7903abc7f735983a0cd106e4b75f98b` | Reuse exact ports/workers/keep-alive |
+
+No Phase 4-relevant value drifted. Phase 4 added no launcher, image build,
+kind/kubectl operation, live discovery, topology reconciliation, JSONL, CSV,
+or console evidence. Those remain later phases.
+
+### Greedy Phase 5 persistent lifecycle and dynamic topology boundary
+
+Greedy Phase 5 is complete locally. `scripts/run_greedy_kernel.py` is the
+single production entry point for `run`, read-only `preflight`, and explicit
+Greedy-only `cleanup`. It requires explicit `N/K/M`, maximum iterations, and
+profile seed, resolves one positive experiment root independently of the
+profile seed, and creates exactly one controller Job. There is no topology
+default or repetition mode. The accepted `--csv` and `--parity-replay`
+settings are validated and carried in launch configuration only; Phase 5 does
+not persist or print experimental evidence.
+
+`Greedy/kernel_profile_reconciliation.py` deterministically materializes the
+complete processor-private map. Its keyed 3/3/2/2 state allocator and canonical
+observation-seed prefix match the active Hybrid environment allocation, while
+its append-only extension supports arbitrary contiguous stages and replicas.
+The profile seed never enters the flow-order/root seed or policy. A transition
+is valid only when every retained identity has the same hidden state and
+observation seed, the requested document has the expected fingerprint, and
+removed identities are high suffixes. Only processors receive this map.
+
+`Greedy/kernel_rollout.py` converts owned StatefulSet state into a strict
+contiguous topology and constructs bounded replica batches plus highest-stage
+add/remove steps. Exact Running/Ready Pod identities and public admission
+capacity, together with one Ready flow generator, gate every mutation. An
+interrupted transition can continue only when the versioned launcher state
+names the exact stable and target configurations and the observed state is an
+unambiguous prefix between them. Missing markers, ordinal holes, inconsistent
+stage widths, foreign ownership, or malformed labels fail closed.
+
+`Greedy/kernel_lifecycle.py` implements the state machine:
+
+```text
+validate launch/profile inputs
+  -> validate wheelhouses before Docker unless --skip-build
+  -> inspect exact cluster/context/node/namespace ownership
+  -> validate worker allocatable against requested serving + one controller
+  -> validate or change-scope service/controller image provenance
+  -> record an owned stable-to-target transition marker
+  -> remove obsolete highest stages/replicas
+  -> project retained processor-private profiles and public inputs
+  -> add highest stages and bounded replica suffixes
+  -> require exact Ready coverage after every batch
+  -> validate retained Pod UID/restart identity when no service restart occurs
+  -> record stable state
+  -> replace only the previous owned finite controller Job
+  -> wait for that one Job to complete
+```
+
+Fresh bootstrap builds both images offline with `--pull=false` and
+`--network=none`, creates only cluster `greedy`, waits for exactly
+`greedy-control-plane` and labeled `greedy-worker`, applies Greedy-owned
+long-running resources, and then creates the Job. Existing valid clusters are
+reused. Equal topology/profile is a serving no-op; flow-only changes patch the
+public capacity/controller configuration without replacing Pods. Replica and
+stage contraction remove only highest suffixes. `--skip-build` is forbidden on
+a fresh cluster, skips wheel/build/load, validates exact retained local and
+node image IDs, and avoids a forced restart. Cleanup first performs the same
+ownership preflight and deletes only the dedicated Greedy kind cluster.
+
+Phase 5 revalidated the active Hybrid lifecycle boundary at repository HEAD
+`f2e0065204570d9631f26953c94729b451ff92b5`:
+
+| Boundary | Active source | Git blob | Greedy disposition |
+| --- | --- | --- | --- |
+| Cluster, build, resource, lifecycle, seed, and CLI ordering | `scripts/run_hybrid_kernel_phase4.py:65-170,268-690,1041-1190,2534-3150,3224-3333,3400-3598` | `c571940408423410df91480470a79f0007a0f68e` | Adapt under Greedy ownership; exclude series/policy/MC/netem/evidence controls |
+| Bounded replica rollout and Ready checks | `IBG_Hybrid/kernel_rollout.py:194-375` | `2a766eb47c1149570b01999335d1cb56772709ff` | Adapt from fixed stages to arbitrary contiguous `K` |
+| Profile allocation and retained-prefix validation | `IBG_Hybrid/kernel_profile_expansion.py:407-991` | `8f10eb51ac4fce23a693ccda783f5828f60422d2` | Adapt the environment-only allocator behind Greedy ownership |
+| Offline wheelhouse validation | `scripts/hybrid_offline_wheelhouse.py:1-230` | `412e66c89df29b1ea304a2a60fa379b5f981c3b2` | Reuse through the Greedy Phase 4 validator |
+| One-control-plane/one-worker kind shape | `deploy/hybrid-kubernetes-phase4-small/kind-config.yaml:1-8` | `e756783e3923bf87d69b9df2dc0df613ea1ba727` | Adapt names and worker label |
+
+No Phase 5-relevant ordering, resource, profile, image, or Ready-gate drift was
+found. Hybrid policy/pruning/lookahead/Monte Carlo/process-pool behavior,
+repetition, evidence, and unrelated baseline lifecycle targets remain excluded.
+All Phase 5 execution coverage uses injected fake command executors; no live
+container or Kubernetes action is part of this completed gate.

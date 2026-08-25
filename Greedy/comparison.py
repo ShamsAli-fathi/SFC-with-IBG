@@ -69,6 +69,8 @@ REQUIRED_MATCHED_FIELDS = (
 
 
 GREEDY_PHASE3_HYBRID_AUDIT_HEAD = "19229c274038db440f3cfdd62ed2102ea4c2c545"
+GREEDY_PHASE4_HYBRID_AUDIT_HEAD = "f2e0065204570d9631f26953c94729b451ff92b5"
+GREEDY_PHASE5_HYBRID_AUDIT_HEAD = "f2e0065204570d9631f26953c94729b451ff92b5"
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,52 @@ GREEDY_PHASE3_HYBRID_SOURCE_AUDIT = (
     Phase3HybridSourceAudit("private processor and public forwarder resources", "deploy/hybrid-kubernetes/replicas.yaml:45-110", "830abdb9bbe908c74a43ba2437d0d0aef88c4809", "adapt", "Private 50m/128Mi to 1 CPU/768Mi; public 25m/128Mi to 1 CPU/256Mi; two public workers and 30-second server keep-alive."),
     Phase3HybridSourceAudit("flow-generator resources", "deploy/hybrid-kubernetes/flow-generator.yaml:35-57", "32ec288eeceef9c47ec5f80bcaa294716ac5f4be", "adapt", "Flow generator remains 50m/128Mi request and 1 CPU/768Mi limit."),
     Phase3HybridSourceAudit("controller resources", "deploy/hybrid-kubernetes/dynamic-controller-job.yaml:64-66", "1e4dbde99f3d76ee529192aae624a6ec87a05f61", "adapt", "Controller remains 2 CPU/256Mi request and 4 CPU/1Gi limit for matched comparison."),
+)
+
+
+@dataclass(frozen=True)
+class Phase4HybridSourceAudit:
+    boundary: str
+    source_location: str
+    git_blob: str
+    disposition: str
+    finding: str
+
+
+GREEDY_PHASE4_HYBRID_SOURCE_AUDIT = (
+    Phase4HybridSourceAudit("service image boundary", "deploy/hybrid-kubernetes/Dockerfile.service:1-38", "bdb6333a189a8b5a18ad693fd90654b174b32ed5", "adapt", "Azure Linux Python 3.12, non-root UID 10001, offline wheel-only install, explicit service source inventory, ports 8080/8081; Hybrid service namespace is excluded."),
+    Phase4HybridSourceAudit("controller image boundary", "deploy/hybrid-kubernetes/Dockerfile.controller:1-43", "9c528adffa91311f9eb18582584189b65303a5b4", "adapt", "Separate non-root offline controller image; Greedy copies only its sequential controller dependencies and excludes Hybrid policy/MC/process-pool sources."),
+    Phase4HybridSourceAudit("offline dependency validator", "scripts/hybrid_offline_wheelhouse.py:1-230", "412e66c89df29b1ea304a2a60fa379b5f981c3b2", "adapt", "Exact version/ABI/platform lock-to-manifest validation with no download boundary; Greedy owns separate manifests and cache paths."),
+    Phase4HybridSourceAudit("namespace and discovery RBAC", "deploy/hybrid-kubernetes/namespace.yaml:1-7; deploy/hybrid-kubernetes/rbac.yaml:1-34", "f1a892dafcfac954e0ae5820ca950975f95a2b0a/e5599da43f04a8d0d55b2dd54e1b4a492cb68b62", "adapt", "Dedicated namespace and namespace Role limited to Pod get/list; all names and labels become Greedy-owned."),
+    Phase4HybridSourceAudit("replica Pod template", "deploy/hybrid-kubernetes/replicas.yaml:1-286", "830abdb9bbe908c74a43ba2437d0d0aef88c4809", "adapt", "Headless Service/StatefulSet identity, two-container split, exact probes/resources/workers/ports/keep-alive, token disabled, and worker placement; Greedy generation supports arbitrary explicit K and M."),
+    Phase4HybridSourceAudit("flow-generator resources", "deploy/hybrid-kubernetes/flow-generator.yaml:1-57", "32ec288eeceef9c47ec5f80bcaa294716ac5f4be", "adapt", "One worker-only token-free Deployment and Service with 50m/128Mi request, 1 CPU/768Mi limit, and health probes."),
+    Phase4HybridSourceAudit("finite controller Job", "deploy/hybrid-kubernetes/dynamic-controller-job.yaml:1-75", "1e4dbde99f3d76ee529192aae624a6ec87a05f61", "adapt", "Worker-only one-shot Job, namespace discovery ServiceAccount, controller-only ConfigMap mount, 2 CPU/256Mi request and 4 CPU/1Gi limit; Hybrid planning/source overlays are excluded."),
+    Phase4HybridSourceAudit("long-running base separation", "deploy/hybrid-kubernetes/kustomization.yaml:1-20", "2e4fcdfdf039837d74d57c9919b44a4a192e297e", "adapt", "Long-running resources and ConfigMaps exclude the controller Job; Greedy uses a dependency-free deterministic JSON/YAML renderer."),
+    Phase4HybridSourceAudit("one-worker kind topology", "deploy/hybrid-kubernetes-phase4-small/kind-config.yaml:1-8", "e756783e3923bf87d69b9df2dc0df613ea1ba727", "adapt", "Exactly one control-plane and one labeled worker; Greedy changes only the ownership label."),
+    Phase4HybridSourceAudit("runtime constants", "IBG_Hybrid/kernel_infrastructure_contract.py:490-535", "b4b2d651c7903abc7f735983a0cd106e4b75f98b", "reuse", "One private worker, two public workers, ports 8081/8080, separate clients, and 30-second public keep-alive remain matched."),
+)
+
+
+@dataclass(frozen=True)
+class Phase5HybridSourceAudit:
+    boundary: str
+    source_location: str
+    git_blob: str
+    disposition: str
+    finding: str
+
+
+GREEDY_PHASE5_HYBRID_SOURCE_AUDIT = (
+    Phase5HybridSourceAudit("dedicated cluster/context and fail-closed inventory", "scripts/run_hybrid_kernel_phase4.py:65-170,268-480", "c571940408423410df91480470a79f0007a0f68e", "adapt", "Use Greedy-only cluster/context/namespace/node identities; preserve exact two-node Ready and worker-placement refusal while excluding other baseline targets."),
+    Phase5HybridSourceAudit("offline image build and image identity", "scripts/run_hybrid_kernel_phase4.py:482-690", "c571940408423410df91480470a79f0007a0f68e", "adapt", "Preserve wheelhouse-before-Docker, --pull=false, --network=none, normalized node-tag/full-ID validation, and change-scoped role ownership."),
+    Phase5HybridSourceAudit("worker allocatable preflight", "scripts/run_hybrid_kernel_phase4.py:1041-1190", "c571940408423410df91480470a79f0007a0f68e", "adapt", "Run before mutation and include serving plus one 2-CPU/256Mi controller; Greedy uses its exact Phase 4 requests for arbitrary K/M."),
+    Phase5HybridSourceAudit("bounded replica rollout and exact Ready coverage", "IBG_Hybrid/kernel_rollout.py:194-375", "2a766eb47c1149570b01999335d1cb56772709ff", "adapt", "Preserve append/high-suffix directionality and per-batch exact Running/Ready gates; generalize fixed three stages to arbitrary contiguous K."),
+    Phase5HybridSourceAudit("seeded runtime profile allocation and transition validation", "IBG_Hybrid/kernel_profile_expansion.py:407-611,611-991", "8f10eb51ac4fce23a693ccda783f5828f60422d2", "adapt", "Reuse the environment-only 3/3/2/2 keyed state allocation and identity-stable observation-seed prefix; generalize stages and reject retained drift without importing Hybrid policy."),
+    Phase5HybridSourceAudit("persistent reconcile and Job ordering", "scripts/run_hybrid_kernel_phase4.py:2534-3150", "c571940408423410df91480470a79f0007a0f68e", "adapt", "Preserve resource refusal, build/reuse split, scale-down-before-profile-projection, Ready-before-Job, and retained-process checks; add Greedy-owned stage changes and transition markers."),
+    Phase5HybridSourceAudit("root/profile seed isolation", "scripts/run_hybrid_kernel_phase4.py:3224-3333", "c571940408423410df91480470a79f0007a0f68e", "adapt", "Use the same positive 63-bit system-random experiment-root boundary independently of the explicit profile seed, but create exactly one Greedy Job and no series loop."),
+    Phase5HybridSourceAudit("production CLI and skip-build defaults", "scripts/run_hybrid_kernel_phase4.py:3400-3598", "c571940408423410df91480470a79f0007a0f68e", "adapt", "Match explicit dimensions, positive batch default 1, required finite bound, profile seed, skip-build, CSV/parity defaults; exclude runs, policy, MC, resource-profile, refresh, netem, and evidence options."),
+    Phase5HybridSourceAudit("offline wheelhouse validator", "scripts/hybrid_offline_wheelhouse.py:1-230", "412e66c89df29b1ea304a2a60fa379b5f981c3b2", "reuse", "Reuse exact lock/manifest/ABI/platform validation through the existing Greedy-owned Phase 4 validator."),
+    Phase5HybridSourceAudit("one-control-plane/one-worker kind topology", "deploy/hybrid-kubernetes-phase4-small/kind-config.yaml:1-8", "e756783e3923bf87d69b9df2dc0df613ea1ba727", "adapt", "Retain exactly two nodes and worker-only workload opportunity under Greedy names and labels."),
 )
 
 INTENTIONAL_POLICY_DIFFERENCE_FIELDS = (
@@ -237,7 +285,7 @@ CANONICAL_MATCHED_COMPARISON = GreedyHybridMatchedComparison(
         _match("selected_pair_records_per_flow", 1, "IBG_Hybrid/kernel_route_contracts.py:161-204,239-245"),
         _match("route_command_semantics", "slot-envelope-with-N-complete-two-hop-routes-and-final-loads", "IBG_Hybrid/kernel_route_contracts.py:36-114,248-304"),
         _match("selected_telemetry_semantics", "two-correlated-selected-hops-plus-one-measured-pair-per-flow", "IBG_Hybrid/kernel_route_contracts.py:117-245; IBG_Hybrid/kernel_controller.py:263-334"),
-        _match("worker_topology", "one-control-plane-one-worker-worker-only", "deploy/hybrid-kubernetes/replicas.yaml:46-49"),
+        _match("worker_topology", "one-control-plane-one-worker-worker-only", "deploy/hybrid-kubernetes-phase4-small/kind-config.yaml:1-8; deploy/hybrid-kubernetes/replicas.yaml:46-49"),
         _match("rollout_batch_size", "same-explicit-positive-value", "scripts/run_hybrid_kernel_phase4.py:3445-3449"),
         _match("ready_gate", "same-exact-running-ready-ordinal-coverage", "IBG_Hybrid/kernel_rollout.py:318-375"),
         _match("build_reuse_state", "same-build-or-validated-skip-build-mode", "scripts/run_hybrid_kernel_phase4.py:3405-3411"),

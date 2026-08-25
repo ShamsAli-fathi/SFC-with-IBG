@@ -1,0 +1,31 @@
+FROM mcr.microsoft.com/azurelinux/base/python:3.12
+
+USER root
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/IBG
+
+WORKDIR /app
+
+COPY deploy/greedy-kubernetes/requirements-controller.txt ./
+COPY deploy/greedy-kubernetes/wheel-manifests/requirements-controller.lock ./
+COPY .offline-wheels/greedy/controller/ /opt/greedy-wheels/
+RUN python3 -m pip install --no-cache-dir --no-index \
+    --find-links=/opt/greedy-wheels \
+    -r requirements-controller.lock \
+    && rm -rf /opt/greedy-wheels
+
+COPY IBG/datapath.py IBG/latency_model.py IBG/learning.py /app/IBG/
+COPY deploy/greedy-kubernetes/controller-exact-report.py /app/IBG/report.py
+
+COPY deploy/greedy-kubernetes/controller-package-init.py /app/Greedy/__init__.py
+COPY Greedy/contracts.py Greedy/expected_utility.py Greedy/phase0_contract.py Greedy/policy.py /app/Greedy/
+COPY Greedy/slot_contracts.py Greedy/simulation.py Greedy/learning.py Greedy/metrics.py /app/Greedy/
+COPY Greedy/kernel_contracts.py Greedy/kernel_route_contracts.py /app/Greedy/
+COPY Greedy/kernel_kubernetes_discovery.py Greedy/kernel_controller_config.py /app/Greedy/
+COPY Greedy/kernel_controller.py Greedy/kernel_controller_service.py /app/Greedy/
+
+USER 10001:10001
+
+CMD ["python3", "-m", "Greedy.kernel_controller_service"]

@@ -3073,3 +3073,104 @@ Accepted and implemented locally: 2026-08-25.
   output, and repetition. Phase 3 creates no image, manifest, namespace,
   launcher, JSONL, CSV, or cluster operation. Greedy Phase 4 is next and needs
   separate authorization.
+
+### Greedy Phase 4 static infrastructure decisions
+
+Accepted and implemented locally: 2026-08-25.
+
+- Own the static deployment boundary under `Greedy/`,
+  `deploy/greedy-kubernetes/`, and two import-safe helper scripts. Do not edit
+  or alias active Hybrid manifests, images, namespaces, service accounts, or
+  ConfigMaps.
+- Require a complete explicitly supplied `N/K/M` deployment input and exact
+  canonical processor-private profile map. Keep 10x3x5 only as the named
+  matched-comparison example. Generate `ceil(N/M)` as the public Pod admission
+  label and reject missing or noncontiguous identities.
+- Use deterministic JSON documents as the dependency-free offline render
+  format. JSON is valid Kubernetes YAML; render functions immediately support
+  lossless local parse/validation without adding PyYAML to either runtime
+  image. Treat any resource differing from the canonical render as drift.
+- Keep the long-running base separate from the finite controller Job. Require
+  an explicit exact Ready identity token plus Ready flow generator before a
+  Job can be rendered. Phase 5 will own live readiness acquisition and apply
+  ordering; Phase 4 performs neither.
+- Use `greedy-testbed`, Greedy-prefixed names/labels/images, one control-plane
+  and one `greedy.workload-node=true` worker, and worker-only scheduling for
+  all workloads. Permit controller discovery only through a namespace Role
+  granting Pod `get/list`.
+- Disable service-account token mounting for replica and flow-generator Pods.
+  Enable it only for the controller Job. Run all Pods as UID/GID 10001 with
+  runtime-default seccomp; drop all capabilities, forbid privilege escalation,
+  and use read-only container roots.
+- Preserve the accepted two-container replica: one private processor on 8081
+  and two-worker public forwarder on 8080 with 30-second server/downstream
+  keep-alive. Preserve the active Hybrid-matched probes and all four resource
+  envelopes exactly. Include the simultaneous serving and controller requests
+  in worker allocatable preflight.
+- Give the processor a Greedy-owned runtime-profile document and environment
+  variable. Runtime profiles contain hidden state and observation seed and are
+  mounted only into processors. Controller ConfigMaps contain dimensions,
+  seeds, profile fingerprint, and finite-run inputs but no hidden state,
+  observation seed, or beliefs.
+- Maintain separate offline Python 3.12/Linux AMD64 wheel locks/manifests and
+  Greedy cache paths for service and controller images. The service source
+  inventory excludes policy/controller/oracle and legacy files; the controller
+  inventory excludes service entry points and all Hybrid/MILP sources.
+- Reuse only policy-neutral processor/forwarder runtime behavior and exact
+  resource/port/worker/keep-alive values. Adapt image ownership, profile
+  parsing, resources, security, and rendering behind Greedy boundaries.
+  Exclude Hybrid policy, pruning, activation, planning links, lookahead,
+  Monte Carlo, four-process pools, launcher, reconciliation, and output code.
+- Phase 4 invokes no Docker, kind, kubectl, network, cluster, traffic, JSONL,
+  or CSV operation. Greedy Phase 5 is the next separately scoped action.
+
+### Greedy Phase 5 lifecycle and reconciliation decisions
+
+Accepted and implemented locally: 2026-08-25.
+
+- Own the persistent lifecycle in `Greedy/kernel_lifecycle.py` and the thin
+  `scripts/run_greedy_kernel.py` entry point. Require explicit dimensions,
+  maximum iterations, and profile seed. Keep rollout batch default 1, one Job
+  per invocation, no topology defaults, and no `--runs` or Hybrid solver knobs.
+- Keep `--csv` and `--parity-replay` as validated behavior-neutral launch
+  fields through Phase 5. Phase 6 alone may define evidence, replay reporting,
+  JSONL, or CSV effects.
+- Resolve the positive experiment-root seed independently of profile seed.
+  Use profile seed only to materialize the versioned hidden-state and
+  observation-seed environment. Environment equality is the validated map and
+  fingerprint, never equal seed spelling alone.
+- Adapt the active Hybrid 3/3/2/2 keyed hidden-state allocation and canonical
+  observation-seed prefix behind a Greedy-owned module. Generalize it
+  append-only for arbitrary stages/replicas and reject any retained-identity
+  drift. Never reveal the private map to controller input or launcher output.
+- Represent lifecycle progress with an owned versioned stable/target transition
+  marker. Continue only an unambiguous prefix-shaped interrupted transition.
+  Refuse unmarked partial state, ordinal holes, inconsistent stage widths,
+  malformed ownership, or unrelated namespaces/workloads rather than guessing.
+- Reconcile only high suffixes: add/remove highest replica ordinals across all
+  retained stages and add/remove highest contiguous stages. Require exact
+  Running/Ready coverage after every bounded mutation and before controller
+  traffic. Never contract below two stages.
+- Treat equal topology/profile as a serving no-op. For flow-only changes, patch
+  only public capacity labels and controller configuration so retained Pods are
+  not replaced. When no service-image restart is authorized, require retained
+  Pod UIDs and restart counts to remain unchanged.
+- Run worker allocatable-versus-request preflight before topology mutation or
+  Job creation, counting every requested replica Pod, the flow generator, and
+  one `2 CPU/256Mi` controller. Keep all Phase 4 requests, limits, probes,
+  ports, workers, security contexts, and keep-alive values frozen.
+- Validate complete source provenance and exact local/node image identities.
+  Bootstrap builds both roles offline only after both wheelhouses validate.
+  Later maintenance rebuilds only a proven changed role. `--skip-build` cannot
+  bootstrap, skips wheel/build/load, validates retained identities, and does
+  not force a serving restart.
+- Reuse only cluster-independent validation and offline wheel checks. Adapt
+  Hybrid ordering, rollout, profile, and kind lifecycle under the Greedy
+  cluster/context/namespace/label boundary. Exclude Hybrid policy, pruning,
+  lookahead, Monte Carlo, process pools, repetitions, netem, and evidence paths.
+- Make preflight read-only. Make cleanup explicit and Greedy-only: validate
+  exact ownership first, then delete only kind cluster `greedy`; refuse an
+  ambiguous or foreign inventory.
+- Phase 5 testing uses injected fake executors only. No Docker, kind, kubectl,
+  network, cluster, traffic, experimental result, JSONL, or CSV action is
+  authorized by this decision. Greedy Phase 6 is next and remains unstarted.

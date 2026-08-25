@@ -3427,7 +3427,7 @@ live-cluster work was performed. Phase 4 is next and has not started.
 
 ### Greedy Phase 4: create isolated images and Kubernetes resources
 
-Status: planned after Phase 3.
+Status: complete locally on 2026-08-25.
 
 Recommended intelligence level: `high`. The policy is unchanged and the work
 is bounded by established image, manifest, RBAC, security, resource, and
@@ -3463,9 +3463,41 @@ wrong namespace, labels, node placement, RBAC, image, profile mounts, stage
 gaps, and a controller Job applied before serving readiness. No live cluster is
 required or authorized by this phase.
 
+Phase 4 result: `Greedy/kernel_infrastructure.py` now renders deterministic
+dependency-free JSON/YAML for arbitrary explicitly supplied valid dimensions.
+The long-running set contains only the Greedy namespace, namespace-scoped Pod
+get/list RBAC, private runtime and public controller ConfigMaps, one
+flow-generator Service/Deployment, and one headless Service/StatefulSet pair
+per contiguous stage. The finite controller Job is a separate render that
+requires an exact replica and flow-generator Ready token. Every workload is
+worker-only, non-root, capability-dropped, read-only-root, and uses service
+account tokens only where controller discovery requires one.
+
+`deploy/greedy-kubernetes/` owns separate offline service/controller
+Dockerfiles, exact Python 3.12/Linux AMD64 wheel locks/manifests, the explicit
+canonical 10x3x5 render input, and the one-control-plane/one-worker kind
+definition. The service image excludes Greedy policy/controller, Hybrid,
+MILP, and legacy Greedy files; the sequential controller image excludes
+service entry points and Hybrid policy/MC/process-pool sources. The matched
+private/public/flow-generator/controller resources remain
+`50m/128Mi -> 1 CPU/768Mi`, `25m/128Mi -> 1 CPU/256Mi`,
+`50m/128Mi -> 1 CPU/768Mi`, and `2 CPU/256Mi -> 4 CPU/1Gi` respectively.
+Worker preflight includes all serving requests plus the controller Job.
+
+The Phase 4 audit used HEAD
+`f2e0065204570d9631f26953c94729b451ff92b5`; exact locations, blobs, and
+reuse/adapt classifications are recorded in `Greedy/comparison.py` and
+`ARCHITECTURE.md`, with no relevant drift. The complete Greedy Phase 0--4
+suite passes 117 tests and the focused unchanged static Hybrid compatibility
+selection passes 21 tests. Image-source isolation, clean-directory imports,
+offline example rendering/parsing, externalized bytecode compilation, and
+`git diff --check` pass. No Docker, kind, kubectl, network, cluster, traffic,
+launcher, JSONL, or CSV operation was performed. Phase 5 is next and has not
+started.
+
 ### Greedy Phase 5: implement persistent lifecycle and dynamic topology
 
-Status: planned after Phase 4.
+Status: complete locally on 2026-08-25. Phase 6 has not started.
 
 Recommended intelligence level: `xhigh`. Reconciliation must safely handle
 bootstrap, no-op reuse, interrupted transitions, scale up/down, profile order,
@@ -3506,6 +3538,33 @@ Gate: mocked command-order tests cover fresh bootstrap, equal reuse, flow-only
 change, stage/replica up and down transitions, interrupted transition recovery,
 resource refusal, profile drift, foreign ownership, missing images, and the
 rule that `--skip-build` cannot bootstrap.
+
+Phase 5 result: `scripts/run_greedy_kernel.py` now owns `run`, read-only
+`preflight`, and explicit Greedy-only `cleanup`. The launcher keeps cluster
+`greedy`, context `kind-greedy`, namespace `greedy-testbed`, and the exact
+one-control-plane/one-worker inventory fail closed. It validates worker
+requests before mutation, builds and loads only roles whose complete source
+provenance changed, and creates exactly one controller Job only after exact
+serving readiness. `--skip-build` rejects bootstrap, bypasses wheel/build/load,
+validates retained local and node image identities, and does not force a
+serving restart.
+
+Greedy-owned profile and rollout modules materialize an arbitrary contiguous
+`K>=2`/`M` environment, preserve every retained identity's hidden state and
+observation seed, reject retained drift, and reconcile only high-suffix
+replicas and highest contiguous stages. A versioned transition marker permits
+safe continuation of an unambiguous interrupted supported transition; an
+unmarked, noncontiguous, foreign, or otherwise ambiguous state is rejected.
+Flow-only changes update public admission/controller configuration without Pod
+replacement. Exact Ready coverage is required after each bounded replica or
+stage mutation. Phase 5 carries validated `--csv` and `--parity-replay`
+settings only; it emits no evidence and performs no replay/export.
+
+The local gate passes 137 Greedy tests through Phase 5 and 20 focused unchanged
+Hybrid lifecycle/profile/rollout compatibility tests. Import, externalized
+bytecode compilation, and whitespace checks pass. All lifecycle tests use fake
+executors; no Docker, kind, kubectl, network, cluster, traffic, JSONL, or CSV
+operation was performed. Phase 6 is the next separately authorized phase.
 
 ### Greedy Phase 6: add console, JSONL, and CSV evidence
 

@@ -85,6 +85,31 @@ def controller_input_document_from_mapping(
     )
 
 
+def controller_input_document_to_mapping(
+    document: GreedyKernelControllerInputDocument,
+) -> dict[str, object]:
+    if not isinstance(document, GreedyKernelControllerInputDocument):
+        raise TypeError("document must be GreedyKernelControllerInputDocument")
+    controller = document.controller
+    configuration = controller.configuration
+    return {
+        "contract_version": document.contract_version,
+        "source_identity": document.source_identity,
+        "configuration": {
+            "num_flows": configuration.num_flows,
+            "num_stages": configuration.num_stages,
+            "num_replicas": configuration.num_replicas,
+        },
+        "experiment_id": controller.experiment_id,
+        "root_seed": controller.root_seed,
+        "profile_seed": controller.profile_seed,
+        "runtime_profile_fingerprint": controller.runtime_profile_fingerprint,
+        "max_iterations": controller.max_iterations,
+        "first_slot_id": controller.first_slot_id,
+        "controller_contract_version": controller.contract_version,
+    }
+
+
 def load_controller_input_document(
     path: str | Path,
 ) -> GreedyKernelControllerInputDocument:

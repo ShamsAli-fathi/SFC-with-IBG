@@ -1,0 +1,31 @@
+{
+  "contract_version": "greedy-static-deployment-input-v1",
+  "source_identity": "greedy-canonical-comparison-10x3x5-v1",
+  "configuration": {
+    "num_flows": 10,
+    "num_stages": 3,
+    "num_replicas": 5
+  },
+  "experiment_id": 1,
+  "root_seed": 2050,
+  "profile_seed": 20260801,
+  "max_iterations": 50,
+  "first_slot_id": 1,
+  "profiles": [
+    {"stage": 1, "replica": 1, "hidden_state": 1, "observation_seed": 10101},
+    {"stage": 1, "replica": 2, "hidden_state": 2, "observation_seed": 10102},
+    {"stage": 1, "replica": 3, "hidden_state": 3, "observation_seed": 10103},
+    {"stage": 1, "replica": 4, "hidden_state": 4, "observation_seed": 10104},
+    {"stage": 1, "replica": 5, "hidden_state": 1, "observation_seed": 10105},
+    {"stage": 2, "replica": 1, "hidden_state": 2, "observation_seed": 10201},
+    {"stage": 2, "replica": 2, "hidden_state": 3, "observation_seed": 10202},
+    {"stage": 2, "replica": 3, "hidden_state": 4, "observation_seed": 10203},
+    {"stage": 2, "replica": 4, "hidden_state": 1, "observation_seed": 10204},
+    {"stage": 2, "replica": 5, "hidden_state": 2, "observation_seed": 10205},
+    {"stage": 3, "replica": 1, "hidden_state": 3, "observation_seed": 10301},
+    {"stage": 3, "replica": 2, "hidden_state": 4, "observation_seed": 10302},
+    {"stage": 3, "replica": 3, "hidden_state": 1, "observation_seed": 10303},
+    {"stage": 3, "replica": 4, "hidden_state": 2, "observation_seed": 10304},
+    {"stage": 3, "replica": 5, "hidden_state": 3, "observation_seed": 10305}
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "contract_version": "greedy-offline-wheelhouse-v1",
+  "image": "controller",
+  "lock_filename": "requirements-controller.lock",
+  "python": "cp312",
+  "platform": "linux/amd64",
+  "wheels": [
+    {"distribution": "annotated-doc", "version": "0.0.4", "filename": "annotated_doc-0.0.4-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "annotated-types", "version": "0.7.0", "filename": "annotated_types-0.7.0-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "anyio", "version": "4.14.1", "filename": "anyio-4.14.1-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "certifi", "version": "2026.6.17", "filename": "certifi-2026.6.17-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "fastapi", "version": "0.139.0", "filename": "fastapi-0.139.0-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "h11", "version": "0.16.0", "filename": "h11-0.16.0-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "httpcore", "version": "1.0.9", "filename": "httpcore-1.0.9-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "httpx", "version": "0.28.1", "filename": "httpx-0.28.1-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "idna", "version": "3.18", "filename": "idna-3.18-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "numpy", "version": "2.5.1", "filename": "numpy-2.5.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", "python_tag": "cp312", "abi_tag": "cp312", "platform_tag": "manylinux_2_27_x86_64.manylinux_2_28_x86_64", "sha256": null},
+    {"distribution": "pydantic", "version": "2.13.4", "filename": "pydantic-2.13.4-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "pydantic-core", "version": "2.46.4", "filename": "pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", "python_tag": "cp312", "abi_tag": "cp312", "platform_tag": "manylinux_2_17_x86_64.manylinux2014_x86_64", "sha256": null},
+    {"distribution": "starlette", "version": "1.3.1", "filename": "starlette-1.3.1-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "typing-extensions", "version": "4.16.0", "filename": "typing_extensions-4.16.0-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null},
+    {"distribution": "typing-inspection", "version": "0.4.2", "filename": "typing_inspection-0.4.2-py3-none-any.whl", "python_tag": "py3", "abi_tag": "none", "platform_tag": "any", "sha256": null}
+  ]
+}

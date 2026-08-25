@@ -4012,3 +4012,155 @@ RBAC, ConfigMaps, controller Jobs, launcher lifecycle, JSONL/CSV, Docker,
 kind, kubectl, cluster state, live traffic, live Pure/Kernel parity, scaling,
 or performance. Existing unrelated dirty worktree changes were preserved. The
 next action is Greedy Phase 4 only after a separate user request.
+
+## Greedy Phase 4 complete locally
+
+Updated: 2026-08-25. The isolated static image/Kubernetes gate is complete.
+Phase 5 has not started.
+
+Added:
+
+- `Greedy/kernel_runtime_profiles.py`
+- `Greedy/kernel_infrastructure.py`
+- `scripts/render_greedy_kubernetes.py`
+- `scripts/greedy_offline_wheelhouse.py`
+- `deploy/greedy-kubernetes/` with two Dockerfiles, two direct requirement
+  declarations, two exact wheel locks/manifests, lean package/report overlays,
+  one-worker kind configuration, and an explicit canonical 10x3x5 input
+- `tests/test_greedy_phase4.py`
+
+Updated only the Greedy Phase 3 processor/config serialization boundary,
+`Greedy/comparison.py`, `.dockerignore`, and the four required handoffs. Frozen
+`IBG/`, `IBG_Hybrid/`, MILP, existing deployment resources, generated
+evidence, and unrelated worktree changes were preserved.
+
+The static renderer requires explicit dimensions and a complete contiguous
+processor-private profile map. It generates the `greedy-testbed` namespace,
+namespace-scoped Pod get/list RBAC, separate runtime/controller ConfigMaps,
+one token-free flow-generator Deployment, and one two-container StatefulSet
+plus headless Service for every explicit stage. All workloads are worker-only,
+non-root, capability-dropped, read-only-root, and runtime-default-seccomp. Only
+the finite controller Job gets a service-account token. The Job is outside the
+long-running base and cannot be rendered without exact replica and
+flow-generator readiness.
+
+The Greedy service/controller images have separate offline CPython 3.12 Linux
+AMD64 inputs and source inventories. The service image has no policy,
+controller, oracle, Hybrid, MILP, or unsafe legacy Greedy source. The
+controller includes the sequential policy/controller boundary but no service
+entry points, Hybrid policy, lookahead, Monte Carlo, or process pool. Both run
+as UID/GID 10001. No image was built.
+
+Active Hybrid comparison values were revalidated at HEAD
+`f2e0065204570d9631f26953c94729b451ff92b5`. No Phase 4 resource, probe,
+worker, port, keep-alive, RBAC, topology, or image-boundary drift was found.
+Exact locations and blobs are recorded in `ARCHITECTURE.md` and
+`Greedy/comparison.py`; policy-neutral runtime constants are reused, static
+ownership/rendering is adapted, and Hybrid policy/pool/launcher/output paths
+are excluded.
+
+Verification completed:
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/pytest -q
+  tests/test_greedy_phase0.py tests/test_greedy_phase1.py
+  tests/test_greedy_phase2.py tests/test_greedy_phase3.py
+  tests/test_greedy_phase4.py`: 117 passed.
+- The focused unchanged Hybrid static compatibility selection covered all ten
+  Phase 3 image tests, four Phase 2 profile/manifest/isolation tests, five
+  offline-wheelhouse tests, and two Phase 4 static topology/scope tests:
+  21 passed.
+- The explicit canonical 10x3x5 example and arbitrary 7x4x3 fixture render
+  deterministically and parse back exactly without PyYAML, network, or file
+  output.
+- Both Dockerfile source inventories materialize in clean temporary image
+  trees and import silently without wrong-role, Hybrid, MILP, or legacy
+  modules.
+- Phase 4 imports are silent, file-free, and global Python/NumPy RNG-neutral in
+  a clean temporary directory.
+- All changed/new Python files compile with bytecode directed to `/tmp` and
+  `git diff --check` passes.
+
+Not verified and intentionally out of scope: Docker builds, base-image pulls,
+actual wheel installation, kind or kubectl rendering/application, live
+namespace/RBAC/security admission, cluster state, traffic, runtime profiles in
+Pods, controller Job execution, launcher lifecycle, dynamic scaling,
+rollout-batch behavior, skip-build, JSONL/CSV, live parity, or performance. No
+Docker, kind, kubectl, network, or cluster command ran. Existing unrelated
+dirty worktree changes remain untouched. The next action is Greedy Phase 5
+only after a separate request.
+
+## Greedy Phase 5 complete locally
+
+Updated: 2026-08-25. The persistent lifecycle and dynamic-topology gate is
+complete under fake command execution. Phase 6 has not started.
+
+Added:
+
+- `Greedy/kernel_profile_reconciliation.py`
+- `Greedy/kernel_rollout.py`
+- `Greedy/kernel_lifecycle.py`
+- `scripts/run_greedy_kernel.py`
+- `tests/test_greedy_phase5.py`
+
+Updated `Greedy/comparison.py` and the four required handoffs. Frozen policy,
+learning, utility, SLA, fairness, equilibrium, active Hybrid/Exact sources,
+MILP, deployment resources, generated evidence, and unrelated dirty worktree
+changes were not modified by Phase 5.
+
+The launcher now has `run`, read-only `preflight`, and explicit Greedy-only
+`cleanup`. Run requires explicit positive flow/replica/max-iteration values,
+stage at least two, and nonnegative profile seed. Batch size defaults to one;
+`--skip-build` is supported; reserved CSV/parity settings default to zero; no
+topology default, repetition, policy, candidate/depth, Monte Carlo, or worker
+pool option exists. Every call resolves one profile-independent experiment
+root and creates exactly one finite controller Job after readiness.
+
+The lifecycle validates exact cluster/context/node/namespace/workload
+ownership, worker resources, profiles, image provenance, and Ready coverage.
+It supports flow-only capacity updates without Pod replacement, all-stage
+batched replica high-suffix expansion/contraction, highest contiguous stage
+expansion/contraction, retained profile-prefix preservation, and versioned
+recovery of an unambiguous interrupted supported transition. Equal
+topology/profile is a serving no-op. Fresh bootstrap orders wheelhouse
+validation before offline Docker builds, exact kind creation/image load, static
+apply, readiness, and the Job. Skip-build cannot bootstrap and validates local
+and node image identities without build/load or forced serving restart.
+
+The Phase 5 Hybrid audit used repository HEAD
+`f2e0065204570d9631f26953c94729b451ff92b5`. No relevant lifecycle, CLI,
+profile, resource, image, rollout, or readiness drift was found. Exact active
+blobs are:
+
+- Hybrid launcher: `c571940408423410df91480470a79f0007a0f68e`;
+- Hybrid rollout: `2a766eb47c1149570b01999335d1cb56772709ff`;
+- Hybrid profile expansion: `8f10eb51ac4fce23a693ccda783f5828f60422d2`;
+- wheelhouse validator: `412e66c89df29b1ea304a2a60fa379b5f981c3b2`;
+- one-worker kind configuration:
+  `e756783e3923bf87d69b9df2dc0df613ea1ba727`.
+
+Policy-neutral validation is reused, lifecycle/profile/rollout behavior is
+adapted behind Greedy ownership for arbitrary stages, and Hybrid policy,
+pruning, lookahead, Monte Carlo, process pools, repetitions, netem, and
+evidence behavior is excluded.
+
+Verification completed:
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/pytest -q
+  tests/test_greedy_phase0.py tests/test_greedy_phase1.py
+  tests/test_greedy_phase2.py tests/test_greedy_phase3.py
+  tests/test_greedy_phase4.py tests/test_greedy_phase5.py`: 137 passed.
+- The focused unchanged Hybrid rollout/profile/skip-build/CLI/lifecycle
+  compatibility selection: 20 passed.
+- Phase 5 import tests produced no stdout, stderr, or files in a clean
+  temporary directory; repeated fake-executor runs were deterministic and
+  consumed no global Python or NumPy RNG state.
+- Changed/new Phase 5 Python files compiled with bytecode directed outside the
+  workspace, and `git diff --check` passed.
+
+Not verified and intentionally out of scope: actual Docker builds or image
+installation, kind/kubectl behavior, live cluster/context/node/namespace
+state, real resource admission, live Pod identity/restart preservation,
+traffic, controller execution, performance, console evidence, JSONL, CSV, or
+production parity replay. No Docker, kind, kubectl, network, cluster, traffic,
+or result-file operation ran. Greedy Phase 6 evidence/output work is the next
+separately authorized action and was not started.

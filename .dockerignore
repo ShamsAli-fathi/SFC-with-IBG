@@ -28,5 +28,17 @@ deploy/hybrid-kubernetes/*
 !deploy/hybrid-kubernetes/controller-package-init.py
 !deploy/hybrid-kubernetes/image-stage-budget.py
 !deploy/hybrid-kubernetes/service-package-init.py
+!deploy/greedy-kubernetes/
+deploy/greedy-kubernetes/*
+!deploy/greedy-kubernetes/Dockerfile.controller
+!deploy/greedy-kubernetes/Dockerfile.service
+!deploy/greedy-kubernetes/requirements-controller.txt
+!deploy/greedy-kubernetes/requirements-service.txt
+!deploy/greedy-kubernetes/wheel-manifests/
+!deploy/greedy-kubernetes/wheel-manifests/requirements-controller.lock
+!deploy/greedy-kubernetes/wheel-manifests/requirements-service.lock
+!deploy/greedy-kubernetes/controller-exact-report.py
+!deploy/greedy-kubernetes/controller-package-init.py
+!deploy/greedy-kubernetes/service-package-init.py
 *.csv
 *.pkl

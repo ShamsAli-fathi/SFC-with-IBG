@@ -1,0 +1,32 @@
+FROM mcr.microsoft.com/azurelinux/base/python:3.12
+
+USER root
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/IBG
+
+WORKDIR /app
+
+COPY deploy/greedy-kubernetes/requirements-service.txt ./
+COPY deploy/greedy-kubernetes/wheel-manifests/requirements-service.lock ./
+COPY .offline-wheels/greedy/service/ /opt/greedy-wheels/
+RUN python3 -m pip install --no-cache-dir --no-index \
+    --find-links=/opt/greedy-wheels \
+    -r requirements-service.lock \
+    && rm -rf /opt/greedy-wheels
+
+COPY IBG/datapath.py IBG/latency_model.py /app/IBG/
+COPY testbed/__init__.py testbed/profiles.py testbed/cnf_service.py testbed/route_forwarder.py /app/testbed/
+
+COPY deploy/greedy-kubernetes/service-package-init.py /app/Greedy/__init__.py
+COPY Greedy/contracts.py Greedy/slot_contracts.py Greedy/kernel_contracts.py /app/Greedy/
+COPY Greedy/kernel_runtime_profiles.py Greedy/kernel_route_contracts.py /app/Greedy/
+COPY Greedy/kernel_route_execution.py Greedy/kernel_route_forwarder.py /app/Greedy/
+COPY Greedy/kernel_processor_service.py Greedy/kernel_route_forwarder_service.py Greedy/kernel_flow_generator.py /app/Greedy/
+
+USER 10001:10001
+
+EXPOSE 8080 8081
+
+CMD ["python3", "-m", "uvicorn", "Greedy.kernel_flow_generator:app", "--host", "0.0.0.0", "--port", "8080"]
