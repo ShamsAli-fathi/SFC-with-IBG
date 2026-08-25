@@ -3482,3 +3482,533 @@ and the flow generator were observed Running afterward. The existing
 controller Job/Pod is completed, not active. No experiment was rerun and no
 manifest or workload rollout was initiated by this work; the next experiment
 command remains user-owned.
+
+## MILP 40x3x20 ConfigMap annotation-limit repair
+
+Updated: 2026-08-23. The user-run 40-flow/3-stage/20-replica synthetic-scale
+MILP launch built and loaded its images, created `kind-ibg`, and applied the
+namespace/RBAC/flow generator, but stopped before replica rollout because
+client-side `kubectl apply` attempted to persist the large generated profile
+again in `kubectl.kubernetes.io/last-applied-configuration`. Kubernetes
+rejected that annotation above its 262144-byte limit.
+
+The launcher now uses server-side apply with the stable
+`milp-kernel-launcher` field manager for that ConfigMap only. The exact
+40x3x20/profile-seed-50 ConfigMap succeeds in Kubernetes server-side dry-run.
+All 51 `tests/test_milp_phase5.py` tests pass, including focused ordinary and
+large synthetic-profile launcher coverage; changed Python compiles. No retry,
+replica rollout, controller Job, traffic, trace, or solver invocation was
+started after the correction. The next action is user-owned rerun of the same
+command.
+
+### MILP 40x3x20 controller OOM resource repair
+
+Updated: 2026-08-23. The corrected user-run launcher created all 60 replica
+Pods and the controller Job, but the solver Pod was OOM-killed after 3m51s at
+the prior 1-GiB memory limit; no traffic or result followed. Each current kind
+worker advertises about 31.3 GiB allocatable memory, with the 60 serving Pods
+requesting about 5.6 GiB per worker. The controller Job now requests 8 GiB and
+limits at 16 GiB; its CPU remains 100m request/2-core limit and serving
+resources are unchanged.
+
+All 51 `tests/test_milp_phase5.py` tests pass and changed Python compiles. A
+Kubernetes server-side dry-run accepts the revised 40x3x20 controller Job. No
+retry, controller Job, traffic, trace, or additional live resource mutation
+was started by this correction; the existing 60 serving Pods were preserved.
+
+### MILP 20-to-5 replica scale-down validation repair
+
+Updated: 2026-08-23. The user-requested 10-flow/3-stage/5-replica synthetic
+run failed before mutation because the launcher compared profiles for all 20
+existing replica ordinals. The 6--20 profiles are intentionally removed by
+the requested scale-down and must not block it. The launcher now validates
+only retained ordinals through `min(existing, requested)` while preserving
+drift rejection for every retained Pod and all scale-up behavior.
+
+All 52 `tests/test_milp_phase5.py` tests pass and changed Python compiles. A
+read-only validation against the actual current 20-replica/profile-seed-50
+deployment accepts the target 5-replica profile. No retry, Pod, Job, traffic,
+trace, or other live mutation was started by the repair; the next action is
+user-owned rerun of the same 10x3x5 command.
+
+### MILP synthetic planning-link v2 range update
+
+Updated: 2026-08-23. At user direction, new synthetic-scale profiles now use
+`milp-scale-synthetic-profile-v2`: each deterministic directed planning-link
+coefficient lies in 65.000--74.999 ms. The prior v1 0.500--5.499-ms generator
+remains supported for historical reproduction. This is a planner-objective
+coefficient change only, not a netem setting or real traffic-delay injection.
+
+The current 10x3x5/profile-seed-50 v2 profile has 75 links in the observed
+65.034--74.934-ms range and fingerprint
+`437f27a1c8765d01d7de01bc17c95247`. The focused Phase 4/5 MILP suite passes
+66 tests and changed Python compiles. No live profile update, Pod, Job,
+traffic, trace, or other live mutation was started by this change.
+
+## Greedy final-baseline plan recorded
+
+Updated: 2026-08-24. Planning and Phase 0 contract characterization are
+complete; policy/runtime implementation has not started.
+
+The requested final baseline will live under `Greedy/` and use a pure budgeted
+`L=2` myopic policy. For each sequential flow, enumerate feasible actions that
+select one Ready replica from each of exactly two distinct configured stages,
+score the action by the sum of its two immediate belief-driven expected stage
+utilities at projected load, commit both loads, and bypass the remaining `K-2`
+stages. The lowest canonical `(stage, replica)` action wins an exact tie. There
+is no future-flow simulation, pruning, lookahead, Monte Carlo, bandit, MILP, or
+planning-link selection term. The no-rejection contract chooses the greatest
+feasible action even when every score is non-positive.
+
+The current untracked `Greedy/` folder is legacy material, not a working
+container baseline. Its driver executes at import time and contains a retired
+`range(1,30)` loop around hard-coded 50-flow, 3-stage, 80-replica-per-stage
+(240 total) executions. That 29-execution behavior is characterization only
+and does not belong to the new baseline. The driver enables the budgeted
+two-stage branch by default,
+uses historical model/SLA/equilibrium/CSV behavior, and has no Kubernetes,
+dynamic topology, JSONL, or launcher contract. The dormant per-stage path can
+return replica zero, while its embedding logic mutates the last replica load
+for that sentinel. No legacy experiment was run and no generated file was
+rewritten during this planning task.
+
+The recorded target uses a dedicated `greedy` kind cluster,
+`kind-greedy` context, `greedy-testbed` namespace, and one control-plane plus
+one worker with all workloads worker-only. Every run requires explicit positive
+flow, stage, and per-stage replica dimensions with `K>=2`; there are no
+topology defaults. The explicit 10-flow/3-stage/5-replica shape is only the
+canonical matched-comparison input. It plans safe stage/replica scale-up and
+scale-down. Each launcher
+invocation creates exactly one experiment/controller run, with no `--runs`
+option or internal repetition. Required production controls are `--rollout-batch-size`,
+`--profile-seed`, `--max-iterations`, `--csv`, and `--skip-build`, with the
+same narrow no-build meaning and fail-closed lifecycle as Hybrid.
+
+Console blocks, rollout progress, host-side lifecycle JSONL, and opt-in
+wide-layout CSVs will mirror current Hybrid structure with Greedy ownership and
+policy provenance. Active compatible semantics are separated jitter and exact
+likelihood, selected-only learning, physical-only realized utility, measured
+pair/raw reference metrics, strict raw-end-to-end SLA above 80 ms plus excess,
+Jain fairness, and strict `<0.04` equilibrium. JSONL will be mandatory after a
+successful run; `--csv 1` will export under `figures/Greedy/`.
+
+`ROADMAP.md` now contains Phases 0--9: contract/legacy characterization, pure
+policy, stateful simulation, Kernel adapters, isolated images/manifests,
+persistent dynamic topology, console/JSONL/CSV, complete local verification, a
+separately authorized small live gate, and separately authorized scaling/final
+acceptance. The next action, only after the user asks to continue implementation,
+is Greedy Phase 1. No Docker build, kind/Kubernetes command, cluster deletion,
+namespace/resource mutation, Pod rollout, controller Job, traffic, trace, CSV,
+test execution, commit, or push occurred in this planning turn.
+
+### Greedy optimization review incorporated
+
+Updated: 2026-08-24. The Greedy roadmap now includes the applicable execution
+and deployment optimizations found in the Hybrid implementation, not merely its
+container layout. Each Phase 0--9 now begins with a targeted preparation step
+to inspect the current handoff and the phase-related documentation, source,
+scripts, and focused tests when such material exists, then record what is
+reused, adapted, or excluded before implementation.
+
+Accepted Greedy measures are immutable per-stage identity and canonical `L=2`
+action-order precomputation,
+finite-lifetime deterministic expected-utility memoization, persistent
+controller discovery/flow-generator HTTP clients, one flow-generator-lifespan
+async route pool, the accepted separate forwarder local/downstream clients,
+concurrent execution of already-selected routes, change-scoped image work,
+equal-topology no-op reconciliation, bounded Ready-gated rollout, and narrow
+`--skip-build` reuse. Placement/load updates remain sequential.
+
+The planned production CLI now also contains `--parity-replay {0,1}`, default
+zero. Local correctness and the small live gate force replay on; ordinary runs
+avoid the duplicate serial calculation, and JSONL records whether it was
+requested and performed. `--csv 1` additionally exports monotonic discovery,
+admission/placement, data-plane-wait, feedback/validation, and total timing plus
+compatible controller payload/message footprint.
+
+Hybrid's focal-candidate worker tasks and persistent lookahead process pool were
+studied and explicitly excluded. Pure Greedy has no independent candidate tree,
+while parallel real-flow decisions would change load-dependent choices. The
+earlier separately conservative Greedy controller profile is superseded: the
+comparison baseline uses Hybrid's active request `2 CPU/256Mi` and limit
+`4 CPU/1Gi`, while Greedy remains one sequential policy process. One-sided
+resource tuning is forbidden; alternatives require a versioned matched A/B.
+
+That earlier optimization refinement changed only the four handoff Markdown
+files. At that point Phase 0 was still next; Phase 0 is now complete under the
+later corrected budgeted `L=2` contract. No image, manifest, cluster,
+namespace, Pod, Job, traffic, trace, CSV, or generated result was created by
+the planning refinement.
+
+### Greedy per-phase intelligence guidance recorded
+
+Updated: 2026-08-24. Every Greedy Phase 0--9 records a user-facing recommended
+Codex reasoning-effort level and a phase-specific rationale. The repository
+does not freeze a model ID. These are personal selection suggestions for the
+user, not checks or requirements for the implementing agent.
+
+The allocation is `high` for Phase 0 contract characterization, Phase 4
+images/manifests, Phase 6 evidence/reporting, and the separately authorized
+Phase 8 small live gate. It is `xhigh` for Phase 1 policy mathematics, Phase 2
+stateful learning/metrics, Phase 3 concurrent Kernel lifecycles, Phase 5 dynamic
+topology safety, Phase 7 complete regression synthesis, and Phase 9 scale/final
+evidence. The user may prefer `xhigh` for Phase 8 if read-only preflight reveals
+drift or requires command redesign.
+
+The agent does not inspect, verify, enforce, or change the user's selected
+model or reasoning level, and the user may disregard or change any suggestion
+without explanation. The recommendations do not authorize implementation,
+live Kubernetes operations, destructive actions, phase advancement, or reduced
+testing. Phase preparation, focused checks, explicit live approval, and handoff
+updates remain unchanged. No code, test, image, manifest, cluster, workload,
+traffic, or generated result was changed by this documentation update.
+
+## Greedy Phase 0 complete locally
+
+Updated: 2026-08-24. The baseline contract and legacy characterization gate is
+complete. Phase 1 has not started.
+
+Superseding user correction: the intended baseline is not full-chain
+per-stage Greedy. It is pure Greedy over a budgeted Hybrid-shaped `L=2` action:
+exactly two distinct selected stages per flow and `K-2` bypasses. Phase 0 was
+updated in place; no Phase 1 policy code was implemented.
+
+Latest configuration correction: every future invocation must receive
+`--flow`, `--stage`, and `--replica` explicitly; no topology dimensions have
+runtime defaults. The 10-flow/3-stage/5-replica shape is only the explicitly
+supplied canonical matched-comparison configuration. Each invocation performs
+exactly one run, the new Greedy interface will not expose a `--runs` option,
+and legacy `range(1,30)` remains only retired characterization evidence.
+
+Added only three Greedy Phase 0 files:
+
+- `Greedy/phase0_contract.py` freezes `pure-greedy-budgeted-l2-v1` through
+  small executable fixtures for positive `N`, `M`, and `K>=2`, exactly two
+  selected stages, `K-2` bypasses, `ceil(N/M)` admission, projected loads,
+  sequential joint-action mutations, canonical action ties, best non-positive
+  selection, empty-feasible failure, selected observations/pairs, public policy
+  inputs, excluded algorithms, and active metric/learning constants.
+  It separately freezes 10x3x5 as a canonical comparison fixture rather than
+  a default, plus the one-run/no-`--runs` invocation contract, while retaining
+  the intentionally tiny hand-checked slot fixture.
+- `Greedy/legacy_characterization.py` parses legacy source syntax without
+  importing it and contains the complete callable disposition registry.
+- `tests/test_greedy_phase0.py` provides bounded characterization and active
+  compatibility tests. It never imports `Greedy/main.py` and checks clean
+  Phase 0 imports in a temporary directory with no output or file creation.
+
+Observed legacy facts are now executable evidence rather than planning notes:
+
+- `main.py` has a retired top-level `range(1,30)` experiment, 50 flows, three
+  stages, 80 replicas per stage (240 total), and `is_budgeted=1`; `test.py`
+  also performs import-time CSV read/repair/write, while `header.py` changes
+  the recursion limit on import.
+- The active budgeted helper returns exactly two selected stages from
+  stochastic 30-sample Pandas grids. Its separate link helper is not used in
+  that choice. The dormant per-stage helper returns replica `0` when every
+  utility is non-positive, and legacy embedding then increments the last load
+  entry through index `-1`.
+- Randomness mixes module-global Python `random`, NumPy random calls, in-place
+  shuffling, and UUIDs, with no explicit seed call across the audited files.
+- Historical behavior uses `100/(q*(1+gamma*n))-5`, a non-convolved signal
+  likelihood, state-based SLA paths plus a 15-ms latency-excess metric, strict
+  belief changes below `0.06`, direct working-directory wide CSV mutation, and
+  a script that fabricates missing SLA rows by regression.
+- All 38 top-level callables/methods are classified: 5 active behaviors may be
+  reused through shared code with compatibility tests, 14 remain reference,
+  and 19 retire. The Greedy/Hybrid matrix has 4 direct-reuse, 5 Greedy-adapter,
+  and 2 exclusion rows.
+
+Verification completed:
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/pytest -q
+  tests/test_greedy_phase0.py`: 13 passed.
+- The corrected compatibility selection used `tests/test_latency_model.py`,
+  four focused Hybrid Phase 1 `L=2` action/bypass tests, two Phase 2
+  belief/tie tests, and three Phase 5 observation/SLA/learning tests: 17 passed.
+- `Greedy/phase0_contract.py`, `Greedy/legacy_characterization.py`, and
+  `tests/test_greedy_phase0.py` compile with the project virtual environment;
+  `git diff --check` passes.
+- A first bare `pytest` attempt found no command on PATH; a first selected
+  compatibility invocation without `PYTHONPATH=.` could not collect `IBG`
+  package imports. A later compatibility command named two nonexistent Hybrid
+  test node IDs and collected no tests. These command-selection issues were
+  corrected without source changes; the intended commands above passed.
+
+No legacy Greedy experiment, CSV/result generation, Docker/image operation,
+kind/Kubernetes command, traffic, cluster mutation, or live validation ran.
+Frozen `IBG/`, `IBG_Hybrid/`, MILP, Kubernetes, generated evidence, and
+unrelated worktree files were not modified. The next action is Greedy Phase 1
+only after a separate user request.
+
+### Greedy/Hybrid matched-comparison plan corrected
+
+Updated: 2026-08-24. The four Greedy handoffs now define
+`greedy-hybrid-matched-comparison-v1`. Fair comparison means identical inputs,
+infrastructure opportunity, runtime conditions, and measurement boundaries;
+only policy logic is intentionally different.
+
+The plan now requires the same explicitly supplied 10x3x5/L2 comparison shape,
+capacity and Ready semantics, one Job/run, maximum iterations, exact
+materialized hidden-state/observation-
+seed map, root and flow-order seeds, deterministic keyed physical/observation
+input schedule, worker placement, rollout/build/warm state, HTTP lifecycles,
+instrumentation, and timing boundaries. Exact map equality and fingerprints
+are required; matching `--profile-seed` spelling alone is insufficient.
+
+Current active Hybrid settings recorded for the comparison profile are:
+
+- private processor request `50m/128Mi`, limit `1 CPU/768Mi`, one worker;
+- public forwarder request `25m/128Mi`, limit `1 CPU/256Mi`, two workers,
+  ports 8080/8081 and 30-second downstream/server keep-alive;
+- flow generator request `50m/128Mi`, limit `1 CPU/768Mi`;
+- controller request `2 CPU/256Mi`, limit `4 CPU/1Gi`.
+
+Every later phase preparation must reread the current relevant
+`IBG_Hybrid/` code, `deploy/hybrid-kubernetes/` manifests,
+`scripts/run_hybrid_kernel_phase4.py`, and smallest focused tests, then refresh
+the phase rows of the comparison matrix before Greedy changes. Source drift
+fails preparation until reviewed and versioned. This prevents stale handoff
+values from silently defining the implementation.
+
+Greedy still excludes Hybrid pruning, activation, planning-link selection,
+lookahead, Monte Carlo, candidate/depth flags, `--policy`, `--mc-workers`, and
+process pools. Actual CPU time, RSS, throttling, and wall time under the common
+resource ceiling are outputs to compare. No policy, manifest, launcher,
+container, cluster, trace, or CSV was changed by this documentation correction;
+Phase 1 remains next and unstarted.
+
+## Greedy Phase 1 complete locally
+
+Updated: 2026-08-24. The import-safe pure policy core and typed-contract gate
+are complete. Phase 2 has not started.
+
+Added `Greedy/__init__.py`, `Greedy/contracts.py`,
+`Greedy/expected_utility.py`, `Greedy/policy.py`, `Greedy/comparison.py`, and
+`tests/test_greedy_phase1.py`; corrected the Phase 0 fixture/test and all four
+handoffs so 10x3x5 is never described as a runtime default. Typed configuration
+now requires explicit positive `N`, `K`, and `M`, with `K>=2` and fixed `L=2`.
+The only 10x3x5 object is explicitly named as the canonical matched-comparison
+fixture.
+
+The policy owns immutable public contracts, precomputes contiguous identities
+and globally lexicographic complete L=2 actions once, and processes the exact
+supplied flow order sequentially. It evaluates public-belief stage utility at
+`current_load+1`, examines every Ready/capacity-feasible action, keeps the
+strict first canonical action on a tie, commits both loads, selects the best
+non-positive action, and raises `NoFeasibleActionError` only for an empty
+complete feasible set. It returns `N` complete actions, each action's `K-2`
+bypasses, decision states, and final loads without caller-input mutation.
+
+The Greedy utility adapter directly uses policy-neutral
+`IBG.latency_model.expected_state_utility`; it does not import a Hybrid policy
+namespace. A controller-lifetime exact-key `(belief tuple, projected load)`
+LRU is bounded to 4096 entries by default and can be cleared. Cached,
+uncached, repeated, and transparent exhaustive-reference results agree. The
+policy consumes no Python or NumPy global RNG and exposes no hidden state,
+profile/observation/physical seed, pair-latency, or planning-link input.
+
+Phase 1 revalidated the comparison rows at HEAD
+`19229c274038db440f3cfdd62ed2102ea4c2c545`. Current Hybrid sources still show
+`ceil(N/M)` at `IBG_Hybrid/kernel_profile_expansion.py:587-600`, public
+Ready/projected-capacity checks at `IBG_Hybrid/phase0_contract.py:252-289`,
+deterministic belief utility at `IBG_Hybrid/expected_utility.py:12-42`, and
+identity/action/cache/tie patterns at `IBG_Hybrid/contracts.py:17-171` and
+`IBG_Hybrid/policy.py:1240-1555`. The active manifests still show private
+processor `50m/128Mi` request and `1 CPU/768Mi` limit, public forwarder
+`25m/128Mi` and `1 CPU/256Mi`, flow generator `50m/128Mi` and
+`1 CPU/768Mi`, controller `2 CPU/256Mi` and `4 CPU/1Gi`, one private worker,
+two public workers, ports 8081/8080, and 30-second downstream/server keep-alive.
+No relevant recorded value drifted. Hybrid pruning, activation, pair-aware
+selection, lookahead, Monte Carlo, policy/worker CLI, and process pools were
+explicitly excluded.
+
+Verification completed:
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/pytest -q
+  tests/test_greedy_phase0.py tests/test_greedy_phase1.py`: 34 passed.
+- The selected unchanged compatibility command ran all eight
+  `tests/test_latency_model.py` cases, four Hybrid Phase 1 action/ordering
+  cases, two Hybrid Phase 2 belief/tie cases, and three Hybrid Phase 5
+  jitter/SLA/learning cases: 17 passed.
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/pytest -q
+  tests/test_ibg_hybrid_phase0.py::test_feasibility_uses_ready_and_declared_flow_capacity_only`:
+  1 passed.
+- The isolated Phase 1 silent-import/no-file test passed in a clean temporary
+  directory.
+- The changed/new Greedy Python and focused test files compiled with the
+  project virtual environment, and `git diff --check` passed.
+
+No unsafe legacy driver import, Phase 2 loop, controller/service adapter,
+container/image, Kubernetes resource, launcher, experiment JSONL/CSV, Docker,
+kind, kubectl, cluster mutation, traffic, commit, or push occurred. Frozen
+`IBG/`, `IBG_Hybrid/`, MILP, deployments, generated evidence, and unrelated
+worktree changes were preserved. The next action is Greedy Phase 2 only after
+a separate user request.
+
+## Greedy Phase 2 complete locally
+
+Updated: 2026-08-25. The stateful pure-Python slot and one-experiment gate is
+complete. Phase 3 has not started.
+
+Added `Greedy/slot_contracts.py`, `Greedy/simulation.py`,
+`Greedy/learning.py`, `Greedy/metrics.py`, `Greedy/runner.py`,
+`Greedy/oracle.py`, and `tests/test_greedy_phase2.py`. Updated only the typed
+Phase 2 source locations in `Greedy/comparison.py` plus the four required
+handoffs. No frozen source, runtime resource, deployment, generated evidence,
+or unrelated worktree file was changed.
+
+One pure slot now:
+
+- accepts an explicit flow order or derives the exact active Hybrid
+  `blake2b-hybrid-flow-order-v1` order with a local RNG;
+- calls the Phase 1 exhaustive immediate policy once and preserves its `N`
+  sequential decisions and final loads;
+- creates and validates exactly `2*N` selected observations and `N` measured
+  selected-pair records, with `K-2` bypasses per flow;
+- conditions selected samples and predictions on final assigned load;
+- separates physical and observation streams and uses the exact convolved
+  likelihood;
+- updates only selected replicas with the frozen posterior/`0.8` retention
+  rule and retains the learned snapshot for the next slot;
+- records predicted, physical-only realized, processing, measured-pair, raw
+  end-to-end/reference, strict 80-ms SLA count/unrounded excess, Jain,
+  maximum-belief-change, strict `<0.04` equilibrium, placement timing, and
+  feedback/validation timing; and
+- performs no print, log, JSONL, CSV, HTTP, container, or Kubernetes action.
+
+The deterministic physical/observation key includes experiment, slot, flow,
+stage, replica, final load, and component. Canonical experiment ID 1 matches
+the current Hybrid component seed payload exactly; noncanonical pure fixture
+IDs receive an explicit namespace. `profile_seed` is excluded from order,
+policy, and component draws. Environment identity comes from the complete
+materialized hidden-state/observation-seed map and its fingerprint.
+
+`run_greedy_experiment` executes exactly one experiment per call, retains one
+policy/cache and evolving beliefs across slots, exits early on equilibrium, or
+completes exactly the explicit positive `max_iterations`. The explicit oracle
+replays captured results without stochastic redraw and checks an independent
+serial immediate-policy enumeration. Normal slots do not invoke it and do not
+double-solve.
+
+Phase 2 revalidated active comparison behavior at HEAD
+`19229c274038db440f3cfdd62ed2102ea4c2c545`. No mathematical or canonical
+one-experiment seed value drifted. Active Hybrid's component seed source has no
+separate experiment field; Greedy preserves its exact bytes for canonical
+experiment 1 and versions only the noncanonical pure-fixture extension. Exact
+source locations and blobs plus reuse/adapt/exclude classifications are in
+`ARCHITECTURE.md`.
+
+Verification completed:
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/pytest -q
+  tests/test_greedy_phase0.py tests/test_greedy_phase1.py
+  tests/test_greedy_phase2.py`: 58 passed.
+- The focused unchanged compatibility command ran all eight latency-model
+  tests, two Hybrid Phase 0 Ready/seed cases, three Phase 1 action/oracle cases,
+  three Phase 2 tie/hidden-state/oracle cases, and eight Phase 5
+  order/observation/jitter/SLA/learning/fairness/continuity/failure cases:
+  24 passed.
+- All changed/new Greedy Python files compile with bytecode directed to `/tmp`.
+- The isolated Phase 2 import test passes in a clean temporary directory with
+  no stdout, stderr, or file creation.
+- `git diff --check` passes.
+
+Not verified and intentionally out of scope: Phase 3 Kernel adapters,
+controller/services, HTTP traffic, images, manifests, launcher lifecycle,
+JSONL/CSV, Docker/kind/kubectl, cluster state, live parity, scaling, and
+performance. Existing unrelated dirty worktree changes were preserved. The
+next action is Greedy Phase 3 only after a separate user request.
+
+## Greedy Phase 3 complete locally
+
+Updated: 2026-08-25. The Greedy-owned Kernel/HTTP adapter and finite-controller
+gate is complete. Phase 4 has not started.
+
+Added:
+
+- `Greedy/kernel_contracts.py`
+- `Greedy/kernel_kubernetes_discovery.py`
+- `Greedy/kernel_route_contracts.py`
+- `Greedy/kernel_route_execution.py`
+- `Greedy/kernel_flow_generator.py`
+- `Greedy/kernel_processor_service.py`
+- `Greedy/kernel_route_forwarder.py`
+- `Greedy/kernel_route_forwarder_service.py`
+- `Greedy/kernel_controller_config.py`
+- `Greedy/kernel_controller.py`
+- `Greedy/kernel_controller_service.py`
+- `Greedy/kernel_oracle.py`
+- `tests/test_greedy_phase3.py`
+
+Updated `Greedy/comparison.py` with the current Phase 3 matched timeout,
+client-ownership, request-count, route-command, and telemetry rows plus exact
+Hybrid/shared source audit records. No frozen `IBG/`, `IBG_Hybrid/`, MILP,
+deployment, generated evidence, or unrelated variant was changed.
+
+The implemented controller discovers exact public Running/Ready identity and
+`ceil(N/M)` capacity coverage, performs the existing Greedy placement once,
+and commits every sequential decision before traffic. It sends one complete
+slot envelope to the flow generator; the generator sends `N` selected routes
+concurrently, with one request per flow and two ordered already-selected hops.
+Arbitrary `K>=2`, nonconsecutive selected stages, complete `K-2` bypasses,
+final loads, route positions, next hops, and selected-pair telemetry are all
+explicitly correlated. Any incomplete, duplicate, mismatched, or failed route
+fails the slot before belief commit.
+
+The finite controller retains one synchronous discovery client, one
+synchronous controller-to-generator client, one policy/cache, and beliefs
+across slots. The flow-generator lifespan retains one asynchronous
+first-forwarder pool; direct tests alone have an ephemeral fallback. Public
+forwarders retain separate local-processor and 30-second downstream clients.
+All owners have idempotent exactly-once normal, partial-construction/start,
+request/slot-failure, and shutdown cleanup coverage. The accepted 10-second
+discovery, 30-second controller-to-generator, 10-second selected-route, ports
+8081/8080, and 30-second downstream/server keep-alive values did not drift.
+
+Selected-only learning and all Phase 2 metrics are unchanged. HTTP telemetry
+cannot change completed selection; observation jitter remains learning-only;
+physical latency remains the realized-utility input; measured pair latency
+remains raw-reference/SLA-only; strict raw latency `>80.0` ms, unrounded
+excess, Jain fairness, and strict `<0.04` equilibrium remain active. The
+finite controller runs exactly one experiment and stops at equilibrium or the
+explicit positive maximum. Injected monotonic timing covers discovery,
+admission/placement, route dispatch, data-plane wait, feedback/validation, and
+total slot duration.
+
+Explicit Pure/Kernel replay consumes the captured public input,
+observations, and pairs with no HTTP or stochastic redraw, and checks
+placements, loads, beliefs, utilities, SLA, fairness, and equilibrium while
+excluding timing/provenance. Ordinary execution does not import replay and
+does not duplicate the solve.
+
+Phase 3 audit facts:
+
+- repository HEAD: `19229c274038db440f3cfdd62ed2102ea4c2c545`;
+- no Phase 3 timeout, client, request/telemetry count, port, worker,
+  keep-alive, or matched resource drift;
+- exact source locations and blob IDs are recorded in `ARCHITECTURE.md` and
+  `Greedy/comparison.py`;
+- shared processor/forwarder behavior is reused; discovery, arbitrary-K
+  schemas, lifecycle, controller, timing, and replay are adapted behind
+  Greedy ownership; Hybrid policy/pool/output behavior is excluded.
+
+Verification completed:
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/pytest -q
+  tests/test_greedy_phase0.py tests/test_greedy_phase1.py
+  tests/test_greedy_phase2.py tests/test_greedy_phase3.py`: 102 passed.
+- The focused unchanged compatibility command ran all eight latency-model
+  tests plus selected Hybrid route, executor, discovery, lifecycle,
+  controller-failure, and shared-forwarder cases: 32 passed.
+- A clean temporary-directory import of all Phase 3 modules produced no
+  stdout, stderr, or files.
+- All changed/new Phase 3 Python files and the focused test compile with
+  bytecode directed to `/tmp`.
+- `git diff --check` passes.
+
+Not verified and intentionally out of scope: images, manifests, namespace,
+RBAC, ConfigMaps, controller Jobs, launcher lifecycle, JSONL/CSV, Docker,
+kind, kubectl, cluster state, live traffic, live Pure/Kernel parity, scaling,
+or performance. Existing unrelated dirty worktree changes were preserved. The
+next action is Greedy Phase 4 only after a separate user request.

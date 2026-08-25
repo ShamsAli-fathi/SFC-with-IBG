@@ -3097,3 +3097,552 @@ compiles, all seven Hybrid overlays render, and `git diff --check` passes. The
 netem command, and was loaded into both retained `ibg-hybrid` nodes. No
 manifest, StatefulSet, Pod, controller Job, or experiment traffic was started
 by the correction.
+
+## MILP Kernel large-profile persistence repair
+
+Status: complete locally on 2026-08-23.
+
+The 40-flow/3-stage/20-replica synthetic profile exposed the Kubernetes
+client-side-apply annotation limit before replica rollout. The launcher now
+uses server-side apply only for `milp-experiment-profile`. A server-side dry
+run accepted the exact requested 40x3x20 profile. The next user-owned action
+is to rerun the same MILP command; no retry, rollout, or solver run was
+started by this repair.
+
+### MILP large-solve controller-memory repair
+
+Status: complete locally on 2026-08-23. The first 40x3x20 controller Job was
+OOM-killed at its former 1-GiB hard limit before traffic. The finite controller
+Job now requests 8 GiB and has a 16-GiB memory limit; CPU remains 100m/2 CPUs
+and every serving resource is unchanged. The next user-owned action is a
+single retry of the same 40x3x20 command, with no image rebuild required.
+
+### MILP intentional scale-down profile-validation repair
+
+Status: complete locally on 2026-08-23. A user-requested 20-to-5 replica
+scale-down was incorrectly rejected because validation inspected replicas
+6--20 even though the rollout would remove them. Validation now covers only
+the retained 1--5 ordinal profiles. The exact current 20-to-5, profile-seed-50
+preflight passes read-only; the next user-owned action is the 10x3x5 retry.
+
+### MILP synthetic planning-link v2
+
+Status: complete locally on 2026-08-23. New synthetic-scale runs use a
+versioned deterministic 65.000--74.999-ms planning-coefficient range at
+0.001-ms resolution. The old 0.500--5.499-ms v1 generator remains available
+for historical reproduction. This changes only the MILP objective input and
+profile fingerprint; it does not add delay to Kubernetes traffic. The next
+user-owned action is a fresh synthetic-scale run with the desired dimensions.
+
+## Greedy final-baseline implementation roadmap
+
+Status: planned on 2026-08-24. Phase 0 contract work is complete; no policy,
+runtime, or live operation has begun. Phases proceed in order; each gate must
+be recorded before the next phase.
+
+### Greedy Phase 0: freeze the baseline and characterize the legacy folder
+
+Status: complete locally on 2026-08-24.
+
+Recommended intelligence level: `high`. Contract extraction is consequential,
+but this phase is bounded to documentation, legacy characterization, and frozen
+fixtures rather than new runtime behavior.
+
+- Phase preparation (when related material exists): reread the four current
+  handoffs and study `misc/vesal_tex.tex`, the bounded relevant portions of
+  `Greedy/*.py`, active policy-neutral IBG/Hybrid contracts, and their focused
+  tests. Record which legacy items are reusable, reference-only, or excluded
+  before changing code; do not read generated result files wholesale.
+- Convert the architecture and decision records into executable contract
+  fixtures for `pure-greedy-budgeted-l2-v1`, exactly two distinct selected
+  stages, `K-2` bypasses, no rejection, canonical joint-action tie-breaking,
+  selected-only learning, current Hybrid-compatible metrics, 80-ms raw
+  end-to-end SLA, and strict `<0.04` equilibrium.
+- Require explicit positive flow, stage, and per-stage replica dimensions with
+  no topology defaults. Freeze `10 flows / 3 stages / 5 replicas per stage`
+  only as the explicitly supplied canonical matched-comparison shape, and
+  exactly one run per launcher invocation. The target has no `--runs`
+  repetition option.
+- Characterize the current `Greedy/` files with bounded tests or tiny examples:
+  import-time execution, hard-coded dimensions/repetitions, active two-stage
+  budgeted selection, replica-zero behavior, legacy random streams, formulas,
+  and direct CSV writes.
+- Classify every legacy function as reuse-with-test, reference-only, or retire.
+  Treat the historical `range(1,30)` loop solely as a retired import hazard;
+  do not run its 29 executions of the 50-flow, 3-stage,
+  80-replicas-per-stage driver or generate legacy result files.
+- Freeze canonical input/output schemas, deterministic flow order and ties,
+  `ceil(N/M)` admission feasibility, per-slot selected-observation/pair counts,
+  and the Greedy/Hybrid compatibility matrix.
+
+Gate: a reviewed contract and characterization test set resolve every semantic
+ambiguity without changing `IBG/`, `IBG_Hybrid/`, MILP, Kubernetes, or results.
+
+Phase 0 result, corrected after the user's budget clarification:
+`Greedy/phase0_contract.py` now contains executable topology, budgeted joint
+action, sequential-load, two-hop slot, public-input, excluded-feature,
+active-semantics, and Greedy/Hybrid compatibility fixtures. The frozen version
+is `pure-greedy-budgeted-l2-v1`: every flow selects exactly two distinct stages
+and bypasses `K-2`; planning-link cost remains excluded from selection.
+The executable canonical matched-comparison configuration is explicitly
+10 flows, 3 stages, and 5 replicas per stage; it is not a default. The
+invocation contract requires explicit dimensions and permits exactly one run
+with no `--runs` mode. The smaller hand-checked slot fixture remains test-only.
+`Greedy/legacy_characterization.py` statically audits all seven historical
+Python files without importing them and classifies all 38 top-level callables
+and `Replica` methods as 5 reuse-with-compatibility-test, 14 reference-only,
+and 19 retire. Bounded tests demonstrate the active two-stage route, dormant
+replica-zero result and last-load mutation, retired 29-execution dimensions,
+mixed unseeded global random streams, historical inverse-latency utility,
+15-ms SLA excess, strict `<0.06` equilibrium, and direct CSV behavior without
+running the experiment or writing results. The 29-execution finding is retired
+legacy characterization and does not influence the target launcher lifecycle.
+
+The corrected Phase 0 gate passed with 13 Greedy tests and 17 selected existing
+IBG/Hybrid compatibility tests. The new modules import silently in a clean
+temporary directory and create no files. No frozen source, Kubernetes resource,
+generated evidence, or legacy file changed. Phase 1 is now the next action but
+has not started.
+
+### Greedy Phase 1: implement the pure policy core
+
+Status: complete locally on 2026-08-24.
+
+Recommended intelligence level: `xhigh`. This phase freezes the defining
+Greedy mathematics, feasibility, tie, load-update, and no-rejection behavior;
+subtle errors would invalidate every downstream comparison.
+
+- Phase preparation (when related material exists): study the Phase 0
+  fixtures, legacy Greedy scoring helpers, `IBG_Hybrid/expected_utility.py`,
+  the reusable memoization/identity portions of `IBG_Hybrid/policy.py`, and the
+  smallest relevant policy tests before applying this phase. Revalidate the
+  phase-relevant rows of `greedy-hybrid-matched-comparison-v1` against current
+  Hybrid code and record exact source versions. Explicitly list why lookahead
+  action enumeration and Monte Carlo code are not reused.
+- Make `Greedy` import-safe and add typed configuration, replica identity,
+  load-state, admission, decision, and policy-result contracts.
+- Make typed configuration require explicit positive `N`, `K`, and `M`, with
+  `K>=2`; do not define topology defaults.
+- Add a typed, versioned matched-comparison configuration fixture that
+  distinguishes required common inputs/resources from intentional policy-only
+  differences and rejects an incomplete or mismatched required row.
+- Precompute immutable canonical replica identities grouped by stage and the
+  canonical `L=2` action ordering once per configuration. Add
+  controller-lifetime deterministic utility memoization by exact
+  `(belief tuple, projected load)` with a measured bound or explicit clear
+  policy and cached/uncached equality tests. Do not copy Hybrid pruning,
+  activation, lookahead/MC structures, Pandas grids, or stochastic utility
+  samples.
+- Implement exhaustive immediate joint-action argmax for positive `N`, `M`,
+  and `K>=2`. Score each feasible two-stage action by the sum of its projected
+  expected stage utilities, apply both load updates sequentially by flow, use
+  canonical action ties, choose the best non-positive action, and fail
+  explicitly when no complete `L=2` action is feasible.
+- Keep expected-utility calculation deterministic and pure; inject randomness
+  only at the outer simulation/observation boundaries and never use global
+  Python or NumPy RNG state in the policy.
+- Add a transparent exhaustive/reference calculation for small fixtures and
+  tests proving the policy never calls Hybrid pruning/lookahead/MC or link
+  scoring.
+
+Gate: silent imports, dimension/property tests, hand-computed fixtures,
+tie/negative/capacity/error cases, reproducibility, compilation, and frozen
+Exact/Hybrid regression selections pass.
+
+Phase 1 result: added import-safe `Greedy/contracts.py`,
+`Greedy/expected_utility.py`, `Greedy/policy.py`, `Greedy/comparison.py`, and a
+minimal package marker. Configuration requires explicit `N`, `K`, and `M`;
+10x3x5 exists only as the typed canonical matched-comparison fixture. The
+policy precomputes canonical identities/action ordering, exhaustively scores
+all feasible complete L=2 actions at projected loads, commits two loads per
+real flow, preserves exact canonical ties and non-positive selection, and
+fails only on empty complete feasibility. Its Greedy-owned adapter uses the
+active deterministic IBG latency utility, and its exact-key 4096-entry bounded
+LRU is covered by cached/uncached equality and clear/eviction tests.
+
+The Phase 1 Hybrid audit used repository HEAD
+`19229c274038db440f3cfdd62ed2102ea4c2c545` and exact locations recorded in
+`ARCHITECTURE.md`; no Phase 1 comparison resource or admission value drifted.
+Hybrid immutable identity, Ready/capacity, expected-utility, precomputation,
+memoization, and strict-tie patterns were adapted behind Greedy ownership.
+Hybrid pruning, activation, planning-link scoring, lookahead/MC continuations,
+policy/depth/worker options, and process pools were not reused.
+
+The complete Phase 0/1 Greedy suite passes 34 tests, 17 selected unchanged
+latency/Hybrid semantic tests pass, and the focused unchanged Hybrid public
+Ready/capacity test passes. Silent clean-directory imports, changed-Python
+compilation, and `git diff --check` pass. No experiment loop, runtime adapter,
+controller, container, manifest, launcher, JSONL/CSV writer, Docker/Kubernetes
+command, traffic, or live mutation was added or run. Phase 2 is next and has
+not started.
+
+### Greedy Phase 2: build the stateful pure experiment loop
+
+Status: complete locally on 2026-08-25.
+
+Recommended intelligence level: `xhigh`. Belief continuity, selected-only
+learning, separated randomness, stopping, metrics, and replay must remain
+consistent across multiple dependent slots.
+
+- Phase preparation (when related material exists): study the accepted
+  Greedy policy fixtures plus the phase-relevant portions of
+  `IBG_Hybrid/runner.py`, `simulation.py`, `slot_contracts.py`, `oracle.py`,
+  and their focused Phase 0--2 tests. Map only policy-neutral slot, learning,
+  metric, timing, and replay contracts before editing, and refresh their rows
+  in the matched-comparison matrix from the current implementation.
+- Add one complete pure slot: seeded flow order, budgeted `L=2` greedy
+  placement, explicit `K-2` bypasses, final-load accounting, selected-only
+  observations, belief update, metrics, equilibrium, and retained beliefs
+  across iterations.
+- Reuse or adapt only policy-neutral active contracts for latency, separated
+  jitter, likelihood, physical-only realized utility, measured-pair reference
+  metrics, end-to-end SLA count/excess, fairness, and timing.
+- Add a finite pure experiment runner that stops on equilibrium or exactly
+  `--max-iterations`, with no file or console side effects in the policy core.
+- Execute exactly one experiment per runner invocation; do not add an outer
+  repetition loop or `--runs` mode.
+- Add dependency-injected monotonic timing seams for placement and feedback,
+  plus a captured-input serial oracle. The oracle is mandatory in validation
+  but is not run a second time by an ordinary production slot.
+- Implement the Hybrid-compatible root/flow-order seed derivation and a shared
+  deterministic keyed physical/observation schedule for paired fixtures. Prove
+  common keys produce equal draws, route-dependent unused draws stay outside
+  learning, and no stochastic input enters policy selection.
+- Validate exactly `N` two-hop routes, `2*N` selected observations, and `N`
+  selected-pair slots; bypassed and idle replicas emit no learning sample.
+
+Gate: deterministic multi-slot fixtures prove belief continuity, selected-only
+learning, metric arithmetic, stopping behavior, arbitrary `K>=2` stage counts, and no
+legacy formula or global-RNG leakage.
+
+Phase 2 result: added import-safe `Greedy/slot_contracts.py`,
+`Greedy/simulation.py`, `Greedy/learning.py`, `Greedy/metrics.py`,
+`Greedy/runner.py`, `Greedy/oracle.py`, and `tests/test_greedy_phase2.py`.
+One pure slot preserves the Phase 1 policy result, validates `N` placements,
+`2*N` selected final-load observations, `N` selected-pair records, and `K-2`
+bypasses per flow, then applies selected-only learning and active separated
+metrics. One finite experiment retains beliefs/policy cache across slots and
+stops on strict equilibrium or exactly the explicit positive iteration limit.
+
+Flow ordering reproduces active Hybrid's versioned root/slot derivation. The
+component schedule has immutable experiment/slot/flow/stage/replica/load/type
+keys and separate local physical/observation generators. Canonical experiment
+ID 1 produces the exact active Hybrid component seed bytes; other pure fixture
+IDs are explicitly namespaced. The sorted hidden-state/observation-seed map is
+fingerprinted independently, and profile seed enters neither order nor draws.
+
+The explicit captured replay path consumes frozen observations/pairs without
+redrawing and checks an independently enumerated immediate-policy reference,
+cached/uncached placements, loads, beliefs, and metrics. Ordinary slot
+execution calculates once and does not import or invoke replay. The Phase 2
+Hybrid audit used repository HEAD
+`19229c274038db440f3cfdd62ed2102ea4c2c545`; exact locations/blob versions and
+the canonical-experiment source-shape clarification are recorded in
+`ARCHITECTURE.md`. No active semantic constant drifted.
+
+The complete Phase 0--2 Greedy suite passes 58 tests and the selected unchanged
+IBG/Hybrid compatibility suite passes 24 tests. Silent clean-directory
+imports, changed-Python compilation outside the workspace, and
+`git diff --check` pass. No HTTP/controller, container, manifest, launcher,
+JSONL/CSV, Docker, kind, kubectl, cluster, traffic, commit, or push work was
+performed. Phase 3 is next and has not started.
+
+### Greedy Phase 3: add Greedy-owned Kernel adapters and controller
+
+Status: complete locally on 2026-08-25.
+
+Recommended intelligence level: `xhigh`. Persistent client ownership,
+concurrent route execution, sequential policy state, telemetry correlation,
+failure cleanup, and Pure/Kernel parity cross several asynchronous boundaries.
+
+- Phase preparation (when related material exists): study
+  `IBG_Hybrid/kernel_kubernetes_discovery.py`, `kernel_controller.py`,
+  `kernel_route_execution.py`, `kernel_flow_generator.py`, the shared
+  processor/forwarder services, and focused infrastructure/lifecycle tests.
+  Document every reused lifecycle, pool, timeout, concurrency, request-count,
+  and close-on-failure rule before implementing the Greedy-owned adapters.
+  Populate those exact current values in the comparison matrix before editing.
+- Add Greedy discovery, controller configuration, route execution, flow-
+  generator, processor/forwarder adapters, and a finite controller CLI behind
+  the pure runner's ports.
+- Give the finite controller one persistent synchronous discovery client and
+  one persistent synchronous flow-generator client across all slots. Give the
+  flow-generator lifespan one persistent asynchronous first-forwarder pool;
+  retain import-safe one-call fallback only for direct test callers and close
+  every owned client exactly once on success, partial construction, or error.
+- Preserve the private processor on 8081, public two-worker forwarder on 8080,
+  selected two-hop routes, one concurrent flow-generator request per slot,
+  readiness filtering, identity/load correlation, and fail-whole-slot errors.
+- Keep processor hidden state and observation seeds outside controller inputs;
+  prove traffic and telemetry cannot influence the already-completed choice.
+- Add a captured-observation Pure/Kernel replay path for semantic validation,
+  not as a policy option.
+- Keep the `N` already-selected routes concurrent but all placement/load
+  decisions sequential. Add controller/discovery, admission/dispatch,
+  data-plane-wait, and feedback timing boundaries without changing the request
+  count, payload, timeout, or failure contract.
+
+Gate: local service tests cover health/warmup, budgeted two-hop routing,
+arbitrary valid stage pairs, bypass absence, concurrency, pair counts, failure
+propagation, selected-only telemetry, and
+zero-drift pure replay without Kubernetes.
+
+Phase 3 result: added Greedy-owned public Kernel contracts, exact Ready
+discovery, arbitrary-K two-hop route/telemetry schemas, concurrent route
+execution, flow-generator/processor/forwarder service boundaries, public
+controller configuration, a finite stateful controller, and explicit captured
+Pure/Kernel replay. The controller makes one unchanged sequential policy call
+per slot before traffic, sends one complete slot request, and the generator
+sends exactly one concurrent first-forwarder request per flow while preserving
+ordered hops and complete `K-2` bypass absence.
+
+One persistent synchronous discovery client and one persistent synchronous
+flow-generator client span the finite controller. One persistent asynchronous
+first-forwarder pool spans the flow-generator lifespan; direct executor tests
+alone may use a one-call ephemeral client. Public forwarders retain distinct
+local-processor and 30-second downstream clients. Normal completion,
+construction/start failure, request/slot failure, and repeated shutdown have
+idempotent exactly-once cleanup coverage. Active matched timeouts remain
+10/30/10 seconds for discovery, controller-to-generator, and selected-route
+requests.
+
+Complete telemetry validation precedes selected-only learning and belief
+commit. Phase 2 physical/observation separation, exact likelihood, physical
+realized utility, raw pair/reference metrics, strict raw 80-ms SLA and
+unrounded excess, Jain fairness, strict `<0.04` equilibrium, and finite
+one-experiment stopping remain unchanged. Captured replay performs no HTTP or
+stochastic redraw and ordinary controller execution does not invoke it.
+
+The audit used repository HEAD
+`19229c274038db440f3cfdd62ed2102ea4c2c545`; exact Phase 3 Hybrid/shared
+source locations, blobs, classifications, resources, payload semantics,
+timeouts, worker/client ownership, and request counts are recorded in
+`ARCHITECTURE.md` and `Greedy/comparison.py`. No relevant value drifted.
+
+The complete Greedy Phase 0--3 suite passes 102 tests. The focused unchanged
+compatibility selection passes 32 tests. Clean-directory silent imports,
+changed-Python compilation outside the workspace, and `git diff --check`
+pass. No image, manifest, launcher, JSONL/CSV, Docker/kind/kubectl, network, or
+live-cluster work was performed. Phase 4 is next and has not started.
+
+### Greedy Phase 4: create isolated images and Kubernetes resources
+
+Status: planned after Phase 3.
+
+Recommended intelligence level: `high`. The policy is unchanged and the work
+is bounded by established image, manifest, RBAC, security, resource, and
+offline-render contracts.
+
+- Phase preparation (when related material exists): study the active
+  `deploy/hybrid-kubernetes` Dockerfiles/base manifests, the one-worker kind
+  config, offline-wheelhouse checks, resource-preflight code, and focused
+  manifest/security tests. Extract policy-neutral patterns only; establish
+  Greedy names and the Hybrid-matched Greedy controller resource envelope
+  explicitly. Read values from current manifests and focused render tests;
+  fail preparation if they disagree with the recorded matrix.
+- Add Greedy-owned lean service/controller images with reproducible offline
+  dependency inputs and no Hybrid solver/MC dependencies in the service image.
+- Add the `greedy-testbed` namespace, namespace-scoped discovery RBAC, one
+  flow-generator Deployment, generated headless Service/StatefulSet resources
+  for contiguous stages, generated profile/controller ConfigMaps, and one
+  finite controller Job outside the long-running base.
+- Add the exact one-control-plane/one-worker kind definition and worker-only
+  selectors for every Greedy workload. Preserve current accepted serving
+  resources, probes, process counts, and keep-alive boundaries.
+- Do not copy Hybrid's four-process controller. Give the sequential Greedy
+  controller the same comparison resources as Hybrid—request `2 CPU/256Mi`,
+  limit `4 CPU/1Gi`—and include them in allocatable-versus-request worker
+  preflight. Preserve the current Hybrid serving resources exactly. Reject
+  one-sided resource changes unless a new matched A/B profile is authorized.
+- Add offline Kustomize/render and security checks for image ownership,
+  service-account token scope, non-root containers, and absence of foreign
+  namespaces/resources.
+
+Gate: all supported static examples render and parse offline; tests reject
+wrong namespace, labels, node placement, RBAC, image, profile mounts, stage
+gaps, and a controller Job applied before serving readiness. No live cluster is
+required or authorized by this phase.
+
+### Greedy Phase 5: implement persistent lifecycle and dynamic topology
+
+Status: planned after Phase 4.
+
+Recommended intelligence level: `xhigh`. Reconciliation must safely handle
+bootstrap, no-op reuse, interrupted transitions, scale up/down, profile order,
+resource refusal, and retained-Pod preservation without targeting other work.
+
+- Phase preparation (when related material exists): study
+  `scripts/run_hybrid_kernel_phase4.py`,
+  `IBG_Hybrid/kernel_rollout.py`, runtime-profile expansion, dynamic-topology
+  evidence, and the smallest skip-build/rollout tests. Write down applicable
+  command ordering and the Greedy-specific differences for arbitrary stages;
+  refresh CLI, rollout, Ready, build-state, and warm-state comparison rows from
+  the active Hybrid launcher before editing.
+- Add `scripts/run_greedy_kernel.py` with `run`, read-only `preflight`, and
+  explicit `cleanup` actions. Production `run` requires explicit positive
+  `--flow`, `--stage`, and `--replica` values, requires positive
+  `--max-iterations` and nonnegative `--profile-seed`, and
+  supports
+  `--rollout-batch-size`, `--csv`, `--parity-replay`, and `--skip-build`.
+  It creates exactly one controller Job/run and exposes no `--runs` option.
+- Generate deterministic, versioned runtime profiles for any requested
+  contiguous stage/replica shape and validate the deployed source before any
+  transition. Keep hidden states fixed throughout one run.
+- Implement flow-only reconciliation, append-only stage/replica expansion,
+  bounded all-stage replica batches, safe high-ordinal replica scale-down, and
+  safe highest-stage removal without contracting below two stages. Preserve
+  retained Pod UIDs/restarts on the
+  no-build path.
+- Make equal topology/profile input a serving no-op. On normal bootstrap build
+  both lean images; on a proven controller-only or service-only maintenance
+  change, permit only the affected image to be rebuilt/loaded. `--skip-build`
+  also skips offline-wheelhouse validation and never forces a serving restart,
+  but still validates node-local image identities and reconciles state.
+- Make cluster/context/namespace/image/node/resource inventory fail closed.
+  Wait for both kind nodes on first bootstrap and exact Ready ordinal coverage
+  after every mutation before the controller Job.
+
+Gate: mocked command-order tests cover fresh bootstrap, equal reuse, flow-only
+change, stage/replica up and down transitions, interrupted transition recovery,
+resource refusal, profile drift, foreign ownership, missing images, and the
+rule that `--skip-build` cannot bootstrap.
+
+### Greedy Phase 6: add console, JSONL, and CSV evidence
+
+Status: planned after Phase 5.
+
+Recommended intelligence level: `high`. Output work is schema-heavy but
+bounded by the accepted Hybrid presentation, explicit Greedy provenance, and
+golden lifecycle/CSV validation.
+
+- Phase preparation (when related material exists): study Hybrid console,
+  lifecycle persistence, CSV storage, control-plane footprint/wall-time
+  summary code, launcher CLI help, and their golden/schema tests. Freeze a
+  Greedy field-by-field compatibility table before changing output code. Fold
+  it into the versioned matched-comparison matrix, including instrumentation
+  flags and comparison-profile/source/image fingerprints.
+- Match current Hybrid human output for launcher progress, initial/final belief
+  tables, completed iteration metrics, and equilibrium status, using Greedy
+  names and no hidden-state display.
+- Emit one validated `GREEDY_SLOT_EVIDENCE=` record after every fully completed
+  slot, then persist a host-side run-start/iteration/run-complete JSONL lifecycle
+  under `runs/`.
+- Implement `--parity-replay {0,1}` with default zero. Evidence records whether
+  replay was requested and performed and records a result only when performed;
+  validation commands force it on and fail closed on any mismatch.
+- Implement `--csv 1` as post-validation host export to `figures/Greedy/` for
+  time, end-to-end SLA count/excess, raw reference aggregate utility, fairness,
+  identity-aligned belief tables, controller phase wall times, and compatible
+  controller payload/message footprint. Keep default `--csv 0` JSONL-only.
+- Include policy/dimension/profile/image/environment provenance and reject
+  incomplete, mixed-version, arithmetically inconsistent, or duplicate-run
+  evidence before writing reports.
+- Persist every matched-comparison row, actual Pod resource specification,
+  exact runtime-profile fingerprint, seeds/schedule versions, warm/build state,
+  node allocatable resources, and actual controller CPU/RSS/throttling fields.
+
+Gate: golden console tests, JSONL lifecycle/schema tests, atomic CSV tests,
+unequal-run alignment, no-controller-volume checks, and CLI help/default/error
+tests pass. Persistence must be behavior-neutral.
+
+### Greedy Phase 7: complete local integration and regression gates
+
+Status: planned after Phase 6.
+
+Recommended intelligence level: `xhigh`. This phase must synthesize failures
+across policy, state, HTTP lifecycles, manifests, topology, persistence, and
+frozen-baseline compatibility without masking unrelated worktree changes.
+
+- Phase preparation (when related material exists): reread the four current
+  handoffs and the Greedy test/manifest inventory, then select the smallest
+  phase-relevant frozen Exact/Hybrid compatibility groups. Re-read the active
+  Hybrid sources/manifests named by the comparison matrix and verify every
+  required row still agrees. Confirm prohibited files and live operations
+  before running the local gate.
+- Run the full Greedy suite, focused policy-neutral Exact/Hybrid compatibility
+  selections, import/compile checks, all Greedy Kustomize renders, manifest
+  security checks, JSONL/CSV round trips, and `git diff --check`.
+- Exercise small shapes with two and multiple configured stages/replicas and
+  explicit stage/replica scale transitions through fake executors.
+- Prove persistent-client reuse and cleanup, bounded utility-cache behavior,
+  concurrent-route/sequential-placement ordering, equal-topology no-op,
+  no-build process preservation, default no-replay behavior, forced-replay
+  equality, and exact wall-time/footprint aggregation with fake clocks.
+- Run a local comparison-envelope gate proving required rows match current
+  Hybrid fixtures and intentional policy rows are the only differences.
+- Prove no source or evidence under frozen `IBG/`, `IBG_Hybrid/`, MILP,
+  `Chart/`, `Tutorial.md`, `Report.md`, or `EVIDENCE_SUMMARY.md` changed as part
+  of the Greedy implementation.
+
+Gate: local verification is complete and `STATUS.md` records exact test counts
+and limitations. This phase makes no live Kubernetes or performance claim.
+
+### Greedy Phase 8: separately authorized small live Kernel gate
+
+Status: blocked on future explicit live authorization, not an implementation
+blocker for Phases 0--7.
+
+Recommended intelligence level for the user: `high`; the user may prefer
+`xhigh` if read-only preflight reveals drift or command redesign is needed. The
+normal path is a small, explicitly authorized execution of an already locally
+accepted plan.
+
+- Phase preparation (required after live authorization): reread the current
+  `STATUS.md`, Greedy launcher/preflight help, rendered resources, and Phase 7
+  test evidence immediately before proposing exact commands. Re-read the
+  active Hybrid comparison manifests, launcher arguments, and focused resource
+  tests before accepting the rendered Greedy envelope. Inspect the live cluster
+  read-only first; do not reuse a stale Hybrid command or assume the cluster is
+  clean.
+- Start from a clean or read-only-preflighted dedicated `greedy` cluster; never
+  target or delete Exact, Hybrid, or MILP clusters.
+- Perform one normal offline build/load/bootstrap at a small declared topology,
+  suggested `3 flows x 3 stages x 2 replicas`, then run a finite experiment.
+- Verify exact node/namespace ownership, worker-only placement, Ready coverage,
+  complete routes/observations/pairs, zero restarts, console/JSONL completion,
+  forced `--parity-replay 1`, phase wall times, and optional CSV export from
+  the same validated trace.
+- Verify rendered and live Greedy controller resources equal the active Hybrid
+  comparison envelope and record actual CPU/RSS/throttling evidence. This is a
+  configuration gate, not yet a cross-policy performance claim.
+- Repeat unchanged with `--skip-build` and prove serving Pod/image preservation
+  while replacing only the finite controller Job.
+
+Gate: the small live run and no-build repeat pass every declared functional and
+evidence check. This establishes a lightweight Kernel baseline, not multi-host,
+line-rate, DPDK/VPP, or large-scale performance.
+
+### Greedy Phase 9: separately authorized scale and final-baseline acceptance
+
+Status: planned after Phase 8.
+
+Recommended intelligence level: `xhigh`. Persistent-cluster transitions,
+matched-input reasoning, performance evidence, and final comparison claims
+require the strongest cross-phase analysis and provenance discipline.
+
+- Phase preparation (required after separate scale authorization): study the
+  accepted Phase 8 trace/status, current Greedy rollout/profile implementation,
+  worker resource envelope, and the exact target comparison's input contract.
+  Re-read the current Hybrid launcher, manifests, comparison trace provenance,
+  and focused evidence validators. Record matched and unmatched inputs before
+  proposing scale or A/B commands.
+- Validate bounded replica scale-up and intentional scale-down on the persistent
+  Greedy cluster, then validate one stage-count expansion and contraction while
+  preserving retained lower identities and profiles.
+- Run the intended final comparison shape, initially suggested to match an
+  accepted Hybrid topology such as `10x3x5`, with recorded hidden-state map,
+  flow/order seeds, keyed stochastic-input schedule, runtime versions, matched
+  controller/serving resources, lifecycle state, and complete provenance.
+- Report policy runtime, utility, end-to-end SLA count/excess, fairness,
+  convergence, phase wall times, and control-plane evidence without claiming
+  same-input Hybrid comparison unless the complete state and stochastic inputs
+  are actually matched.
+- Keep production parity replay off for timing runs after the forced-replay
+  correctness gate. Do not add a Greedy process pool or change resources for
+  only one baseline. Any resource variation requires a separately reviewed,
+  versioned matched Greedy/Hybrid A/B with unchanged inputs and serving Pods.
+
+Gate: scale transitions, repeatability, replay, and the declared final evidence
+pass; documentation records the supported dimensions and any exploratory
+larger runs separately. Optional robustness or new baseline-comparison features
+require a new roadmap.
