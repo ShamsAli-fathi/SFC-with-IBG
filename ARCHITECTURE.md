@@ -3688,7 +3688,7 @@ exact recorded map, rather than seed spelling alone, is proven identical.
 
 ### Dynamic topology and launcher contract
 
-The planned entry point is `scripts/run_greedy_kernel.py run`. It requires
+The entry point is `scripts/run_greedy_kernel.py run`. It requires
 explicit positive `--flow`, `--stage`, and `--replica` values on every
 invocation, with `--stage` constrained to at least two. There are no runtime
 topology defaults. A positive
@@ -3720,13 +3720,13 @@ controller traffic.
 
 ### Console and host-side evidence
 
-Launcher progress will follow the Hybrid presentation grammar with a Greedy
+Launcher progress follows the Hybrid presentation grammar with a Greedy
 label: selected topology, profile allocation, image mode, worker-resource
 preflight, each rollout target/Ready gate, controller start/completion, trace
-path, and CSV directory. Controller output will print the same aligned initial
+path, and CSV directory. Controller output prints the same aligned initial
 and final belief tables and the same completed-iteration block for outcome
 mode, predicted/realized/physical/raw utility, end-to-end SLA count and excess,
-fairness, elapsed time, and equilibrium. It will not print hidden state.
+fairness, elapsed time, and equilibrium. It does not print hidden state.
 
 Complete machine evidence uses the prefix `GREEDY_SLOT_EVIDENCE=` and retains
 full flow order, placements, loads, selected observations, pair telemetry,
@@ -3743,6 +3743,33 @@ When `--csv 1` is enabled, the validated JSONL trace is exported host-side to
 reference-utility meaning for comparison; JSONL retains complete provenance.
 CSV generation is downstream of trace validation and must not change policy,
 traffic, learning, metrics, or Kubernetes state.
+
+Phase 6 implements this boundary in Greedy-owned modules. The finite controller
+emits evidence only after a slot has passed route correlation, selected-only
+learning, metric assembly, timing validation, and belief commit. Default
+`--parity-replay 0` records requested/performed as false and has no parity
+result. `--parity-replay 1` repeats only the pure policy, captured selected
+learning, and metric calculation from the already captured public inputs and
+telemetry; it performs no HTTP request or stochastic redraw and fails the Job
+on divergence.
+
+The host projector keeps the prefixed machine line out of the human console,
+validates every record, and writes a one-run lifecycle by atomic replacement.
+The start record includes the complete versioned matched-comparison rows,
+dimension and seed schemes, runtime-profile fingerprint, warm/build state,
+exact service/controller source fingerprints and image IDs, worker
+allocatable resources, and the four actual Pod resource envelopes. Each slot
+includes final-load-conditioned selected observations, measured pair records,
+strict raw-latency SLA arithmetic, phase wall times, application-body/message
+footprint when CSV is enabled, and controller CPU/RSS/cgroup-throttling deltas.
+Hidden state and physical/observation seeds are rejected from evidence.
+
+CSV export validates the complete JSONL first, rejects duplicate run columns
+or malformed retained tables before replacement, and blank-pads unequal run
+lengths in metric and footprint tables. Beliefs remain identity-aligned rows.
+Controller Pods mount only their public input ConfigMap; result ownership stays
+on the host. Source changes invalidate `--skip-build`, preventing retained old
+images from being assigned new source provenance.
 
 ### Greedy execution-efficiency boundary
 
@@ -4380,3 +4407,98 @@ found. Hybrid policy/pruning/lookahead/Monte Carlo/process-pool behavior,
 repetition, evidence, and unrelated baseline lifecycle targets remain excluded.
 All Phase 5 execution coverage uses injected fake command executors; no live
 container or Kubernetes action is part of this completed gate.
+
+### Greedy Phase 7 local integration boundary
+
+Greedy Phase 7 completed locally on 2026-08-27 without changing the Phase 1
+policy, Phase 2 mathematics, Phase 3 HTTP/controller boundary, Phase 4
+resources/manifests, Phase 5 lifecycle, or Phase 6 evidence schemas. The new
+`tests/test_greedy_phase7.py` layer composes the already-owned boundaries as a
+single offline acceptance gate instead of adding another runtime component.
+
+The integration gate exercises explicit `3x2x1`, `5x2x2`, and `5x4x3`
+configurations. For every shape it proves complete sequential L2 placement,
+`2*N` total load assignments, `ceil(N/M)` admission, `K-2` bypasses,
+cached/uncached equality, bounded cache size, complete processor-private
+profiles, deterministic long-running/controller renders, parse round trips,
+and the one-control-plane/one-worker kind document. Existing Phase 0--6 tests
+remain the detailed gates for fake lifecycle transitions, persistent clients,
+route concurrency with ordered hops, replay, metrics, JSONL, CSV, security,
+and ownership.
+
+Controller resource sampling is explicitly regression-bound as semantically
+inert: two finite fake-adapter experiments with identical public inputs and
+telemetry produce identical placements, loads, beliefs, utilities, SLA,
+fairness, equilibrium, and stop reason whether CPU/RSS/cgroup throttling
+snapshots are collected or absent. Only the optional resource result field
+differs. A clean-directory aggregate import test loads every Greedy-owned
+Phase 0--6 module except unsafe historical modules, including never importing
+`Greedy/main.py`; it proves silent, file-free, global Python-RNG-neutral, and
+global NumPy-RNG-neutral imports.
+
+The final `greedy-hybrid-matched-comparison-v1` audit is fixed to repository
+HEAD `8e5114e6e9101057da48255962afa65900c6c8d0`. The gate hashes all 35 unique
+active Hybrid/shared source and manifest paths represented by the 45 Phase
+3--7 audit records and compares them to their recorded Git blobs. All 52
+required comparison rows remain equal and ordered; all 11 intentional
+policy-only differences remain explicitly unequal and exhaustive. The final
+semantic source entries are:
+
+| Boundary | Active source location | Git blob | Disposition |
+| --- | --- | --- | --- |
+| Fixed two-stage action | `IBG_Hybrid/contracts.py:12-54` | `4f50cb74b56f3739a9dba1be59b80091f8f20732` | Adapt behind Greedy identities |
+| Public Ready/capacity admission | `IBG_Hybrid/phase0_contract.py:234-307` | `45eb84512efa7457648ae8667b30e7f83f25f304` | Adapt; exclude planning/candidate feasibility |
+| Flow order, selected feedback, and outcomes | `IBG_Hybrid/runner.py:198-218,281-386,544-630` | `b60ddcc0c7d55d7c6d3cc55e2308c194d24389c3` | Adapt behind Greedy slot/metric contracts |
+| Keyed physical/observation schedules | `IBG_Hybrid/simulation.py:21-161` | `1b9f59f208885874b57e06e1d92fcabeeccc2db4` | Adapt separate local streams |
+
+Policy-neutral latency, likelihood, learning, selected processor/forwarder
+behavior, resource constants, and offline validation remain reusable only
+through their recorded boundaries. Greedy-owned schemas, identities,
+arbitrary-stage routes, lifecycle, evidence, and reporting remain adaptations.
+Hybrid pruning, activation, planning-link selection, future-flow lookahead,
+Monte Carlo, policy/process-pool controls, and repeated runs remain excluded.
+No Phase 7 live or performance architecture exists; Phase 8 is a separately
+authorized live validation action.
+
+## Greedy Phase 8 small live Kernel gate
+
+The separately authorized Phase 8 gate validates the existing architecture on
+one dedicated kind cluster: cluster `greedy`, context `kind-greedy`, namespace
+`greedy-testbed`, one control-plane node, and one worker labeled
+`greedy.workload-node=true`.  The accepted explicit topology is `3x3x2` with
+fixed `L=2`, profile seed 17, profile fingerprint
+`53de63eb180316c2fc4b9f5f02b078ed`, rollout batch size 1, forced captured
+replay, and CSV export.  Every serving and finite controller Pod ran only on
+the dedicated worker.
+
+Three live-only compatibility gaps were repaired without changing policy or
+metric semantics:
+
+- Kubernetes allocatable memory reported as non-integral-MiB `Ki` is
+  conservatively floored to whole MiB for admission preflight.
+- local image provenance resolves the linux/amd64 OCI config digest from
+  `docker image save`; this is the identity exposed by containerd after
+  `kind load`, unlike Docker's local manifest/list ID on the active host.
+- evidence accepts at most the mathematically bounded `0.002` unit-mass drift
+  from four independently rounded three-decimal belief entries, preserving the
+  learner output verbatim while rejecting larger drift.  Lifecycle source
+  fingerprints now produce the 64-hex value already required by the Phase 6
+  trace schema.
+
+The normal run built and loaded both offline images, reconciled replicas in
+single-replica batches, waited for exact Ready coverage, executed 14 slots,
+reached equilibrium, passed captured Pure/Kernel replay for every slot, and
+persisted one validated JSONL lifecycle plus CSV.  The unchanged skip-build
+run built and loaded no images, executed 10 slots to equilibrium, and replaced
+only the finite controller Job.  All seven retained serving Pod UIDs, service
+image identities, and zero restart counts were unchanged.  The controller Job
+UID changed as intended.
+
+Live resources match the active Hybrid comparison envelope: processor
+`50m/128Mi` request and `1 CPU/768Mi` limit, forwarder `25m/128Mi` and
+`1 CPU/256Mi`, generator `50m/128Mi` and `1 CPU/768Mi`, and controller
+`2 CPU/256Mi` and `4 CPU/1Gi`.  Runtime profiles remain mounted only into
+private processors; the controller mounts only public inputs.  Controller
+process CPU/RSS and cgroup-throttling samples are evidence-only.  No
+multi-host, line-rate, DPDK/VPP, scale, or cross-policy performance
+architecture is established by this gate.

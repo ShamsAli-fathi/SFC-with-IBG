@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import io
 import inspect
 import json
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 import random
 import subprocess
 import sys
+import tarfile
 
 import numpy as np
 import pytest
@@ -409,6 +411,30 @@ class FakeGreedyCluster:
                 identity = self.local_image_ids.get(image)
                 return "" if identity is None else "sha256:" + identity + "\n"
             return "{}\n"
+        if command[:3] == ("docker", "image", "save"):
+            image = command[-1]
+            identity = self.local_image_ids.get(image)
+            if identity is None:
+                raise RuntimeError(f"missing local image: {image}")
+            archive_path = Path(command[command.index("--output") + 1])
+            manifest_digest = "e" * 64
+            documents = {
+                "index.json": {
+                    "manifests": [
+                        {"digest": f"sha256:{manifest_digest}"}
+                    ]
+                },
+                f"blobs/sha256/{manifest_digest}": {
+                    "config": {"digest": f"sha256:{identity}"}
+                },
+            }
+            with tarfile.open(archive_path, mode="w") as archive:
+                for name, payload in documents.items():
+                    encoded = json.dumps(payload).encode("utf-8")
+                    member = tarfile.TarInfo(name)
+                    member.size = len(encoded)
+                    archive.addfile(member, io.BytesIO(encoded))
+            return ""
         if command[:2] == ("docker", "build"):
             image = command[command.index("--tag") + 1]
             self.local_image_ids[image] = (
@@ -623,6 +649,8 @@ def test_cli_requires_every_dimension_and_finite_input_and_has_no_runs():
         parse_args(complete + ["--rollout-batch-size", "0"])
     with pytest.raises(SystemExit):
         parse_args(complete + ["--csv", "2"])
+    with pytest.raises(SystemExit):
+        parse_args(complete + ["--parity-replay", "2"])
 
 
 def test_phase5_hybrid_audit_is_exact_versioned_and_classified():
@@ -637,7 +665,7 @@ def test_phase5_hybrid_audit_is_exact_versioned_and_classified():
     assert "exclude" in findings.lower() or "no series" in findings.lower()
 
 
-def test_launch_flags_are_validated_but_phase6_behavior_is_absent():
+def test_launch_flags_remain_public_only_and_cli_excludes_hybrid_controls():
     launch = make_launch(csv=1, parity_replay=1)
     assert (launch.csv, launch.parity_replay) == (1, 1)
     controller = launch.deployment.controller_document
@@ -648,7 +676,16 @@ def test_launch_flags_are_validated_but_phase6_behavior_is_absent():
     assert "--policy" not in source
     assert "--mc-workers" not in source
     assert "ProcessPool" not in source
-    assert "jsonl" not in source.lower()
+    help_result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "run_greedy_kernel.py"), "run", "--help"],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert "--csv {0,1}" in help_result.stdout
+    assert "--parity-replay {0,1}" in help_result.stdout
+    assert "reserved" not in help_result.stdout.lower()
 
 
 def test_profile_allocator_matches_hybrid_prefix_and_preserves_expansion():
@@ -1027,12 +1064,26 @@ def test_profile_fingerprint_drift_refuses_before_mutation():
 
 
 def test_change_scoped_build_rebuilds_only_controller_and_not_serving(monkeypatch):
-    cluster = FakeGreedyCluster()
     current = image_source_fingerprints()
     monkeypatch.setattr(
         "Greedy.kernel_lifecycle.image_source_fingerprints",
         lambda: {"service": current["service"], "controller": "changed-controller"},
     )
+    skip_cluster = FakeGreedyCluster()
+    with pytest.raises(GreedyLifecycleError, match="source provenance changed"):
+        run_greedy_lifecycle(
+            make_launch(skip_build=True),
+            execute=skip_cluster.execute,
+            validate_wheelhouses=skip_cluster.wheelhouses,
+        )
+    assert not any(
+        command[:2] in (("docker", "build"), ("kind", "load"))
+        or "apply" in command
+        or "scale" in command
+        for command in skip_cluster.commands
+    )
+
+    cluster = FakeGreedyCluster()
     result = run_greedy_lifecycle(
         make_launch(),
         execute=cluster.execute,
@@ -1126,7 +1177,7 @@ def test_repeated_fake_execution_is_deterministic_and_inputs_are_immutable():
     assert first_result == second_result
     def normalized(commands):
         return tuple(
-            tuple("<manifest>" if index > 0 and command[index - 1] == "-f" else part
+            tuple("<temporary>" if index > 0 and command[index - 1] in {"-f", "--output"} else part
                   for index, part in enumerate(command))
             for command in commands
         )

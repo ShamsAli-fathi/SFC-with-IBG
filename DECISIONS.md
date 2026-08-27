@@ -3173,4 +3173,126 @@ Accepted and implemented locally: 2026-08-25.
   ambiguous or foreign inventory.
 - Phase 5 testing uses injected fake executors only. No Docker, kind, kubectl,
   network, cluster, traffic, experimental result, JSONL, or CSV action is
-  authorized by this decision. Greedy Phase 6 is next and remains unstarted.
+  authorized by this decision. Phase 6 was separately scoped and is recorded
+  below.
+
+### Greedy Phase 6 evidence and reporting decisions
+
+Accepted and implemented locally: 2026-08-26.
+
+- Keep human presentation and machine evidence separate. The controller prints
+  Greedy-labeled Hybrid-compatible belief and completed-slot blocks, then emits
+  exactly one validated `GREEDY_SLOT_EVIDENCE=` line after each committed slot.
+  Hidden processor state and stochastic seeds are never printed or persisted.
+- Make a host JSONL lifecycle mandatory after every successful launcher run.
+  Use one `run_started`, contiguous `iteration_completed` records, and one
+  `run_completed` under `runs/greedy-experiment-<UTC>.jsonl`. Validate the
+  entire lifecycle and atomic temporary-file round trip before replacing the
+  destination. Keep controller Pods free of result volumes.
+- Preserve production replay default zero. Disabled replay records requested
+  and performed false and omits a result. Enabled replay recomputes policy,
+  selected-only learning, and metrics from captured public inputs and captured
+  telemetry only, performs no HTTP or redraw, and fails closed on mismatch.
+- Validate complete placement/load chains, selected observation and pair
+  coverage, separated physical/observation values, exact likelihood vectors,
+  all predicted/physical/raw utility aggregates, strict raw latency above
+  80 ms, unrounded excess, Jain fairness, belief change, and strict `<0.04`
+  equilibrium before persistence.
+- Record all matched-comparison rows, seed/schedule versions, dimensions,
+  runtime-profile fingerprint, lifecycle warm/build state, full role-owned
+  source fingerprints and image IDs, worker allocatable, and actual Pod
+  requests/limits. Record per-slot controller CPU, current RSS, and cgroup CPU
+  throttling. Enable application-body/message footprint only when CSV is
+  requested; belief exchange remains zero because beliefs stay controller-local.
+- Make `--csv 0` JSONL-only. `--csv 1` exports the validated trace host-side to
+  `figures/Greedy/` using the accepted six quality/belief files plus phase,
+  payload, message, CPU, RSS, and throttling footprint files. Preserve raw
+  end-to-end reference utility in `aggregate_utility.csv`, identity-align
+  belief rows, blank-pad unequal metric runs, reject malformed retained files,
+  and refuse duplicate run hashes before the first replacement.
+- Treat output as behavior-neutral. Instrumentation cannot enter selection,
+  telemetry correlation, learning, utility, SLA, fairness, equilibrium, or
+  stop decisions. The real-flow solve remains once per slot unless replay is
+  explicitly enabled.
+- Refuse `--skip-build` whenever current controller/service source fingerprints
+  differ from retained image provenance. A no-build invocation may never claim
+  that an older node-local image represents newly changed source.
+- Reuse only policy-neutral presentation/layout concepts. Adapt Hybrid output,
+  lifecycle, replay, CSV, and footprint schemas under Greedy ownership, and
+  exclude Hybrid policy controls, pruning, lookahead, Monte Carlo, process
+  pools, repetition, netem, and unrelated diagnostic boundaries.
+- Phase 6 is local-only. Tests write only temporary JSONL/CSV fixtures; no
+  Docker, kind, kubectl, network, live cluster, traffic, or production result
+  operation is authorized or performed. Greedy Phase 7 local integration is
+  next.
+
+### Greedy Phase 7 local-integration decisions
+
+Accepted and completed locally: 2026-08-27.
+
+- Treat Phase 7 as a verification layer, not a feature phase. Add no new
+  policy, runtime, manifest, lifecycle, diagnostic, persistence, or reporting
+  behavior.
+- Bind the comparison envelope to repository HEAD
+  `8e5114e6e9101057da48255962afa65900c6c8d0`. Hash every active source or
+  manifest represented by the Phase 3--7 audits and fail when any recorded
+  blob drifts. Preserve the 52 equal required rows and exactly 11 declared
+  policy-only differences.
+- Classify reusable behavior only at policy-neutral boundaries; keep
+  Greedy-owned identity, arbitrary-stage route, lifecycle, and evidence
+  adaptations; continue excluding Hybrid pruning, activation, planning-link
+  selection, lookahead, Monte Carlo, process pools, policy CLI, and repeated
+  runs.
+- Exercise multiple small explicit shapes, including `K=2`, `K>2`, one and
+  multiple replicas, and nontrivial `ceil(N/M)` capacity. Render and parse the
+  long-running resources, finite controller Job, and kind shape entirely in
+  memory.
+- Make controller CPU/RSS/cgroup-throttling instrumentation explicitly
+  semantics-neutral by comparing complete finite pure experiment results with
+  and without injected samples. Instrumentation may change only its optional
+  evidence field.
+- Extend retained-CSV refusal to duplicate headers and over-wide rows. Keep all
+  persistence fixtures under pytest temporary directories and create no
+  repository experiment output.
+- Aggregate-import every new Greedy-owned Phase 0--6 module in a clean
+  directory while preserving global Python and NumPy RNG state. Never import
+  unsafe legacy `Greedy/main.py` or the historical CSV/report modules.
+- Preserve pre-existing unrelated worktree changes. Phase 7 may modify only
+  the Greedy comparison audit, its focused integration test, and the four
+  handoff documents.
+- Keep Phase 7 offline-only. Do not invoke Docker, kind, kubectl, Kubernetes,
+  a registry, network traffic, live controller execution, or performance
+  measurement. Phase 8 remains a separately authorized live gate.
+
+## Greedy Phase 8 decisions
+
+Accepted on 2026-08-27 after explicit live authorization.
+
+- Accept `3 flows x 3 stages x 2 replicas`, fixed `L=2`, profile seed 17,
+  rollout batch 1, `--parity-replay 1`, and `--csv 1` as the small live gate.
+  This is an explicit test shape, not a runtime default or final scale.
+- Accept mechanically copied, manifest-validated local Hybrid wheel caches as
+  the Greedy offline wheelhouses because the Greedy cache was absent and both
+  versioned service/controller wheel manifests matched exactly.  No network
+  download or registry pull was authorized or performed.
+- Parse Kubernetes `Ki` allocatable quantities by conservatively flooring to
+  whole MiB.  Refuse malformed, negative, or unsupported units as before.
+- Compare node-local images using the selected linux/amd64 OCI config digest,
+  not Docker's possibly different local manifest/list ID.  Keep the local tag
+  existence check and reject missing or ambiguous OCI descriptors.
+- Preserve frozen three-decimal learning output in evidence.  Permit only
+  `abs(sum(belief)-1) <= 0.0020000001`, the rounding bound for four entries;
+  do not renormalize evidence and continue rejecting greater drift.
+- Produce 256-bit/64-hex lifecycle source fingerprints, matching the already
+  frozen Phase 6 persistence validator.  Do not weaken provenance validation.
+- Accept both completed runs: the normal bootstrap reached equilibrium after
+  14 slots and the unchanged skip-build repeat after 10.  Every slot passed
+  forced captured replay and exact `N`, `2N`, `N` placement/observation/pair
+  cardinalities.
+- Accept the skip-build preservation proof: all retained serving Pod UIDs,
+  image IDs, and restart counts were unchanged; only the finite controller Job
+  UID changed.  Leave the dedicated Greedy cluster running for the separately
+  authorized Phase 9 transition gate.
+- Treat recorded timing and CPU/RSS/throttling values as configuration and
+  operability evidence only.  Phase 8 authorizes no Greedy-versus-Hybrid
+  performance conclusion, larger scale, resource retuning, or new diagnostic.

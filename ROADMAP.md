@@ -3497,7 +3497,8 @@ started.
 
 ### Greedy Phase 5: implement persistent lifecycle and dynamic topology
 
-Status: complete locally on 2026-08-25. Phase 6 has not started.
+Status: complete locally on 2026-08-25. Phase 6 completed separately on
+2026-08-26; Phase 7 is now next.
 
 Recommended intelligence level: `xhigh`. Reconciliation must safely handle
 bootstrap, no-op reuse, interrupted transitions, scale up/down, profile order,
@@ -3565,10 +3566,12 @@ Hybrid lifecycle/profile/rollout compatibility tests. Import, externalized
 bytecode compilation, and whitespace checks pass. All lifecycle tests use fake
 executors; no Docker, kind, kubectl, network, cluster, traffic, JSONL, or CSV
 operation was performed. Phase 6 is the next separately authorized phase.
+That separately authorized Phase 6 is now complete below; this sentence records
+the Phase 5 stopping boundary.
 
 ### Greedy Phase 6: add console, JSONL, and CSV evidence
 
-Status: planned after Phase 5.
+Status: complete locally on 2026-08-26. Phase 7 is next and has not started.
 
 Recommended intelligence level: `high`. Output work is schema-heavy but
 bounded by the accepted Hybrid presentation, explicit Greedy provenance, and
@@ -3604,9 +3607,36 @@ Gate: golden console tests, JSONL lifecycle/schema tests, atomic CSV tests,
 unequal-run alignment, no-controller-volume checks, and CLI help/default/error
 tests pass. Persistence must be behavior-neutral.
 
+Phase 6 result: the finite controller now prints Greedy-labeled aligned belief
+tables and completed-slot predicted, physical, raw reference, SLA, fairness,
+timing, and equilibrium output. After every committed slot it emits one
+validated `GREEDY_SLOT_EVIDENCE=` document. Default replay remains disabled
+without a fabricated result; explicit replay recomputes the public policy,
+captured selected-only learning, and metrics without HTTP or stochastic redraw
+and fails closed on mismatch.
+
+The host launcher privately projects machine evidence, persists one atomic
+`run_started`/iteration/`run_completed` JSONL lifecycle, and optionally exports
+the six accepted wide files plus controller phase, payload/message, CPU, RSS,
+and cgroup-throttling footprint under `figures/Greedy/`. Validation covers the
+complete sequential load chain, selected observations and pair records, all
+utility aggregates, strict raw-latency SLA arithmetic, belief continuity,
+complete matched-comparison rows, resources, source/image fingerprints, and
+worker allocatable. Hidden state and stochastic seeds are excluded. Controller
+Pods retain no result volume. Changed source now invalidates `--skip-build`
+rather than relabeling an older image with new provenance.
+
+The local gate passes 159 Greedy tests through Phase 6 and 35 focused unchanged
+Hybrid console/replay/lifecycle/CSV/footprint compatibility checks. Clean
+imports, externalized bytecode compilation, and whitespace checks pass. Tests
+write output fixtures only under temporary directories. No Docker, kind,
+kubectl, network, cluster, traffic, repository JSONL/CSV, or live parity action
+was performed. Phase 7 local integration is the next separately scoped action.
+
 ### Greedy Phase 7: complete local integration and regression gates
 
-Status: planned after Phase 6.
+Status: complete locally on 2026-08-27. Phase 8 remains separately authorized
+and has not started.
 
 Recommended intelligence level: `xhigh`. This phase must synthesize failures
 across policy, state, HTTP lifecycles, manifests, topology, persistence, and
@@ -3636,10 +3666,29 @@ frozen-baseline compatibility without masking unrelated worktree changes.
 Gate: local verification is complete and `STATUS.md` records exact test counts
 and limitations. This phase makes no live Kubernetes or performance claim.
 
+Phase 7 result: `tests/test_greedy_phase7.py` adds a seven-test integration
+layer for the full current comparison-envelope hash audit, explicit
+`3x2x1`/`5x2x2`/`5x4x3` policy-and-render shapes, cached/uncached equality,
+controller-resource measurement neutrality, malformed retained CSV refusal,
+and aggregate clean-directory import safety. The existing detailed Phase 0--6
+tests continue to cover fake bootstrap/reuse/scale/recovery/refusal ordering,
+client ownership, route concurrency, replay, timing/footprint, JSONL/CSV, and
+manifest security.
+
+The complete Greedy Phase 0--7 gate passes 166 tests. A focused unchanged
+policy-neutral Exact/Hybrid selection passes 61 tests. The audit verifies all
+35 unique active source/manifest paths in the 45 Phase 3--7 source records at
+HEAD `8e5114e6e9101057da48255962afa65900c6c8d0`, with no drift across 52
+required comparison rows or the 11 explicit policy differences. Direct CLI
+help and missing-required-argument behavior pass without entering lifecycle
+execution. Clean imports, externalized bytecode compilation, whitespace, and
+frozen-path status checks pass. No Docker, kind, kubectl, Kubernetes, network,
+traffic, live evidence, repository result output, or performance operation was
+performed.
+
 ### Greedy Phase 8: separately authorized small live Kernel gate
 
-Status: blocked on future explicit live authorization, not an implementation
-blocker for Phases 0--7.
+Status: complete on 2026-08-27 after separate live authorization.
 
 Recommended intelligence level for the user: `high`; the user may prefer
 `xhigh` if read-only preflight reveals drift or command redesign is needed. The
@@ -3670,6 +3719,41 @@ accepted plan.
 Gate: the small live run and no-build repeat pass every declared functional and
 evidence check. This establishes a lightweight Kernel baseline, not multi-host,
 line-rate, DPDK/VPP, or large-scale performance.
+
+#### Greedy Phase 8 implementation result
+
+The read-only preflight found no Greedy cluster and left the stopped `ibg` and
+`ibg-hybrid` clusters untouched.  After validating compatible local offline
+wheel manifests, the launcher built and loaded both Greedy images without
+network access, created exactly one control-plane and one worker, labeled only
+the worker, applied the owned namespace/resources, expanded `3x3x1` to the
+declared `3x3x2` in batches of one, and started the finite Job only after exact
+Ready coverage.
+
+Live execution exposed and bounded three environment/schema defects:
+non-integral-MiB Kubernetes `Ki` allocatable memory, Docker-versus-containerd
+image identity, and rounded belief/source-fingerprint evidence validation.
+Focused tests cover each correction.  Policy, learning, utility, SLA,
+fairness, equilibrium, resources, routes, and manifests were not changed.
+
+The accepted normal trace is
+`runs/greedy-experiment-20260827T095759.183839Z.jsonl`: 14 slots, equilibrium,
+forced parity true for every slot, complete 3/6/3 placement/observation/pair
+cardinalities, both images built/loaded, and one controller Job.  The accepted
+unchanged skip-build trace is
+`runs/greedy-experiment-20260827T095942.447983Z.jsonl`: 10 slots,
+equilibrium, parity true for every slot, no build/load, and one replacement
+Job.  The second run preserved all seven serving Pod UIDs, their node image
+IDs, and zero restarts.  CSV export validated 31 files, unique headers, two
+unequal-length run columns with padding, and aligned replica identities.
+
+Verification: 176 Greedy Phase 0--8 tests and 113 focused unchanged
+Exact/Hybrid compatibility tests pass.  Live resources, security contexts,
+RBAC, worker-only placement, processor-private profile mounts,
+controller-public inputs, console completion, JSONL round trips, real resource
+samples, and zero final serving restarts pass.  Initial connection-refused
+readiness events occurred only while containers started; exact readiness later
+passed.  Phase 9 remains separately authorized and has not started.
 
 ### Greedy Phase 9: separately authorized scale and final-baseline acceptance
 
