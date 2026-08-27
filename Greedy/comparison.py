@@ -8,8 +8,11 @@ from typing import TypeAlias
 from .contracts import GreedyConfiguration
 
 
-GREEDY_HYBRID_MATCHED_COMPARISON_VERSION = (
+LEGACY_GREEDY_HYBRID_MATCHED_COMPARISON_VERSION = (
     "greedy-hybrid-matched-comparison-v1"
+)
+GREEDY_HYBRID_MATCHED_COMPARISON_VERSION = (
+    "greedy-hybrid-matched-comparison-v2"
 )
 
 ComparisonValue: TypeAlias = str | int | bool
@@ -22,8 +25,7 @@ REQUIRED_MATCHED_FIELDS = (
     "stage_budget",
     "jobs_per_paired_run",
     "max_iterations",
-    "admission_capacity_per_replica",
-    "ready_capacity_semantics",
+    "ready_identity_semantics",
     "materialized_runtime_profile_map",
     "runtime_profile_fingerprint",
     "root_seed",
@@ -65,12 +67,25 @@ REQUIRED_MATCHED_FIELDS = (
     "warm_cold_state",
     "measurement_boundaries",
     "parity_replay_setting",
+    "control_plane_footprint_setting",
+    "source_fingerprint_provenance",
+    "image_identity_provenance",
+)
+
+LEGACY_V1_REQUIRED_MATCHED_FIELDS = (
+    *REQUIRED_MATCHED_FIELDS[:6],
+    "admission_capacity_per_replica",
+    "ready_capacity_semantics",
+    *REQUIRED_MATCHED_FIELDS[7:],
 )
 
 
 GREEDY_PHASE3_HYBRID_AUDIT_HEAD = "19229c274038db440f3cfdd62ed2102ea4c2c545"
 GREEDY_PHASE4_HYBRID_AUDIT_HEAD = "f2e0065204570d9631f26953c94729b451ff92b5"
 GREEDY_PHASE5_HYBRID_AUDIT_HEAD = "f2e0065204570d9631f26953c94729b451ff92b5"
+GREEDY_PHASE6_HYBRID_AUDIT_HEAD = "8e5114e6e9101057da48255962afa65900c6c8d0"
+GREEDY_PHASE7_HYBRID_AUDIT_HEAD = "8e5114e6e9101057da48255962afa65900c6c8d0"
+GREEDY_PHASE81_HYBRID_AUDIT_HEAD = "ae95e74497339b6ce49d96a709409489ef287fd5"
 
 
 @dataclass(frozen=True)
@@ -146,6 +161,100 @@ GREEDY_PHASE5_HYBRID_SOURCE_AUDIT = (
     Phase5HybridSourceAudit("one-control-plane/one-worker kind topology", "deploy/hybrid-kubernetes-phase4-small/kind-config.yaml:1-8", "e756783e3923bf87d69b9df2dc0df613ea1ba727", "adapt", "Retain exactly two nodes and worker-only workload opportunity under Greedy names and labels."),
 )
 
+
+@dataclass(frozen=True)
+class Phase6HybridSourceAudit:
+    boundary: str
+    source_location: str
+    git_blob: str
+    disposition: str
+    finding: str
+
+
+GREEDY_PHASE6_HYBRID_SOURCE_AUDIT = (
+    Phase6HybridSourceAudit("completed-slot console grammar", "IBG_Hybrid/console_output.py:1-120", "6a3f9ef99b54e5cc4aa4311f3c5ddc45e437a9ed", "adapt", "Preserve aligned belief tables and predicted/realized/physical/raw/SLA/excess/fairness/time/equilibrium labels under Greedy naming."),
+    Phase6HybridSourceAudit("controller presentation and prefixed evidence", "IBG_Hybrid/kernel_controller_cli.py:80-167", "38bc74e203f3b53cf796e0de45899e717d3783f1", "adapt", "Emit human output plus one hidden machine record after each committed slot; omit Hybrid policy/worker CLI."),
+    Phase6HybridSourceAudit("slot evidence and optional replay", "IBG_Hybrid/kernel_phase4_validation.py:177-489", "64f44a827e6e0915fa545062926c272e66bdb5f9", "adapt", "Default replay off records requested/performed false and no result; enabled captured replay fails closed without HTTP or redraw."),
+    Phase6HybridSourceAudit("controller footprint", "IBG_Hybrid/control_plane_footprint.py:1-267", "9ac212bcfab417c7c33cd20fdf8578ed2d14eff6", "adapt", "Preserve application-body categories, message counts, monotonic phase boundaries, and controller-local zero belief exchange."),
+    Phase6HybridSourceAudit("host JSONL lifecycle and CSV export", "scripts/run_hybrid_kernel_phase4.py:1935-2500,3310-3665", "c571940408423410df91480470a79f0007a0f68e", "adapt", "Use Greedy prefix, schema, paths, one-run contract, atomic writes, explicit provenance, and no Hybrid series/netem/policy controls."),
+    Phase6HybridSourceAudit("atomic wide CSV primitives", "IBG_Hybrid/csv_storage.py:1-118", "67d0e8c8c2d73ff61722ee02d2365234dcc47a70", "adapt", "Preserve deterministic wide columns, blank unequal-run padding, identity-aligned beliefs, malformed-file refusal, and atomic replacement."),
+)
+
+
+@dataclass(frozen=True)
+class Phase7HybridSourceAudit:
+    boundary: str
+    source_location: str
+    git_blob: str
+    disposition: str
+    finding: str
+
+
+GREEDY_PHASE7_HYBRID_SOURCE_AUDIT = (
+    Phase7HybridSourceAudit(
+        "fixed two-stage action contract",
+        "IBG_Hybrid/contracts.py:12-54",
+        "4f50cb74b56f3739a9dba1be59b80091f8f20732",
+        "adapt",
+        "Retain the matched L=2 action shape behind Greedy-owned identities; Hybrid candidate and activation structures remain excluded.",
+    ),
+    Phase7HybridSourceAudit(
+        "public Ready and assigned-flow admission",
+        "IBG_Hybrid/phase0_contract.py:234-307",
+        "45eb84512efa7457648ae8667b30e7f83f25f304",
+        "adapt",
+        "Retain public Ready/current-load/declared-capacity feasibility; planning-link, activation, rollout, and candidate feasibility remain excluded.",
+    ),
+    Phase7HybridSourceAudit(
+        "flow order, selected-only feedback, and outcome semantics",
+        "IBG_Hybrid/runner.py:198-218,281-386,544-630",
+        "b60ddcc0c7d55d7c6d3cc55e2308c194d24389c3",
+        "adapt",
+        "Retain the versioned flow-order seed, final-load selected observations, physical utility, measured-pair raw metrics, and strict slot accounting behind Greedy-owned contracts.",
+    ),
+    Phase7HybridSourceAudit(
+        "keyed physical and observation schedules",
+        "IBG_Hybrid/simulation.py:21-161",
+        "1b9f59f208885874b57e06e1d92fcabeeccc2db4",
+        "adapt",
+        "Retain separate deterministic per-identity physical and observation streams without global RNG use; route-dependent unused samples remain excluded from feedback.",
+    ),
+)
+
+
+@dataclass(frozen=True)
+class Phase81HybridSourceAudit:
+    boundary: str
+    source_location: str
+    git_blob: str
+    disposition: str
+    finding: str
+
+
+GREEDY_PHASE81_HYBRID_SOURCE_AUDIT = (
+    Phase81HybridSourceAudit(
+        "active Hybrid Ready/capacity feasibility",
+        "IBG_Hybrid/phase0_contract.py:232-289",
+        "45eb84512efa7457648ae8667b30e7f83f25f304",
+        "exclude",
+        "Hybrid retains declared max_assigned_flows and rejects projected loads above it; Greedy v2 retains only the public Ready check.",
+    ),
+    Phase81HybridSourceAudit(
+        "active Hybrid topology-derived admission capacity",
+        "IBG_Hybrid/kernel_profile_expansion.py:587-600",
+        "8f10eb51ac4fce23a693ccda783f5828f60422d2",
+        "exclude",
+        "Hybrid still derives ceil(num_flows/num_replicas); this is an unresolved comparison mismatch and is not copied into Greedy v2.",
+    ),
+    Phase81HybridSourceAudit(
+        "Hybrid capacity characterization tests",
+        "tests/test_ibg_hybrid_phase0.py:167-228; tests/test_ibg_hybrid_kernel_dynamic_topology.py:198-211",
+        "c46ebb91100d85d29e7e24afe0a3e641a694e482/d8edc6944dd5314de819eddadd67e7dd82467cf1",
+        "exclude",
+        "Unchanged tests confirm the active Hybrid capacity rejection and ceil-derived runtime metadata remain current.",
+    ),
+)
+
 INTENTIONAL_POLICY_DIFFERENCE_FIELDS = (
     "selection_objective",
     "candidate_pruning",
@@ -159,6 +268,8 @@ INTENTIONAL_POLICY_DIFFERENCE_FIELDS = (
     "real_flow_decision_order",
     "runs_cli",
 )
+
+UNRESOLVED_COMPARISON_MISMATCH_FIELDS = ("assigned_flow_admission",)
 
 
 @dataclass(frozen=True)
@@ -192,25 +303,58 @@ class IntentionalPolicyDifference:
 
 
 @dataclass(frozen=True)
+class UnresolvedComparisonMismatch:
+    name: str
+    greedy_value: str
+    hybrid_value: str
+    consequence: str
+    source_location: str
+
+    def __post_init__(self) -> None:
+        if not all(
+            (
+                self.name,
+                self.greedy_value,
+                self.hybrid_value,
+                self.consequence,
+                self.source_location,
+            )
+        ):
+            raise ValueError("unresolved comparison mismatches require complete values")
+        if self.greedy_value == self.hybrid_value:
+            raise ValueError("an unresolved comparison mismatch must actually differ")
+        if ":" not in self.source_location:
+            raise ValueError("unresolved comparison mismatches require source locations")
+
+
+@dataclass(frozen=True)
 class GreedyHybridMatchedComparison:
     version: str
     required_matches: tuple[MatchedComparisonField, ...]
     intentional_policy_differences: tuple[IntentionalPolicyDifference, ...]
+    unresolved_mismatches: tuple[UnresolvedComparisonMismatch, ...]
 
     def __post_init__(self) -> None:
         matches = tuple(self.required_matches)
         differences = tuple(self.intentional_policy_differences)
+        mismatches = tuple(self.unresolved_mismatches)
         object.__setattr__(self, "required_matches", matches)
         object.__setattr__(self, "intentional_policy_differences", differences)
+        object.__setattr__(self, "unresolved_mismatches", mismatches)
         if self.version != GREEDY_HYBRID_MATCHED_COMPARISON_VERSION:
             raise ValueError("unexpected Greedy/Hybrid comparison version")
         match_names = tuple(item.name for item in matches)
         difference_names = tuple(item.name for item in differences)
+        mismatch_names = tuple(item.name for item in mismatches)
         if match_names != REQUIRED_MATCHED_FIELDS:
             raise ValueError("comparison fixture has incomplete or unordered required fields")
         if difference_names != INTENTIONAL_POLICY_DIFFERENCE_FIELDS:
             raise ValueError(
                 "comparison fixture has incomplete or unordered policy differences"
+            )
+        if mismatch_names != UNRESOLVED_COMPARISON_MISMATCH_FIELDS:
+            raise ValueError(
+                "comparison fixture has incomplete or unordered unresolved mismatches"
             )
 
     def matched_value(self, name: str) -> ComparisonValue:
@@ -249,8 +393,7 @@ CANONICAL_MATCHED_COMPARISON = GreedyHybridMatchedComparison(
         _match("stage_budget", 2, "IBG_Hybrid/contracts.py:35-54"),
         _match("jobs_per_paired_run", 1, "scripts/run_hybrid_kernel_phase4.py:3587-3593"),
         _match("max_iterations", "same-explicit-positive-value", "scripts/run_hybrid_kernel_phase4.py:3502-3507"),
-        _match("admission_capacity_per_replica", 2, "IBG_Hybrid/kernel_profile_expansion.py:587-600"),
-        _match("ready_capacity_semantics", "ready-and-current-load-plus-one-within-declared-capacity", "IBG_Hybrid/phase0_contract.py:252-289"),
+        _match("ready_identity_semantics", "exact-running-ready-canonical-identity-coverage", "IBG_Hybrid/phase0_contract.py:252-289; IBG_Hybrid/kernel_kubernetes_discovery.py:182-245"),
         _match("materialized_runtime_profile_map", "same-identity-aligned-hidden-state-and-observation-seed-map", "IBG_Hybrid/kernel_profile_expansion.py:476-760; Greedy/slot_contracts.py:55-96"),
         _match("runtime_profile_fingerprint", "same-materialized-map-fingerprint", "Greedy/slot_contracts.py:80-96"),
         _match("root_seed", "same-explicit-root-seed", "IBG_Hybrid/runner.py:660-720"),
@@ -292,6 +435,9 @@ CANONICAL_MATCHED_COMPARISON = GreedyHybridMatchedComparison(
         _match("warm_cold_state", "same-recorded-serving-pod-retention-state", "scripts/run_hybrid_kernel_phase4.py:2700-3001"),
         _match("measurement_boundaries", "same-jsonl-timing-and-controller-footprint-boundaries", "scripts/run_hybrid_kernel_phase4.py:1988-2230"),
         _match("parity_replay_setting", "same-explicit-zero-or-one-setting", "scripts/run_hybrid_kernel_phase4.py:3526-3534"),
+        _match("control_plane_footprint_setting", "same-csv-driven-explicit-zero-or-one-setting", "scripts/run_hybrid_kernel_phase4.py:3319-3337,3635-3647"),
+        _match("source_fingerprint_provenance", "same-recorded-service-and-controller-role-fingerprint-contract", "scripts/run_hybrid_kernel_phase4.py:1935-2230"),
+        _match("image_identity_provenance", "same-recorded-node-local-full-sha256-contract", "scripts/run_hybrid_kernel_phase4.py:482-690,1935-2230"),
     ),
     intentional_policy_differences=(
         IntentionalPolicyDifference("selection_objective", "exhaustive-immediate-stage-utility-sum", "pruned-lookahead-focal-final-load", "Defining policy difference."),
@@ -305,5 +451,14 @@ CANONICAL_MATCHED_COMPARISON = GreedyHybridMatchedComparison(
         IntentionalPolicyDifference("policy_process_pool", "absent", "persistent-four-process-lookahead-pool", "Greedy decisions remain sequential."),
         IntentionalPolicyDifference("real_flow_decision_order", "sequential-immediate-commit", "sequential-with-parallel-focal-evaluation", "Both commit real flows sequentially; only Hybrid parallelizes focal work."),
         IntentionalPolicyDifference("runs_cli", "absent-one-run-per-invocation", "optional---runs", "Paired comparison invokes Hybrid once and Greedy never repeats internally."),
+    ),
+    unresolved_mismatches=(
+        UnresolvedComparisonMismatch(
+            "assigned_flow_admission",
+            "none-ready-only",
+            "ceil-N-over-M-declared-capacity",
+            "A final same-input performance comparison requires a separately accepted common physical/admission rule for both policies.",
+            "IBG_Hybrid/phase0_contract.py:232-289; IBG_Hybrid/kernel_profile_expansion.py:587-600",
+        ),
     ),
 )

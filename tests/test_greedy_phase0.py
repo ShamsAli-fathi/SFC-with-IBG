@@ -69,17 +69,18 @@ def _load_legacy_module(filename: str):
     return module
 
 
-def test_phase0_contract_version_dimensions_capacity_and_counts():
-    assert GREEDY_POLICY_CONTRACT_VERSION == "pure-greedy-budgeted-l2-v1"
+def test_phase0_contract_version_dimensions_and_counts():
+    assert GREEDY_POLICY_CONTRACT_VERSION == "pure-greedy-budgeted-l2-v2"
     assert GREEDY_SELECTION_BUDGET == 2
     assert GREEDY_ACTION_SCORE_MODE == "sum-immediate-expected-stage-utility-v1"
     assert SMALL_HAND_CHECKED_TOPOLOGY_FIXTURE.stages == (1, 2, 3)
-    assert SMALL_HAND_CHECKED_TOPOLOGY_FIXTURE.admission_capacity_per_replica == 2
+    assert "admission_capacity_per_replica" not in dir(
+        SMALL_HAND_CHECKED_TOPOLOGY_FIXTURE
+    )
     assert SMALL_HAND_CHECKED_TOPOLOGY_FIXTURE.expected_route_count == 3
     assert SMALL_HAND_CHECKED_TOPOLOGY_FIXTURE.expected_selected_observation_count == 6
     assert SMALL_HAND_CHECKED_TOPOLOGY_FIXTURE.expected_consecutive_pair_count == 3
     assert SMALL_HAND_CHECKED_TOPOLOGY_FIXTURE.bypassed_stages_per_action == 1
-    assert GreedyTopologyFixture(5, 3, 2).admission_capacity_per_replica == 3
     with pytest.raises(ValueError, match="positive"):
         GreedyTopologyFixture(0, 2, 1)
     with pytest.raises(TypeError, match="integer"):
@@ -97,7 +98,6 @@ def test_phase0_dimensions_are_explicit_and_10x3x5_is_comparison_only():
         GREEDY_CANONICAL_COMPARISON_REPLICAS_PER_STAGE,
     ) == (10, 3, 5)
     assert CANONICAL_COMPARISON_TOPOLOGY_FIXTURE == GreedyTopologyFixture(10, 3, 5)
-    assert CANONICAL_COMPARISON_TOPOLOGY_FIXTURE.admission_capacity_per_replica == 2
     assert CANONICAL_COMPARISON_TOPOLOGY_FIXTURE.expected_route_count == 10
     assert CANONICAL_COMPARISON_TOPOLOGY_FIXTURE.expected_selected_observation_count == 20
     assert CANONICAL_COMPARISON_TOPOLOGY_FIXTURE.expected_consecutive_pair_count == 10
@@ -123,7 +123,9 @@ def test_phase0_decision_fixtures_freeze_projected_load_ties_nonpositive_and_fai
         (1, 1),
         (3, 1),
     )
-    assert by_name["empty-feasible-set-fails"].expected_failure == "no-feasible-action"
+    assert by_name["no-complete-ready-two-stage-action-fails"].expected_failure == (
+        "no-feasible-action"
+    )
 
 
 def test_phase0_sequential_load_and_complete_slot_schema_fixtures():

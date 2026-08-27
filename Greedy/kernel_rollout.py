@@ -11,7 +11,7 @@ from .contracts import GreedyConfiguration, ReplicaIdentity
 from .kernel_contracts import DEFAULT_GREEDY_KERNEL_OWNERSHIP, GreedyKernelOwnership
 
 
-GREEDY_KERNEL_ROLLOUT_VERSION = "greedy-kernel-rollout-v1"
+GREEDY_KERNEL_ROLLOUT_VERSION = "greedy-kernel-rollout-v2"
 
 
 class GreedyKernelRolloutError(ValueError):
@@ -133,11 +133,6 @@ def discover_existing_topology(
             raise GreedyKernelRolloutError(
                 f"Greedy StatefulSet {name} has invalid ownership labels"
             )
-        capacity = labels.get(ownership.capacity_label_key)
-        if not isinstance(capacity, str) or not capacity.isdecimal() or int(capacity) < 1:
-            raise GreedyKernelRolloutError(
-                f"Greedy StatefulSet {name} has malformed capacity ownership"
-            )
         spec = _mapping(item.get("spec"), "StatefulSet spec")
         if spec.get("serviceName") != name:
             raise GreedyKernelRolloutError(
@@ -167,15 +162,6 @@ def discover_existing_topology(
         ):
             raise GreedyKernelRolloutError(
                 f"Greedy StatefulSet {name} has invalid Pod-template ownership"
-            )
-        template_capacity = template_labels.get(ownership.capacity_label_key)
-        if (
-            not isinstance(template_capacity, str)
-            or not template_capacity.isdecimal()
-            or int(template_capacity) < 1
-        ):
-            raise GreedyKernelRolloutError(
-                f"Greedy StatefulSet {name} has malformed template capacity"
             )
         replicas = _positive_integer(
             spec.get("replicas"), f"Greedy StatefulSet {name} replicas"
@@ -351,17 +337,11 @@ def validate_ready_coverage(
     configuration: GreedyConfiguration,
     ownership: GreedyKernelOwnership = DEFAULT_GREEDY_KERNEL_OWNERSHIP,
     require_flow_generator: bool = True,
-    expected_capacity: int | None = None,
 ) -> None:
     """Require exact Running/Ready replica ordinals and one Ready generator."""
 
     if not isinstance(configuration, GreedyConfiguration):
         raise TypeError("configuration must be GreedyConfiguration")
-    capacity = (
-        configuration.admission_capacity_per_replica
-        if expected_capacity is None
-        else _positive_integer(expected_capacity, "expected_capacity")
-    )
     expected = {
         ownership.stage_name(stage) + f"-{ordinal}"
         for stage in configuration.stages
@@ -390,12 +370,7 @@ def validate_ready_coverage(
                     f"Greedy Pod {name} has an invalid identity"
                 )
             identity = ReplicaIdentity(int(match.group(1)), int(match.group(2)) + 1)
-            required = dict(
-                ownership.replica_labels(
-                    identity.stage,
-                    capacity,
-                )
-            )
+            required = dict(ownership.replica_labels(identity.stage))
             if (
                 metadata.get("namespace") != ownership.namespace
                 or any(labels.get(key) != value for key, value in required.items())

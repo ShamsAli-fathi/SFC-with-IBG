@@ -57,12 +57,7 @@ def solve_reference_policy(
         best_score = None
         feasible_actions = 0
         for action in actions:
-            if not all(
-                states[identity].ready
-                and state.load_for(identity) + 1
-                <= states[identity].max_assigned_flows
-                for identity in action.choices
-            ):
+            if not all(states[identity].ready for identity in action.choices):
                 continue
             feasible_actions += 1
             utilities = tuple(

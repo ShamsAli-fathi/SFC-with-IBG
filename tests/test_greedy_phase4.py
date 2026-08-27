@@ -178,7 +178,7 @@ def test_arbitrary_topology_render_is_complete_deterministic_and_parseable():
     for stateful_set in by_kind(resources, "StatefulSet"):
         assert stateful_set["spec"]["replicas"] == 3
         labels = stateful_set["spec"]["template"]["metadata"]["labels"]
-        assert labels["greedy.max-assigned-flows"] == "3"
+        assert "greedy.max-assigned-flows" not in labels
         pod = stateful_set["spec"]["template"]["spec"]
         assert pod["automountServiceAccountToken"] is False
         assert pod["nodeSelector"] == {GREEDY_WORKLOAD_NODE_LABEL: "true"}
@@ -209,7 +209,7 @@ def test_canonical_example_is_explicit_10x3x5_not_a_default():
     resources = render_long_running_resources(deployment)
     assert len(by_kind(resources, "StatefulSet")) == 3
     assert all(item["spec"]["replicas"] == 5 for item in by_kind(resources, "StatefulSet"))
-    assert deployment.configuration.admission_capacity_per_replica == 2
+    assert "admission_capacity_per_replica" not in dir(deployment.configuration)
     assert render_input(CANONICAL_EXAMPLE, "long-running") == render_resource_documents(resources)
 
 

@@ -10,6 +10,7 @@ from typing import Callable
 
 import httpx
 
+from .control_plane_footprint import GreedyControlPlaneMeter
 from .contracts import GreedyConfiguration, ReplicaIdentity
 from .kernel_contracts import (
     DEFAULT_GREEDY_KERNEL_OWNERSHIP,
@@ -37,6 +38,7 @@ class GreedyKubernetesApi:
         verify: str | bool | None = None,
         transport: httpx.BaseTransport | None = None,
         timeout_seconds: float = GREEDY_KERNEL_DISCOVERY_TIMEOUT_SECONDS,
+        control_plane_meter: GreedyControlPlaneMeter | None = None,
     ) -> None:
         self.ownership = ownership
         self.base_url = base_url or self._in_cluster_url()
@@ -47,6 +49,8 @@ class GreedyKubernetesApi:
             else str(SERVICE_ACCOUNT_DIRECTORY / "ca.crt")
         )
         self.timeout_seconds = float(timeout_seconds)
+        self.control_plane_meter = control_plane_meter
+        self._last_exchange_payload_bytes: tuple[int, int] | None = None
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self._client = httpx.Client(
@@ -117,12 +121,29 @@ class GreedyKubernetesApi:
         )
         response.raise_for_status()
         payload = response.json()
+        self._last_exchange_payload_bytes = (
+            len(response.request.content),
+            len(response.content),
+        )
         items = payload.get("items")
         if not isinstance(items, list):
             raise GreedyKernelContractError(
                 "Kubernetes Pod list response must contain an items list"
             )
         return tuple(items)
+
+    def record_last_successful_discovery_exchange(self) -> None:
+        if self.control_plane_meter is None:
+            return
+        if self._last_exchange_payload_bytes is None:
+            raise RuntimeError("Greedy Kubernetes discovery exchange is unavailable")
+        request_bytes, response_bytes = self._last_exchange_payload_bytes
+        self.control_plane_meter.record_exchange(
+            request_field="kubernetes_discovery_tx",
+            response_field="kubernetes_discovery_rx",
+            request_payload_bytes=request_bytes,
+            response_payload_bytes=response_bytes,
+        )
 
 
 def _is_ready(status: dict[str, object]) -> bool:
@@ -136,7 +157,7 @@ def _is_ready(status: dict[str, object]) -> bool:
 
 
 class GreedyKubernetesReplicaDiscovery:
-    """Translate only public Pod identity/readiness/capacity/endpoint metadata."""
+    """Translate only public Pod identity/readiness/endpoint metadata."""
 
     def __init__(
         self,
@@ -172,11 +193,8 @@ class GreedyKubernetesReplicaDiscovery:
             if not isinstance(labels, dict):
                 raise GreedyKernelContractError("Pod labels must be a mapping")
             stage_text = labels.get(self.ownership.stage_label_key)
-            capacity_text = labels.get(self.ownership.capacity_label_key)
             if not isinstance(stage_text, str) or not stage_text.isdigit():
                 raise GreedyKernelContractError("Greedy Pod stage label is malformed")
-            if not isinstance(capacity_text, str) or not capacity_text.isdigit():
-                raise GreedyKernelContractError("Greedy Pod capacity label is malformed")
             stage = int(stage_text)
             prefix = f"{self.ownership.stage_name(stage)}-"
             pod_name = metadata.get("name")
@@ -199,15 +217,16 @@ class GreedyKubernetesReplicaDiscovery:
                     ),
                     phase=status.get("phase"),
                     ready=_is_ready(status),
-                    max_assigned_flows=int(capacity_text),
                     labels=tuple(sorted((str(key), str(value)) for key, value in labels.items())),
                 )
             )
-        return GreedyKernelDiscoverySnapshot(
+        snapshot = GreedyKernelDiscoverySnapshot(
             configuration=self.configuration,
             replicas=tuple(sorted(replicas, key=lambda value: value.identity)),
             ownership=self.ownership,
         )
+        self.api.record_last_successful_discovery_exchange()
+        return snapshot
 
     def wait_for_complete_ready(
         self,

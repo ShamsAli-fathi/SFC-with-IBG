@@ -102,7 +102,7 @@ class GreedyPolicy:
         state: GlobalLoadState,
         public_states: Mapping[ReplicaIdentity, PublicReplicaState],
     ) -> AdmissionFeasibility:
-        """Use only public Ready state, assigned load, and declared capacity."""
+        """Use only canonical public identity coverage and Ready state."""
 
         state.validate_for(self.configuration, self._identities)
         identity.validate_for(self.configuration)
@@ -119,8 +119,6 @@ class GreedyPolicy:
         reasons = []
         if not public.ready:
             reasons.append(f"not-ready:{identity.stage}:{identity.replica}")
-        if state.load_for(identity) + 1 > public.max_assigned_flows:
-            reasons.append(f"replica-flow-capacity:{identity.stage}:{identity.replica}")
         if reasons:
             return AdmissionFeasibility.rejected(*reasons)
         return AdmissionFeasibility.accepted()

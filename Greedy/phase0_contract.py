@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import ceil, isfinite
+from math import isfinite
 from numbers import Integral
 from typing import Mapping
 
 
-GREEDY_POLICY_CONTRACT_VERSION = "pure-greedy-budgeted-l2-v1"
+GREEDY_POLICY_CONTRACT_VERSION = "pure-greedy-budgeted-l2-v2"
 GREEDY_SELECTION_BUDGET = 2
 GREEDY_ACTION_SCORE_MODE = "sum-immediate-expected-stage-utility-v1"
 GREEDY_REQUIRES_EXPLICIT_DIMENSIONS = True
@@ -41,7 +41,6 @@ POLICY_VISIBLE_INPUT_FIELDS = frozenset(
         "stage",
         "replica_id",
         "ready",
-        "max_assigned_flows",
         "belief",
         "current_load",
     }
@@ -109,10 +108,6 @@ class GreedyTopologyFixture:
             for stage in self.stages
             for replica in self.replicas
         )
-
-    @property
-    def admission_capacity_per_replica(self) -> int:
-        return ceil(self.flow_count / self.replicas_per_stage)
 
     @property
     def expected_route_count(self) -> int:
@@ -424,7 +419,7 @@ CANONICAL_DECISION_FIXTURES = (
         expected_action=_B,
     ),
     GreedyDecisionFixture(
-        name="capacity-removes-higher-scoring-action",
+        name="ready-feasibility-removes-higher-scoring-actions",
         current_loads=(
             ((1, 1), 2),
             ((1, 2), 0),
@@ -438,7 +433,7 @@ CANONICAL_DECISION_FIXTURES = (
         expected_action=_C,
     ),
     GreedyDecisionFixture(
-        name="empty-feasible-set-fails",
+        name="no-complete-ready-two-stage-action-fails",
         current_loads=tuple((identity, 2) for identity, _load in _CANONICAL_LOADS),
         scores_at_projected_load=((_A, 100.0), (_B, 90.0), (_C, 80.0)),
         feasible_actions=(),

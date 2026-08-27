@@ -5,14 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isfinite
 from numbers import Integral
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from .contracts import GreedyConfiguration, PublicReplicaState, ReplicaIdentity
+
+if TYPE_CHECKING:
+    from .runtime_resources import GreedyControllerResourceDelta
 from .slot_contracts import GreedyExperimentResult, GreedySlotResult
 
 
 GREEDY_KERNEL_CONTRACT_VERSION = "greedy-kernel-controller-v1"
-GREEDY_KERNEL_DISCOVERY_VERSION = "greedy-kubernetes-ready-discovery-v1"
+GREEDY_KERNEL_DISCOVERY_VERSION = "greedy-kubernetes-ready-discovery-v2"
 GREEDY_KERNEL_LIFECYCLE_VERSION = "greedy-persistent-http-lifecycle-v1"
 GREEDY_KERNEL_PRIVATE_PROCESSOR_PORT = 8081
 GREEDY_KERNEL_PUBLIC_FORWARDER_PORT = 8080
@@ -49,7 +52,6 @@ class GreedyKernelOwnership:
     part_of_label: str = "greedy-testbed"
     replica_name_label: str = "greedy-replica"
     stage_label_key: str = "greedy.stage"
-    capacity_label_key: str = "greedy.max-assigned-flows"
 
     def __post_init__(self) -> None:
         for name in (
@@ -57,7 +59,6 @@ class GreedyKernelOwnership:
             "part_of_label",
             "replica_name_label",
             "stage_label_key",
-            "capacity_label_key",
         ):
             if not isinstance(getattr(self, name), str) or not getattr(self, name):
                 raise ValueError(f"{name} must be a nonempty string")
@@ -65,7 +66,7 @@ class GreedyKernelOwnership:
     def stage_name(self, stage: int) -> str:
         return f"greedy-stage-{_integer('stage', stage)}"
 
-    def replica_labels(self, stage: int, capacity: int) -> tuple[tuple[str, str], ...]:
+    def replica_labels(self, stage: int) -> tuple[tuple[str, str], ...]:
         return tuple(
             sorted(
                 {
@@ -73,7 +74,6 @@ class GreedyKernelOwnership:
                     "app.kubernetes.io/part-of": self.part_of_label,
                     "app.kubernetes.io/component": "replica-stage",
                     self.stage_label_key: str(_integer("stage", stage)),
-                    self.capacity_label_key: str(_integer("capacity", capacity)),
                 }.items()
             )
         )
@@ -94,7 +94,6 @@ class GreedyKernelDiscoveredReplica:
     endpoint: str
     phase: str
     ready: bool
-    max_assigned_flows: int
     labels: tuple[tuple[str, str], ...]
 
     def __post_init__(self) -> None:
@@ -115,11 +114,6 @@ class GreedyKernelDiscoveredReplica:
             raise GreedyKernelContractError("replica endpoint must be HTTP(S)")
         if not isinstance(self.ready, bool):
             raise TypeError("ready must be a boolean")
-        object.__setattr__(
-            self,
-            "max_assigned_flows",
-            _integer("max_assigned_flows", self.max_assigned_flows),
-        )
         labels = tuple((str(key), str(value)) for key, value in self.labels)
         object.__setattr__(self, "labels", labels)
         if labels != tuple(sorted(set(labels))):
@@ -154,7 +148,6 @@ class GreedyKernelDiscoverySnapshot:
             raise GreedyKernelContractError(
                 "discovery identity coverage mismatch or noncanonical ordering"
             )
-        expected_capacity = self.configuration.admission_capacity_per_replica
         for replica in replicas:
             replica.identity.validate_for(self.configuration)
             if replica.namespace != self.ownership.namespace:
@@ -167,17 +160,8 @@ class GreedyKernelDiscoverySnapshot:
                 raise GreedyKernelContractError("discovery Pod identity mismatch")
             if replica.phase != "Running" or not replica.ready:
                 raise GreedyKernelContractError("replica is not Running and Ready")
-            if replica.max_assigned_flows != expected_capacity:
-                raise GreedyKernelContractError(
-                    "discovery declared capacity does not equal ceil(N/M)"
-                )
             labels = dict(replica.labels)
-            required = dict(
-                self.ownership.replica_labels(
-                    replica.identity.stage,
-                    expected_capacity,
-                )
-            )
+            required = dict(self.ownership.replica_labels(replica.identity.stage))
             if any(labels.get(key) != value for key, value in required.items()):
                 raise GreedyKernelContractError("discovery ownership labels are malformed")
 
@@ -196,6 +180,8 @@ class GreedyKernelControllerConfiguration:
     runtime_profile_fingerprint: str
     max_iterations: int
     first_slot_id: int = 1
+    parity_replay_enabled: bool = False
+    control_plane_footprint_enabled: bool = False
     contract_version: str = GREEDY_KERNEL_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -218,6 +204,9 @@ class GreedyKernelControllerConfiguration:
             or not self.runtime_profile_fingerprint
         ):
             raise ValueError("runtime_profile_fingerprint must be a nonempty string")
+        for name in ("parity_replay_enabled", "control_plane_footprint_enabled"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be boolean")
         if self.contract_version != GREEDY_KERNEL_CONTRACT_VERSION:
             raise ValueError("unexpected Greedy Kernel controller contract version")
 
@@ -291,6 +280,8 @@ class GreedyKernelControllerSlotResult:
     phase_timings: GreedyKernelPhaseTimings
     controller_to_generator_requests: int
     selected_route_requests: int
+    control_plane: Mapping[str, object] | None = None
+    controller_resources: GreedyControllerResourceDelta | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "public_replicas", tuple(self.public_replicas))
@@ -306,6 +297,19 @@ class GreedyKernelControllerSlotResult:
             raise ValueError("a complete Kernel slot requires one generator request")
         if self.selected_route_requests != self.slot.configuration.num_flows:
             raise ValueError("a complete Kernel slot requires one route request per flow")
+        if self.control_plane is not None:
+            from .control_plane_footprint import (
+                validate_greedy_control_plane_snapshot,
+            )
+
+            validate_greedy_control_plane_snapshot(self.control_plane)
+        if self.controller_resources is not None:
+            from .runtime_resources import GreedyControllerResourceDelta
+
+            if not isinstance(self.controller_resources, GreedyControllerResourceDelta):
+                raise TypeError(
+                    "controller_resources must use GreedyControllerResourceDelta"
+                )
 
 
 @dataclass(frozen=True)

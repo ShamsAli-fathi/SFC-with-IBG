@@ -20,6 +20,8 @@ from Greedy.comparison import (
     GreedyHybridMatchedComparison,
     IntentionalPolicyDifference,
     MatchedComparisonField,
+    UNRESOLVED_COMPARISON_MISMATCH_FIELDS,
+    UnresolvedComparisonMismatch,
 )
 from Greedy.contracts import (
     GREEDY_STAGE_BUDGET,
@@ -48,12 +50,10 @@ def public_states(
     not_ready=(),
 ):
     not_ready = set(not_ready)
-    capacity = configuration.admission_capacity_per_replica
     return tuple(
         PublicReplicaState(
             identity=ReplicaIdentity(stage, replica),
             ready=ReplicaIdentity(stage, replica) not in not_ready,
-            max_assigned_flows=capacity,
             belief=belief,
         )
         for stage in configuration.stages
@@ -71,9 +71,6 @@ def replace_public_state(states, identity, **changes):
             PublicReplicaState(
                 identity=state.identity,
                 ready=changes.get("ready", state.ready),
-                max_assigned_flows=changes.get(
-                    "max_assigned_flows", state.max_assigned_flows
-                ),
                 belief=changes.get("belief", state.belief),
             )
         )
@@ -101,8 +98,6 @@ def exhaustive_reference(configuration, flow_order, states):
             for action in actions
             if all(
                 by_identity[identity].ready
-                and loads[identity] + 1
-                <= by_identity[identity].max_assigned_flows
                 for identity in action.choices
             )
         )
@@ -177,24 +172,15 @@ def test_actions_are_complete_l2_distinct_stage_and_globally_lexicographic():
     assert all(action.choices[0].stage < action.choices[1].stage for action in policy.actions)
 
 
-def test_capacity_is_ceil_n_over_m_and_is_the_declared_contract():
+def test_configuration_and_public_state_have_no_topology_derived_admission_fields():
     configuration = GreedyConfiguration(10, 3, 3)
-    assert configuration.admission_capacity_per_replica == 4
     states = public_states(configuration)
-    assert {state.max_assigned_flows for state in states} == {4}
-    wrong = replace_public_state(
-        states,
-        ReplicaIdentity(1, 1),
-        max_assigned_flows=3,
-    )
-    with pytest.raises(ValueError, match=r"ceil\(N/M\)"):
-        GreedyPolicy(configuration).place(
-            flow_order=tuple(range(1, 11)),
-            replica_states=wrong,
-        )
+    assert "admission_capacity_per_replica" not in dir(configuration)
+    assert "max_assigned_flows" not in PublicReplicaState.__dataclass_fields__
+    assert all(not hasattr(state, "max_assigned_flows") for state in states)
 
 
-def test_feasibility_uses_ready_current_load_and_capacity():
+def test_feasibility_uses_only_ready_state_after_exact_identity_validation():
     configuration = GreedyConfiguration(2, 2, 2)
     policy = GreedyPolicy(configuration)
     unavailable = ReplicaIdentity(1, 1)
@@ -209,9 +195,7 @@ def test_feasibility_uses_ready_current_load_and_capacity():
     assert policy.evaluate_admission(unavailable, state, by_identity).reasons == (
         "not-ready:1:1",
     )
-    assert policy.evaluate_admission(
-        ReplicaIdentity(2, 1), state, by_identity
-    ).reasons == ("replica-flow-capacity:2:1",)
+    assert policy.evaluate_admission(ReplicaIdentity(2, 1), state, by_identity).feasible
     assert policy.evaluate_admission(
         ReplicaIdentity(1, 2), state, by_identity
     ).feasible
@@ -375,7 +359,7 @@ def test_expected_utility_cache_is_exact_bounded_lru_and_clearable():
 
 def test_policy_inputs_exclude_hidden_seed_runtime_and_link_fields():
     fields = set(PublicReplicaState.__dataclass_fields__)
-    assert fields == {"identity", "ready", "max_assigned_flows", "belief"}
+    assert fields == {"identity", "ready", "belief"}
     assert {
         "hidden_state",
         "profile_seed",
@@ -388,7 +372,6 @@ def test_policy_inputs_exclude_hidden_seed_runtime_and_link_fields():
         PublicReplicaState(
             identity=ReplicaIdentity(1, 1),
             ready=True,
-            max_assigned_flows=1,
             belief=(0.25,) * 4,
             hidden_state=4,
         )
@@ -474,8 +457,14 @@ def test_canonical_10x3x5_comparison_fixture_is_complete_and_not_a_default():
     assert tuple(
         item.name for item in fixture.intentional_policy_differences
     ) == INTENTIONAL_POLICY_DIFFERENCE_FIELDS
+    assert tuple(item.name for item in fixture.unresolved_mismatches) == (
+        UNRESOLVED_COMPARISON_MISMATCH_FIELDS
+    )
     assert fixture.canonical_configuration == GreedyConfiguration(10, 3, 5)
-    assert fixture.canonical_configuration.admission_capacity_per_replica == 2
+    assert fixture.unresolved_mismatches[0].greedy_value == "none-ready-only"
+    assert fixture.unresolved_mismatches[0].hybrid_value == (
+        "ceil-N-over-M-declared-capacity"
+    )
     assert fixture.matched_value("private_processor_request") == "50m/128Mi"
     assert fixture.matched_value("private_processor_limit") == "1CPU/768Mi"
     assert fixture.matched_value("public_forwarder_request") == "25m/128Mi"
@@ -511,9 +500,14 @@ def test_comparison_rejects_mismatch_missing_fields_and_fake_differences():
             intentional_policy_differences=(
                 CANONICAL_MATCHED_COMPARISON.intentional_policy_differences
             ),
+            unresolved_mismatches=CANONICAL_MATCHED_COMPARISON.unresolved_mismatches,
         )
     with pytest.raises(ValueError, match="must actually differ"):
         IntentionalPolicyDifference("same", "value", "value", "not different")
+    with pytest.raises(ValueError, match="must actually differ"):
+        UnresolvedComparisonMismatch(
+            "same", "value", "value", "not different", "source.py:1"
+        )
 
 
 def test_incomplete_or_duplicate_public_state_and_flow_order_are_rejected():

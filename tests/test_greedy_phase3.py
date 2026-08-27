@@ -97,7 +97,6 @@ def identities(configuration):
 
 def snapshot(configuration):
     ownership = DEFAULT_GREEDY_KERNEL_OWNERSHIP
-    capacity = configuration.admission_capacity_per_replica
     return GreedyKernelDiscoverySnapshot(
         configuration=configuration,
         replicas=tuple(
@@ -113,8 +112,7 @@ def snapshot(configuration):
                 ),
                 phase="Running",
                 ready=True,
-                max_assigned_flows=capacity,
-                labels=ownership.replica_labels(identity.stage, capacity),
+                labels=ownership.replica_labels(identity.stage),
             )
             for identity in identities(configuration)
         ),
@@ -272,13 +270,12 @@ def controller(
 
 def pod(configuration, stage, replica, **changes):
     ownership = DEFAULT_GREEDY_KERNEL_OWNERSHIP
-    capacity = configuration.admission_capacity_per_replica
     value = {
         "metadata": {
             "name": f"{ownership.stage_name(stage)}-{replica - 1}",
             "namespace": ownership.namespace,
             "uid": f"uid-{stage}-{replica}",
-            "labels": dict(ownership.replica_labels(stage, capacity)),
+            "labels": dict(ownership.replica_labels(stage)),
         },
         "spec": {"nodeName": "worker-1"},
         "status": {
@@ -718,7 +715,7 @@ def test_discovery_accepts_exact_public_coverage_and_reuses_one_client():
     second = discovery.discover_complete_ready()
     assert first == second
     assert len(calls) == 2
-    assert all(replica.max_assigned_flows == 2 for replica in first.replicas)
+    assert all(not hasattr(replica, "max_assigned_flows") for replica in first.replicas)
     assert not any(hasattr(replica, "hidden_state") for replica in first.replicas)
     discovery.close()
     discovery.close()

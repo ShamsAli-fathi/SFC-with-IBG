@@ -115,7 +115,7 @@ def deployment_for(configuration, profile_seed=17, root_seed=2050):
         max_iterations=9,
         first_slot_id=1,
         source_identity=(
-            f"greedy-kernel-launch-v1:{configuration.num_flows}x"
+            f"greedy-kernel-launch-v2:{configuration.num_flows}x"
             f"{configuration.num_stages}x{configuration.num_replicas}"
         ),
     )
@@ -192,7 +192,6 @@ class FakeGreedyCluster:
         self.job_exists = False
         self.jobs_created = 0
         self.extra_owned_resources = []
-        self.pod_capacity = configuration.admission_capacity_per_replica
         self.uid_generation = 0
         self.local_image_ids = {
             GREEDY_SERVICE_IMAGE: SERVICE_ID,
@@ -269,7 +268,6 @@ class FakeGreedyCluster:
         for name, statefulset in sorted(self.statefulsets.items()):
             stage = int(name.rsplit("-", 1)[1])
             labels = dict(statefulset["spec"]["template"]["metadata"]["labels"])
-            labels["greedy.max-assigned-flows"] = str(self.pod_capacity)
             for ordinal in range(statefulset["spec"]["replicas"]):
                 pod_name = f"{name}-{ordinal}"
                 items.append(
@@ -554,12 +552,6 @@ class FakeGreedyCluster:
                 self._store_resource(deepcopy(resource))
             return ""
         if "label" in command and "node" in command:
-            return ""
-        if "label" in command and "pods" in command:
-            value = next(
-                part for part in command if part.startswith("greedy.max-assigned-flows=")
-            )
-            self.pod_capacity = int(value.split("=", 1)[1])
             return ""
         if "scale" in command:
             count = int(
@@ -895,7 +887,7 @@ def test_skip_build_fresh_refuses_and_existing_equal_is_serving_noop():
     assert missing_node.jobs_created == 0
 
 
-def test_flow_only_change_updates_capacity_and_controller_without_serving_restart():
+def test_flow_only_change_updates_controller_without_serving_restart_or_labels():
     cluster = FakeGreedyCluster(configuration=GreedyConfiguration(4, 3, 2))
     before = cluster._pods()
     result = run_greedy_lifecycle(
@@ -904,9 +896,9 @@ def test_flow_only_change_updates_capacity_and_controller_without_serving_restar
         validate_wheelhouses=lambda roles: None,
     )
     assert result.serving_changed is False
-    assert cluster.pod_capacity == 5
     assert not any("scale" in command for command in cluster.commands)
     assert not any("restart" in command for command in cluster.commands)
+    assert not any("label" in command and "pods" in command for command in cluster.commands)
     after = cluster._pods()
     assert {
         item["metadata"]["name"]: item["metadata"]["uid"] for item in before["items"]

@@ -3296,3 +3296,59 @@ Accepted on 2026-08-27 after explicit live authorization.
 - Treat recorded timing and CPU/RSS/throttling values as configuration and
   operability evidence only.  Phase 8 authorizes no Greedy-versus-Hybrid
   performance conclusion, larger scale, resource retuning, or new diagnostic.
+
+## Greedy admission-capacity correction decisions
+
+Accepted for planning and completed offline in Phase 8.1 on 2026-08-27.
+
+- Supersede topology-derived `ceil(N/M)` admission for the next Greedy policy
+  contract. The formula was introduced during implementation planning and is
+  absent from the paper's Greedy definition. Phase 8 traces remain valid only
+  as historical v1 evidence and must not be rewritten.
+- Preserve the precise myopic distinction from `misc/vesal_tex.tex`: Greedy
+  observes earlier assignments and evaluates immediate utility at
+  `current_load+1`, but never adds predicted future selections. Describe this
+  as current-congestion-aware and future-congestion-blind, not as completely
+  congestion-blind.
+- Do not replace the removed formula with another inferred capacity or a new
+  default. V2 policy feasibility is canonical identity plus public Ready
+  state. A future real admission limit requires an explicit, separately
+  approved input calibrated identically for every compared policy.
+- Keep Kubernetes node allocatable-versus-Pod-request preflight. It protects
+  cluster scheduling and is not a per-replica flow admission rule. Keep the
+  state-conditioned processing congestion model unchanged.
+- Preserve the user's deliberate exact `L=2` action even though the paper's
+  baseline prose describes one independent choice per stage and its
+  SFC-specific budget remark uses `L=K`. Preserve mandatory complete actions
+  and best-feasible non-positive selection for this correction; those are
+  explicit container-baseline decisions outside the capacity defect.
+- Version the corrected contract as `pure-greedy-budgeted-l2-v2`. Remove the
+  capacity field/label from policy, discovery, controller input, rendered
+  resources, and evidence assumptions rather than setting it to a large
+  topology-derived number.
+- Update the matched-comparison contract honestly: active Hybrid still carries
+  its recorded synthetic capacity behavior. Until a separately authorized
+  matched-capacity correction is executed for the comparison target, do not
+  claim that Greedy v2 and current Hybrid have identical admission semantics.
+  Do not modify frozen `IBG_Hybrid/` during the Greedy correction.
+- Split acceptance into Phase 8.1 offline contract migration and Phase 8.2
+  separately authorized live validation. Phase 9 scale/final-baseline work
+  remains blocked until both corrective phases pass.
+- Retain unchanged expected-utility, learning, metrics, stochastic schedules,
+  runtime profiles, processor congestion, Kubernetes Pod-resource preflight,
+  and all serving resource/security contracts. Adapt policy state, discovery,
+  rendering, rollout/lifecycle, comparison, and new evidence only behind the
+  v2 Greedy boundary. Preserve the removed capacity shape only in explicit v1
+  trace validation; exclude synthetic capacity and Hybrid policy machinery
+  from active Greedy v2.
+- Version only affected contracts: policy, Ready discovery, static deployment,
+  rollout/launch, matched comparison, slot evidence, and JSONL trace. Keep
+  unaffected learning, utility, SLA, fairness, equilibrium, profile, timing,
+  resource, and route contracts at their existing versions.
+- Separate v2 CSV output under `figures/Greedy/v2` and require an atomic
+  policy-version marker. Refuse unversioned retained CSV and mixed v1/v2
+  columns rather than inventing an implicit migration.
+- Record active Hybrid's `ReplicaAdmission.max_assigned_flows` and
+  `assigned_flow_capacity=ceil(N/M)` as an unresolved comparison mismatch.
+  A final same-input performance claim requires a separately accepted common
+  physical/admission rule; frozen `IBG_Hybrid/` remains unchanged.

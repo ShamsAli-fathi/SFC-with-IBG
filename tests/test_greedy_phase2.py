@@ -95,7 +95,6 @@ def make_input(
         PublicReplicaState(
             identity=identity,
             ready=identity not in unavailable,
-            max_assigned_flows=configuration.admission_capacity_per_replica,
             belief=belief,
         )
         for identity in all_identities
@@ -383,7 +382,7 @@ def test_learning_adapter_matches_frozen_exact_replica_update_and_aggregation():
             cost=latency_model.DEFAULT_COST,
             gamma=0.0,
             state=1,
-            capacity=state.max_assigned_flows,
+            capacity=1,
         )
         for state in slot_input.public_replicas
     }
@@ -589,7 +588,6 @@ def test_policy_boundary_never_receives_hidden_profile_seed_pair_or_runtime_valu
             assert set(PublicReplicaState.__dataclass_fields__) == {
                 "identity",
                 "ready",
-                "max_assigned_flows",
                 "belief",
             }
             return super().place(**kwargs)

@@ -3755,16 +3755,123 @@ samples, and zero final serving restarts pass.  Initial connection-refused
 readiness events occurred only while containers started; exact readiness later
 passed.  Phase 9 remains separately authorized and has not started.
 
+### Greedy Phase 8.1: offline removal of synthetic admission capacity
+
+Status: complete on 2026-08-27; Phase 8.2 has not started.
+
+Recommended intelligence level: `xhigh`. This is a cross-cutting policy
+contract migration with backward-compatible evidence requirements, not a
+one-line capacity deletion.
+
+- Preparation: reread the four handoff documents and the targeted Greedy
+  passages in `misc/vesal_tex.tex`, especially the sequential counts,
+  congestion-sensitive utility, budgeted action, myopic Greedy, and baseline
+  comparison sections. Revalidate the active Greedy policy/discovery/
+  lifecycle/evidence paths and the smallest current Hybrid capacity sources
+  before editing. Record exact source locations, HEAD, blobs, and drift.
+- Freeze `pure-greedy-budgeted-l2-v2`: exactly two distinct increasing stages,
+  immediate belief-driven scoring at `current_load+1`, sequential commits, no
+  future-flow simulation, and no topology-derived admission ceiling.
+- Remove `admission_capacity_per_replica`, `max_assigned_flows`, and
+  `greedy.max-assigned-flows` from active v2 policy inputs, discovery
+  validation, controller configuration, manifests, renderer, lifecycle state,
+  comparison assumptions, and new evidence. Do not replace them with `N`, an
+  effectively infinite sentinel, or another inferred default.
+- Preserve Running/Ready and exact identity coverage as feasibility. Preserve
+  Kubernetes worker resource preflight and all processor/forwarder/controller
+  requests, limits, probes, ports, workers, security contexts, and ownership.
+- Preserve all other policy and metric semantics: fixed `L=2`, complete routes,
+  canonical ties, best feasible action even when non-positive, selected-only
+  learning, separated jitter, physical/raw utilities, strict 80-ms raw SLA,
+  Jain fairness, and strict belief equilibrium.
+- Add transparent fixtures proving a high-valued replica may receive more than
+  the former `ceil(N/M)` count, later real flows see the accumulated current
+  load, and no decision includes simulated future load. Prove removal of the
+  hard ceiling can expose reactive hot-spot behavior without removing
+  congestion from expected utility.
+- Keep old v1 traces immutable and readable through an explicitly
+  version-bounded compatibility path. New v2 writers must not fabricate v1
+  fields; retained CSV must refuse mixed policy-contract columns unless a
+  separately specified migration format exists.
+- Reclassify the active Hybrid capacity comparison row as an unresolved
+  comparison mismatch, without editing `IBG_Hybrid/`. No same-admission or
+  same-input performance claim is permitted until both policies use an
+  explicitly accepted common rule.
+- Run the complete Greedy local suite, the smallest unchanged Exact/Hybrid
+  semantic and lifecycle selections, offline renders, clean imports, external
+  bytecode compilation, and `git diff --check`. Update all four handoffs.
+- Do not invoke Docker, kind, kubectl, Kubernetes, traffic, or create new
+  repository JSONL/CSV evidence.
+
+Gate: all offline v2 contract, migration, renderer, comparison-disclosure, and
+regression tests pass. Record Phase 8.2 as next but do not start it.
+
+#### Greedy Phase 8.1 implementation result
+
+The active policy is `pure-greedy-budgeted-l2-v2`. Topology-derived
+`ceil(N/M)` flow admission was removed from typed configuration/public state,
+Ready discovery, controller inputs, rendered labels, rollout/lifecycle
+reconciliation, comparison matches, and new evidence. Feasibility is exact
+identity coverage plus Ready state. Actual projected load still enters the
+unchanged expected-utility calculation and both selected loads still commit
+before the next real flow. A transparent `5x2x2` test reaches load five on one
+replica, above the former ceiling of three, without adding future-flow load.
+
+Historical `pure-greedy-budgeted-l2-v1` Phase 8 traces remain immutable and
+readable through explicit v1 evidence/JSONL validators. V2 schemas omit the
+capacity field, CSV has a policy-version marker and separate v2 default path,
+and mixed v1/v2 retained columns fail closed. The v2 comparison fixture now
+discloses active Hybrid's retained `ceil(N/M)` rule as an unresolved mismatch.
+
+Offline verification passed: 183 complete Greedy Phase 0--8.1 tests and a
+19-test focused policy-neutral/Hybrid/render selection. Changed Python files
+compiled with bytecode outside the workspace; clean imports remained silent,
+file-free, and RNG-neutral; `git diff --check` passed. No Docker, kind,
+kubectl, network, traffic, cluster mutation, or repository evidence generation
+was performed. Phase 8.2 is the next separately authorized live gate.
+
+### Greedy Phase 8.2: separately authorized live admission-correction gate
+
+Status: planned after Phase 8.1 and requires explicit live authorization.
+
+Recommended intelligence level: `high`, escalating to `xhigh` if preflight
+finds ownership, profile, source, or image drift.
+
+- Preparation: read the accepted Phase 8.1 contract/tests/status, current
+  launcher help, rendered resources, affected Docker source inventories, and
+  active Hybrid comparison envelope. Inspect the dedicated cluster read-only
+  before proposing commands; never mutate Exact, Hybrid, MILP, or foreign
+  resources.
+- Choose a small explicit `N,K,M` and profile seed whose offline fixture
+  deterministically exercises at least one selected replica above the former
+  `ceil(N/M)` count. Record why the shape demonstrates the correction.
+- Perform a normal offline rebuild/load because policy, shared contracts,
+  manifests, and source provenance changed. Reconcile only owned Greedy
+  resources and create exactly one finite Job after exact readiness.
+- Run with forced captured replay and CSV enabled. Validate v2 contract
+  identity, placements, sequential loads, selected observations, pairs,
+  beliefs, utilities, SLA, fairness, equilibrium, timing, resources, redaction,
+  zero serving restarts, and the above-old-cap load demonstration.
+- Repeat unchanged with `--skip-build`; prove no build/load, retained serving
+  Pod/image/profile preservation, and replacement of only the finite Job.
+- Persist new v2 JSONL and version-compatible CSV separately from historical
+  v1 output. Do not rewrite, relabel, or backfill Phase 8 evidence.
+- Treat measured results as correction/operability evidence, not as a final
+  Greedy-versus-Hybrid performance claim. Update all four handoffs and stop.
+
+Gate: the corrected normal live run and unchanged skip-build repeat pass, with
+an observed load above the removed ceiling and no future-load reasoning.
+
 ### Greedy Phase 9: separately authorized scale and final-baseline acceptance
 
-Status: planned after Phase 8.
+Status: planned after Phase 8.2.
 
 Recommended intelligence level: `xhigh`. Persistent-cluster transitions,
 matched-input reasoning, performance evidence, and final comparison claims
 require the strongest cross-phase analysis and provenance discipline.
 
 - Phase preparation (required after separate scale authorization): study the
-  accepted Phase 8 trace/status, current Greedy rollout/profile implementation,
+  accepted Phase 8.2 trace/status, current Greedy rollout/profile implementation,
   worker resource envelope, and the exact target comparison's input contract.
   Re-read the current Hybrid launcher, manifests, comparison trace provenance,
   and focused evidence validators. Record matched and unmatched inputs before

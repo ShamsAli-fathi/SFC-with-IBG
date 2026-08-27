@@ -5,9 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import subprocess
 import sys
 from typing import Sequence
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from Greedy.contracts import GreedyConfiguration
 from Greedy.kernel_lifecycle import (
@@ -16,8 +21,8 @@ from Greedy.kernel_lifecycle import (
     cleanup,
     preflight,
     resolve_root_seed,
-    run_greedy_lifecycle,
 )
+from Greedy.kernel_reporting import run_greedy_evidenced_lifecycle
 from Greedy.kernel_profile_reconciliation import GreedyProfileReconciliationError
 from Greedy.kernel_rollout import GreedyKernelRolloutError
 
@@ -106,14 +111,14 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         choices=(0, 1),
         default=0,
-        help="reserved validated Phase 6 CSV setting; no Phase 5 export occurs",
+        help="export the validated v2 host trace to figures/Greedy/v2 when set to 1",
     )
     run_parser.add_argument(
         "--parity-replay",
         type=int,
         choices=(0, 1),
         default=0,
-        help="reserved validated Phase 6 replay setting; no Phase 5 replay occurs",
+        help="run captured-input Pure/Kernel validation for every slot when set to 1",
     )
     subparsers.add_parser("preflight", help="read-only dedicated-cluster validation")
     subparsers.add_parser("cleanup", help="explicitly delete only an owned Greedy cluster")
@@ -148,7 +153,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
     args = parse_args(arguments)
     try:
         if args.action == "run":
-            run_greedy_lifecycle(launch_configuration_from_args(args))
+            run_greedy_evidenced_lifecycle(launch_configuration_from_args(args))
         elif args.action == "preflight":
             preflight()
         else:

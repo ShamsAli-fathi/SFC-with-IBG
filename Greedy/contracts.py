@@ -8,7 +8,8 @@ from numbers import Integral
 from typing import ClassVar, Iterable, Mapping, Sequence
 
 
-GREEDY_POLICY_VERSION = "pure-greedy-budgeted-l2-v1"
+LEGACY_GREEDY_POLICY_VERSION = "pure-greedy-budgeted-l2-v1"
+GREEDY_POLICY_VERSION = "pure-greedy-budgeted-l2-v2"
 GREEDY_STAGE_BUDGET = 2
 
 
@@ -67,11 +68,6 @@ class GreedyConfiguration:
     def replica_ids(self) -> tuple[int, ...]:
         return tuple(range(1, self.num_replicas + 1))
 
-    @property
-    def admission_capacity_per_replica(self) -> int:
-        return (self.num_flows + self.num_replicas - 1) // self.num_replicas
-
-
 @dataclass(frozen=True, order=True)
 class ReplicaIdentity:
     stage: int
@@ -100,7 +96,6 @@ class PublicReplicaState:
 
     identity: ReplicaIdentity
     ready: bool
-    max_assigned_flows: int
     belief: tuple[float, float, float, float]
 
     def __post_init__(self) -> None:
@@ -108,21 +103,10 @@ class PublicReplicaState:
             raise TypeError("identity must be ReplicaIdentity")
         if not isinstance(self.ready, bool):
             raise TypeError("ready must be a boolean")
-        object.__setattr__(
-            self,
-            "max_assigned_flows",
-            _positive_integer("max_assigned_flows", self.max_assigned_flows),
-        )
         object.__setattr__(self, "belief", _belief_tuple(self.belief))
 
     def validate_for(self, configuration: GreedyConfiguration) -> None:
         self.identity.validate_for(configuration)
-        expected = configuration.admission_capacity_per_replica
-        if self.max_assigned_flows != expected:
-            raise ValueError(
-                "max_assigned_flows must equal ceil(N/M) "
-                f"({expected}) for the configured topology"
-            )
 
 
 @dataclass(frozen=True, order=True)

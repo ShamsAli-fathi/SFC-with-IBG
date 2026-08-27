@@ -4395,5 +4395,107 @@ Verification completed:
 Not claimed: cross-policy same-input performance, large scale, multi-host,
 line rate, DPDK/VPP, netem, resource retuning, or Phase 9 transition evidence.
 Pre-existing unrelated changes under frozen/prohibited paths remain untouched.
-Phase 9 scale and final-baseline acceptance is the next action and requires
-separate explicit authorization.
+Phase 9 scale and final-baseline acceptance was previously recorded as next,
+but the paper audit below now supersedes that ordering.
+
+## Greedy paper audit and corrective-phase status
+
+Updated: 2026-08-27. A targeted read of `misc/vesal_tex.tex` confirms that the
+paper's Greedy baseline uses current beliefs and observed pre-decision counts,
+evaluating immediate utility at `n+1`, while ignoring subsequent-flow choices
+and their future congestion. The paper defines physical node/resource capacity
+and state-conditioned congestion behavior but does not define the
+topology-derived `ceil(N/M)` assigned-flow admission ceiling.
+
+The pre-correction `pure-greedy-budgeted-l2-v1` implementation had a material
+baseline mismatch: `GreedyConfiguration.admission_capacity_per_replica`,
+`PublicReplicaState.max_assigned_flows`, discovery labels, and feasibility
+reject a replica above `ceil(N/M)`. This can mechanically suppress the
+premature hot spots that the paper attributes to Greedy myopia. Current-load
+scoring itself is correct and must remain: Greedy is reactive to congestion
+from earlier real flows but blind to congestion from future flows.
+
+Other paper differences were rechecked. The paper describes per-stage/all-K
+Greedy selection and a highest-positive choice, whereas the container baseline
+uses the user's deliberate exact `L=2` joint action, bypasses `K-2`, and
+requires the best complete feasible route even when scores are non-positive.
+Those behaviors are not part of this correction. Link-cost wording in the
+paper is internally inconsistent; the current explicit no-link-selection
+contract also remains unchanged.
+
+The offline Phase 8.1 correction is complete. The active contract is
+`pure-greedy-budgeted-l2-v2`; policy feasibility is exact identity coverage
+plus public Ready state, with no configuration property, public-state field,
+discovery label, rendered label, lifecycle equality check, controller input,
+or new evidence field for synthetic admission. The policy still evaluates
+every candidate at its actual `current_load+1`, commits the selected pair
+sequentially, and performs no future-flow simulation. A deterministic `5x2x2`
+fixture reaches load five on one selected replica, above the old ceiling of
+three, and proves successive scores use loads 1 through 5.
+
+Paper findings were revalidated at `misc/vesal_tex.tex:677-700`,
+`:981-1032`, `:1084-1088`, and `:1675-1708`: utility is
+congestion-sensitive; the full budgeted solver predicts subsequent load;
+Greedy instead uses observed pre-decision counts plus one and is explicitly
+myopic; premature hot spots are an expected baseline outcome. No paper rule
+defines `ceil(N/M)` flow admission, and physical node capacity remains
+separate from modeled processing congestion.
+
+The source audit used repository HEAD
+`ae95e74497339b6ce49d96a709409489ef287fd5`. Active Hybrid still declares
+`max_assigned_flows` and rejects projected overflow in
+`IBG_Hybrid/phase0_contract.py:232-289` (blob
+`45eb84512efa7457648ae8667b30e7f83f25f304`) and derives `ceil(N/M)` in
+`IBG_Hybrid/kernel_profile_expansion.py:587-600` (blob
+`8f10eb51ac4fce23a693ccda783f5828f60422d2`). Its focused test blobs are
+`c46ebb91100d85d29e7e24afe0a3e641a694e482` and
+`d8edc6944dd5314de819eddadd67e7dd82467cf1`. No drift was found and no Hybrid
+file was modified. `greedy-hybrid-matched-comparison-v2` therefore records an
+unresolved admission mismatch; a final same-input comparison requires a
+separately accepted common physical/admission rule.
+
+The final working-tree source/blob audit for the affected production boundary
+is: `phase0_contract.py` `29d26c99729bb743b5c839757a39e4d573ef2a91`;
+`contracts.py` `8579d7dcccd5e4d3b8efb1630514e2498bc014ef`;
+`policy.py` `1b22a4a3c184f26c9db0b30ed28fb497a01fce37`;
+`oracle.py` `ea4a8ab8fc9d3ccae1de36fe09d34fc56daef858`;
+`comparison.py` `183990b11ad2ecef381899a67a1f856c8d3fbd7c`;
+`kernel_contracts.py` `9ed06f21f6f2e1a18a44068608de887b64ce4544`;
+`kernel_kubernetes_discovery.py`
+`22bb10f85dbdb7e10357e56fbe4b4f61b8bf7f45`;
+`kernel_controller.py` `6e2a0e2115da6dbcc69ada13093071be3508de58`;
+`kernel_infrastructure.py` `b83eb8401d0cbe38c6122badb0bc312ee4de5f27`;
+`kernel_rollout.py` `71e10755f6260734bb0586b10a6696ef8520ace8`;
+`kernel_lifecycle.py` `0bdef84b7127058d4667942eaa731535e68db979`;
+`evidence.py` `22396a3068edd0976c9c0fec69841d0311fee925`;
+`persistence.py` `d7fd773cef384feec34507e9e76aa1a1d191dea5`;
+`csv_export.py` `d65510ea476f78683d7fc4ea75620aaf92ad5e70`;
+and `scripts/run_greedy_kernel.py`
+`a2efc1a4543176a2d13a992ddff551cfe661c452`.
+
+V1 Phase 8 JSONL remains immutable and readable through explicit legacy slot,
+comparison, and trace validators. New slot/trace schemas are v2 and omit the
+removed field. CSV uses a policy-contract marker, defaults to
+`figures/Greedy/v2`, and rejects unversioned retained data or mixed v1/v2
+columns. No production v2 JSONL or CSV was created.
+
+Verification completed on 2026-08-27:
+
+- `PYTHONPYCACHEPREFIX=/tmp/greedy-phase81-final-pycache .venv/bin/python -m pytest -q tests/test_greedy_phase0.py tests/test_greedy_phase1.py tests/test_greedy_phase2.py tests/test_greedy_phase3.py tests/test_greedy_phase4.py tests/test_greedy_phase5.py tests/test_greedy_phase6.py tests/test_greedy_phase7.py tests/test_greedy_phase8.py tests/test_greedy_phase81.py`:
+  183 passed in 18.45 seconds.
+- `PYTHONPYCACHEPREFIX=/tmp/greedy-phase81-compat-pycache .venv/bin/python -m pytest -q tests/test_latency_model.py tests/test_learning_signal.py tests/test_ibg_hybrid_phase0.py::test_feasibility_uses_ready_and_declared_flow_capacity_only tests/test_ibg_hybrid_kernel_dynamic_topology.py::test_dynamic_transition_accepts_formula_changes_and_rejects_drift tests/test_greedy_phase4.py::test_arbitrary_topology_render_is_complete_deterministic_and_parseable tests/test_greedy_phase7.py::test_arbitrary_shapes_are_policy_complete_and_offline_renderable tests/test_greedy_phase81.py::test_v2_render_and_controller_inputs_have_no_synthetic_capacity_field_or_label`:
+  19 passed in 1.80 seconds.
+- Clean-directory import tests cover all owned Phase 0--8 modules and remain
+  silent, file-free, and RNG-neutral. Changed Python compilation directs
+  bytecode to `/tmp`; local render/parse and capacity-label absence checks pass.
+- Compilation used `PYTHONPYCACHEPREFIX=/tmp/greedy-phase81-compile .venv/bin/python -m py_compile` with the 15 affected production modules above plus the
+  updated Phase 0--7 and Phase 8.1 test modules; it exited zero and created no
+  workspace bytecode.
+- `git diff --check` passes. Final path status preserves every pre-existing
+  unrelated/frozen-path change; Phase 8.1 did not edit `IBG/`, `IBG_Hybrid/`,
+  MILP, `Chart/`, `Tutorial.md`, `Report.md`, or `EVIDENCE_SUMMARY.md`.
+
+Not verified or claimed: live image rebuild/load, cluster reconciliation,
+traffic, production v2 JSONL/CSV, corrected live replay, performance, scale,
+or a Greedy/Hybrid same-admission comparison. Phase 8.2 is the next separately
+authorized live correction gate. Phase 9 remains deferred until it passes.

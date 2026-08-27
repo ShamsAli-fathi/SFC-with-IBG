@@ -30,7 +30,7 @@ from .kernel_runtime_profiles import (
 )
 
 
-GREEDY_STATIC_DEPLOYMENT_VERSION = "greedy-static-kubernetes-v1"
+GREEDY_STATIC_DEPLOYMENT_VERSION = "greedy-static-kubernetes-v2"
 GREEDY_STATIC_INPUT_VERSION = "greedy-static-deployment-input-v1"
 GREEDY_STATIC_RENDER_VERSION = "greedy-json-yaml-render-v1"
 
@@ -100,6 +100,8 @@ class GreedyStaticDeploymentInput:
     max_iterations: int
     first_slot_id: int
     source_identity: str
+    parity_replay_enabled: bool = False
+    control_plane_footprint_enabled: bool = False
     contract_version: str = GREEDY_STATIC_INPUT_VERSION
 
     def __post_init__(self) -> None:
@@ -121,6 +123,9 @@ class GreedyStaticDeploymentInput:
             )
         if not isinstance(self.source_identity, str) or not self.source_identity:
             raise ValueError("source_identity must be a nonempty string")
+        for name in ("parity_replay_enabled", "control_plane_footprint_enabled"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be boolean")
         if self.contract_version != GREEDY_STATIC_INPUT_VERSION:
             raise GreedyInfrastructureError(
                 "unexpected Greedy static-deployment input version"
@@ -141,6 +146,10 @@ class GreedyStaticDeploymentInput:
                 runtime_profile_fingerprint=self.runtime_profiles.fingerprint,
                 max_iterations=self.max_iterations,
                 first_slot_id=self.first_slot_id,
+                parity_replay_enabled=self.parity_replay_enabled,
+                control_plane_footprint_enabled=(
+                    self.control_plane_footprint_enabled
+                ),
             ),
             source_identity=f"{self.source_identity}:controller-inputs",
         )
@@ -162,7 +171,8 @@ def static_deployment_input_from_mapping(
         "max_iterations",
         "first_slot_id",
     }
-    if set(value) != required:
+    optional = {"parity_replay_enabled", "control_plane_footprint_enabled"}
+    if not required.issubset(value) or not set(value).issubset(required | optional):
         raise ValueError("static deployment input fields are incomplete or unexpected")
     runtime = runtime_profile_document_from_mapping(
         {
@@ -180,6 +190,10 @@ def static_deployment_input_from_mapping(
         max_iterations=value["max_iterations"],
         first_slot_id=value["first_slot_id"],
         source_identity=value["source_identity"],
+        parity_replay_enabled=value.get("parity_replay_enabled", False),
+        control_plane_footprint_enabled=value.get(
+            "control_plane_footprint_enabled", False
+        ),
         contract_version=value["contract_version"],
     )
 
@@ -411,11 +425,7 @@ def _stage_resources(
     configuration = deployment.configuration
     ownership = DEFAULT_GREEDY_KERNEL_OWNERSHIP
     name = ownership.stage_name(stage)
-    labels = dict(
-        ownership.replica_labels(
-            stage, configuration.admission_capacity_per_replica
-        )
-    )
+    labels = dict(ownership.replica_labels(stage))
     selector = {
         "app.kubernetes.io/name": ownership.replica_name_label,
         ownership.stage_label_key: str(stage),

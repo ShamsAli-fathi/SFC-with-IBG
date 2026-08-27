@@ -4502,3 +4502,65 @@ private processors; the controller mounts only public inputs.  Controller
 process CPU/RSS and cgroup-throttling samples are evidence-only.  No
 multi-host, line-rate, DPDK/VPP, scale, or cross-policy performance
 architecture is established by this gate.
+
+## Greedy admission-correction architecture boundary
+
+The accepted Phase 8 implementation and its traces are version-bounded
+historical `pure-greedy-budgeted-l2-v1` evidence. A paper audit found that the
+topology-derived `ceil(N/M)` assigned-flow admission ceiling was introduced by
+the implementation plan rather than by `misc/vesal_tex.tex`. The paper's
+myopic Greedy baseline observes prior decisions in the current slot and scores
+replica `j` at `n_j+1`; it ignores predicted subsequent selections. It is
+therefore reactive to already-present congestion, but does not anticipate
+future congestion. The hard derived ceiling can mechanically prevent the
+premature hot spots that this baseline is intended to expose.
+
+The correction is split across two phases. Phase 8.1 owns an offline
+`pure-greedy-budgeted-l2-v2` contract migration. Its policy feasibility uses
+canonical identity coverage and public Running/Ready state only. Neither
+`GreedyConfiguration`, `PublicReplicaState`, discovery labels, nor controller
+inputs derive or expose `max_assigned_flows=ceil(N/M)`. Loads remain unbounded
+by topology dimensions within a slot and are still scored at
+`current_load+1`, then committed sequentially before the next real flow. The
+Kubernetes worker allocatable/request preflight remains unchanged because Pod
+scheduling capacity is distinct from a synthetic per-flow admission ceiling.
+The hidden latency model's state-conditioned congestion/capacity parameters
+also remain unchanged and continue to affect expected and realized processing
+behavior rather than action feasibility.
+
+Phase 8.2 owns the separately authorized live migration gate. It must rebuild
+every affected image under complete source provenance, reconcile only the
+owned Greedy cluster, demonstrate a selected load above the old `ceil(N/M)`
+boundary using a deterministic small fixture established offline, and then
+repeat unchanged with `--skip-build`. New traces must identify the v2 policy
+contract. Existing v1 JSONL remains readable and immutable, while mixed-v1/v2
+CSV comparison must fail unless a future explicit migration format is defined.
+
+The fixed `L=2` joint action, distinct increasing stages, `K-2` bypasses,
+current-belief expected utility, mandatory complete route, best-feasible
+non-positive handling, selected-only learning, physical/raw outcome split,
+strict SLA, fairness, and equilibrium semantics do not change. The paper's
+per-stage/all-`K` wording and positive-only selection remain known intentional
+differences because the user explicitly retained the budgeted two-stage
+container baseline and complete-route behavior.
+
+Phase 8.1 completed this offline boundary on 2026-08-27. The active typed
+contract is now `pure-greedy-budgeted-l2-v2`; `GreedyConfiguration` and
+`PublicReplicaState` contain no topology-derived admission property, and
+`GreedyPolicy.evaluate_admission` checks only exact public identity coverage
+and Ready state. Discovery, rendered resources, rollout reconciliation, and
+launcher state likewise contain no `greedy.max-assigned-flows` label or
+controller capacity input. A deterministic `5x2x2` fixture selects the same
+high-valued replica five times, above the former capacity of three, while its
+score is evaluated at the true projected loads 1 through 5. The first flow is
+not evaluated at that eventual load, which proves the policy remains reactive
+to earlier real assignments without simulating future flows.
+
+Persistence is version-bounded rather than rewritten. New slot evidence and
+JSONL use `greedy-kernel-slot-evidence-v2` and
+`greedy-experiment-jsonl-v2` and omit the removed field. Explicit v1 readers
+retain the old shape and validation for immutable Phase 8 traces. CSV export
+uses a policy-contract marker and a separate default `figures/Greedy/v2`
+directory; retained mixed v1/v2 policy columns fail closed. The matched
+comparison is now `greedy-hybrid-matched-comparison-v2` and records active
+Hybrid's synthetic admission as an unresolved mismatch, not a matched row.

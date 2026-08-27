@@ -9,13 +9,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from hashlib import blake2b
 import json
 from numbers import Integral
 from pathlib import Path
 import secrets
 import subprocess
+import tarfile
 import tempfile
 from typing import Callable, Mapping, Sequence
 
@@ -60,7 +61,7 @@ from .kernel_runtime_profiles import (
 )
 
 
-GREEDY_LAUNCH_VERSION = "greedy-kernel-launch-v1"
+GREEDY_LAUNCH_VERSION = "greedy-kernel-launch-v2"
 GREEDY_LAUNCHER_STATE_VERSION = "greedy-kernel-launcher-state-v1"
 GREEDY_CLUSTER_NAME = "greedy"
 GREEDY_CONTEXT = "kind-greedy"
@@ -102,6 +103,7 @@ Command = tuple[str, ...]
 Executor = Callable[[Command, bool], str]
 WheelhouseValidator = Callable[[Sequence[str]], object]
 RootSeedSource = Callable[[int], int]
+ProgressEmitter = Callable[[str], None]
 
 
 class GreedyLifecycleError(RuntimeError):
@@ -118,7 +120,7 @@ def _integer(name: str, value: int, *, minimum: int) -> int:
 
 @dataclass(frozen=True)
 class GreedyLaunchConfiguration:
-    """Validated one-run host inputs; Phase 6 flags remain behavior-neutral."""
+    """Validated one-run host inputs for lifecycle and host-side reporting."""
 
     configuration: GreedyConfiguration
     max_iterations: int
@@ -176,6 +178,8 @@ class GreedyLaunchConfiguration:
                 f"{GREEDY_LAUNCH_VERSION}:"
                 f"{shape.num_flows}x{shape.num_stages}x{shape.num_replicas}"
             ),
+            parity_replay_enabled=bool(self.parity_replay),
+            control_plane_footprint_enabled=bool(self.csv),
         )
 
 
@@ -335,6 +339,12 @@ class GreedyLifecycleResult:
     loaded_images: tuple[str, ...]
     serving_changed: bool
     controller_jobs_created: int
+    service_source_fingerprint: str
+    controller_source_fingerprint: str
+    service_image_id: str
+    controller_image_id: str
+    worker_allocatable_cpu_millicores: int
+    worker_allocatable_memory_mib: int
 
 
 def _execute(command: Command, capture_output: bool = False) -> str:
@@ -683,29 +693,34 @@ def _memory_mib(value: object) -> int:
                 amount = Decimal(value[: -len(suffix)]) * multiplier
             except InvalidOperation as error:
                 raise GreedyLifecycleError("worker memory quantity is malformed") from error
-            if amount < 0 or amount != amount.to_integral_value():
+            if amount < 0:
                 raise GreedyLifecycleError("worker memory quantity is unsupported")
-            return int(amount)
+            # Kubernetes commonly reports node allocatable memory in Ki with
+            # a remainder smaller than one MiB.  The public lifecycle contract
+            # stores whole MiB, so round down rather than overstating capacity.
+            return int(amount.to_integral_value(rounding=ROUND_FLOOR))
     raise GreedyLifecycleError("worker memory quantity must use Ki, Mi, or Gi")
 
 
 def worker_resource_preflight(
     configuration: GreedyConfiguration,
     nodes: Mapping[str, object],
-) -> None:
+) -> GreedyWorkerAllocatable:
     worker = validate_node_topology(nodes)[GREEDY_WORKER_NODE]
     status = worker.get("status")
     allocatable = status.get("allocatable") if isinstance(status, Mapping) else None
     if not isinstance(allocatable, Mapping):
         raise GreedyLifecycleError("Greedy worker has no allocatable inventory")
     try:
+        parsed = GreedyWorkerAllocatable(
+            cpu_millicores=_cpu_millicores(allocatable.get("cpu")),
+            memory_mib=_memory_mib(allocatable.get("memory")),
+        )
         require_worker_resources(
             configuration,
-            GreedyWorkerAllocatable(
-                cpu_millicores=_cpu_millicores(allocatable.get("cpu")),
-                memory_mib=_memory_mib(allocatable.get("memory")),
-            ),
+            parsed,
         )
+        return parsed
     except (TypeError, ValueError) as error:
         raise GreedyLifecycleError(f"Greedy worker resource preflight failed: {error}") from error
 
@@ -757,6 +772,11 @@ CONTROLLER_SOURCE_FILES = (
     "Greedy/kernel_controller_config.py",
     "Greedy/kernel_controller.py",
     "Greedy/kernel_controller_service.py",
+    "Greedy/console_output.py",
+    "Greedy/control_plane_footprint.py",
+    "Greedy/runtime_resources.py",
+    "Greedy/evidence_replay.py",
+    "Greedy/evidence.py",
 )
 
 
@@ -764,7 +784,9 @@ def source_fingerprint(paths: Sequence[str], *, root: Path = ROOT) -> str:
     resolved = tuple(paths)
     if not resolved or len(set(resolved)) != len(resolved):
         raise GreedyLifecycleError("image source inventory is empty or duplicated")
-    digest = blake2b(digest_size=20)
+    # Phase 6 trace provenance stores full 256-bit source fingerprints.  Keep
+    # the lifecycle producer identical to that validated persistence schema.
+    digest = blake2b(digest_size=32)
     for relative in sorted(resolved):
         path = root / relative
         if not path.is_file():
@@ -796,12 +818,98 @@ def _image_id(value: object, field: str) -> str:
 
 
 def _local_image_id(execute: Executor, image: str) -> str:
-    return _image_id(
+    # Keep the explicit local-tag existence check, then resolve the selected
+    # linux/amd64 OCI config digest.  Docker's image ID and the ID exposed by
+    # containerd/crictl after ``kind load`` are not interchangeable on current
+    # Docker versions.
+    _image_id(
         execute(
             ("docker", "image", "inspect", "--format", "{{.Id}}", image), True
         ),
         f"local image {image}",
     )
+    with tempfile.TemporaryDirectory(prefix="greedy-image-inspect-") as directory:
+        archive_path = Path(directory) / "image.tar"
+        execute(
+            (
+                "docker",
+                "image",
+                "save",
+                "--output",
+                str(archive_path),
+                image,
+            ),
+            False,
+        )
+        try:
+            with tarfile.open(archive_path, mode="r") as archive:
+                return _linux_amd64_config_id(archive)
+        except (tarfile.TarError, OSError, json.JSONDecodeError) as error:
+            raise GreedyLifecycleError(
+                f"local image archive is invalid for {image}"
+            ) from error
+
+
+def _archive_json(
+    archive: tarfile.TarFile,
+    member_name: str,
+) -> Mapping[str, object]:
+    member = archive.extractfile(member_name)
+    if member is None:
+        raise GreedyLifecycleError(f"local image archive lacks {member_name}")
+    payload = json.loads(member.read())
+    if not isinstance(payload, dict):
+        raise GreedyLifecycleError(
+            f"local image archive member is invalid: {member_name}"
+        )
+    return payload
+
+
+def _descriptor_document(
+    archive: tarfile.TarFile,
+    descriptor: Mapping[str, object],
+) -> Mapping[str, object]:
+    digest = _image_id(descriptor.get("digest"), "OCI descriptor")
+    return _archive_json(archive, f"blobs/sha256/{digest}")
+
+
+def _linux_amd64_config_id(archive: tarfile.TarFile) -> str:
+    index = _archive_json(archive, "index.json")
+    manifests = index.get("manifests")
+    if not isinstance(manifests, list) or len(manifests) != 1:
+        raise GreedyLifecycleError(
+            "local image archive has ambiguous top-level manifests"
+        )
+    descriptor = manifests[0]
+    if not isinstance(descriptor, dict):
+        raise GreedyLifecycleError(
+            "local image archive has an invalid top-level descriptor"
+        )
+    document = _descriptor_document(archive, descriptor)
+    while "config" not in document:
+        candidates = document.get("manifests")
+        if not isinstance(candidates, list):
+            raise GreedyLifecycleError("local image archive has no platform manifest")
+        selected = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise GreedyLifecycleError("local image archive has an invalid manifest")
+            platform = candidate.get("platform")
+            if isinstance(platform, dict) and (
+                platform.get("os"), platform.get("architecture")
+            ) == ("linux", "amd64"):
+                selected.append(candidate)
+        if len(selected) != 1:
+            raise GreedyLifecycleError(
+                "local image archive must contain exactly one linux/amd64 manifest"
+            )
+        document = _descriptor_document(archive, selected[0])
+    config = document.get("config")
+    if not isinstance(config, dict):
+        raise GreedyLifecycleError(
+            "local linux/amd64 manifest has no config descriptor"
+        )
+    return _image_id(config.get("digest"), "local linux/amd64 image config")
 
 
 def _build_images(
@@ -1140,40 +1248,12 @@ def validate_retained_processes(
         )
 
 
-def _label_capacity(
-    execute: Executor,
-    configuration: GreedyConfiguration,
-    *,
-    capacity: int | None = None,
-) -> None:
-    resolved_capacity = (
-        configuration.admission_capacity_per_replica
-        if capacity is None
-        else _integer("capacity", capacity, minimum=1)
-    )
-    execute(
-        _kubectl(
-            "label",
-            "pods",
-            "-n",
-            GREEDY_NAMESPACE,
-            "-l",
-            "app.kubernetes.io/name=greedy-replica",
-            f"greedy.max-assigned-flows={resolved_capacity}",
-            "--overwrite",
-        ),
-        False,
-    )
-
-
 def _wait_ready(
     execute: Executor,
     *,
     num_flows: int,
     num_stages: int,
     num_replicas: int,
-    final_capacity: int,
-    relabel: bool = False,
 ) -> None:
     statefulsets = tuple(
         f"statefulset/greedy-stage-{stage}" for stage in range(1, num_stages + 1)
@@ -1190,16 +1270,9 @@ def _wait_ready(
         ),
         False,
     )
-    if relabel:
-        _label_capacity(
-            execute,
-            GreedyConfiguration(num_flows, num_stages, num_replicas),
-            capacity=final_capacity,
-        )
     validate_ready_coverage(
         _pod_inventory(execute),
         configuration=GreedyConfiguration(num_flows, num_stages, num_replicas),
-        expected_capacity=final_capacity,
     )
 
 
@@ -1330,13 +1403,9 @@ def _reconcile_existing(
     current: GreedyExistingTopology,
     deployed_profile: GreedyKernelRuntimeProfileDocument,
     transition: GreedyLauncherState,
+    emit: ProgressEmitter | None = None,
 ) -> bool:
     target = launch.configuration
-    final_capacity = target.admission_capacity_per_replica
-    capacity_changed = (
-        deployed_profile.configuration.admission_capacity_per_replica
-        != final_capacity
-    )
     validate_profile_transition(
         deployed=deployed_profile,
         proposed=launch.runtime_profiles,
@@ -1370,6 +1439,8 @@ def _reconcile_existing(
     # Contraction occurs while the old complete processor profile remains
     # mounted.  This prevents a removed profile from racing a terminating Pod.
     for stage in range(current_stage_count, target.num_stages, -1):
+        if emit is not None:
+            emit(f"Greedy rollout: removing highest stage {stage}")
         removed_names = [
             f"greedy-stage-{stage}-{ordinal}"
             for ordinal in range(current_counts[stage - 1])
@@ -1395,11 +1466,14 @@ def _reconcile_existing(
                 num_flows=target.num_flows,
                 num_stages=current_stage_count,
                 num_replicas=current_counts[0],
-                final_capacity=final_capacity,
-                relabel=True,
             )
 
     if any(count > target.num_replicas for count in current_counts):
+        if emit is not None:
+            emit(
+                "Greedy rollout: scaling retained stages down to "
+                f"{target.num_replicas} replicas"
+            )
         removed_names = [
             f"greedy-stage-{stage}-{ordinal}"
             for stage, count in enumerate(current_counts, start=1)
@@ -1420,14 +1494,11 @@ def _reconcile_existing(
         )
         _wait_removed_pods(execute, removed_names)
         current_counts = [target.num_replicas] * current_stage_count
-        _label_capacity(execute, target)
         _wait_ready(
             execute,
             num_flows=target.num_flows,
             num_stages=current_stage_count,
             num_replicas=target.num_replicas,
-            final_capacity=final_capacity,
-            relabel=True,
         )
         serving_changed = True
 
@@ -1445,6 +1516,11 @@ def _reconcile_existing(
                 batch_size=launch.rollout_batch_size,
             ):
                 batch_target = max(batch.target_count, maximum_count)
+                if emit is not None:
+                    emit(
+                        "Greedy rollout: scaling retained stages to "
+                        f"{batch_target} replicas"
+                    )
                 if batch_target > target.num_replicas:
                     raise GreedyLifecycleError(
                         "interrupted replica expansion exceeds the target"
@@ -1465,14 +1541,11 @@ def _reconcile_existing(
                 current_counts = [batch_target] * current_stage_count
                 minimum_count = batch_target
                 maximum_count = batch_target
-                _label_capacity(execute, target)
                 _wait_ready(
                     execute,
                     num_flows=target.num_flows,
                     num_stages=current_stage_count,
                     num_replicas=batch_target,
-                    final_capacity=final_capacity,
-                    relabel=True,
                 )
                 serving_changed = True
                 if batch_target == target.num_replicas:
@@ -1483,18 +1556,17 @@ def _reconcile_existing(
             )
 
     for stage in range(current_stage_count + 1, target.num_stages + 1):
+        if emit is not None:
+            emit(f"Greedy rollout: adding highest stage {stage}")
         service, statefulset = _stage_resources(resources, stage)
         _apply_documents(execute, (service, statefulset))
         current_stage_count = stage
         current_counts.append(target.num_replicas)
-        _label_capacity(execute, target)
         _wait_ready(
             execute,
             num_flows=target.num_flows,
             num_stages=current_stage_count,
             num_replicas=target.num_replicas,
-            final_capacity=final_capacity,
-            relabel=True,
         )
         serving_changed = True
 
@@ -1519,8 +1591,6 @@ def _reconcile_existing(
         num_flows=target.num_flows,
         num_stages=target.num_stages,
         num_replicas=target.num_replicas,
-        final_capacity=final_capacity,
-        relabel=capacity_changed or serving_changed,
     )
     return serving_changed
 
@@ -1530,28 +1600,36 @@ def _bootstrap_serving(
     *,
     launch: GreedyLaunchConfiguration,
     resources: Sequence[Mapping[str, object]],
+    emit: ProgressEmitter | None = None,
 ) -> bool:
     target = launch.configuration
     initial_count = min(target.num_replicas, launch.rollout_batch_size)
+    if emit is not None:
+        emit(
+            "Greedy rollout: bootstrapping all stages at "
+            f"{initial_count} replica(s)"
+        )
     initial = deepcopy(tuple(resources))
     for resource in initial:
         if resource.get("kind") == "StatefulSet":
             resource["spec"]["replicas"] = initial_count
     _apply_documents(execute, initial)
-    _label_capacity(execute, target)
     _wait_ready(
         execute,
         num_flows=target.num_flows,
         num_stages=target.num_stages,
         num_replicas=initial_count,
-        final_capacity=target.admission_capacity_per_replica,
-        relabel=True,
     )
     for batch in plan_replica_batches(
         existing_count=initial_count,
         requested_count=target.num_replicas,
         batch_size=launch.rollout_batch_size,
     ):
+        if emit is not None:
+            emit(
+                "Greedy rollout: scaling all stages to "
+                f"{batch.target_count} replicas"
+            )
         execute(
             _kubectl(
                 "scale",
@@ -1564,14 +1642,11 @@ def _bootstrap_serving(
             ),
             False,
         )
-        _label_capacity(execute, target)
         _wait_ready(
             execute,
             num_flows=target.num_flows,
             num_stages=target.num_stages,
             num_replicas=batch.target_count,
-            final_capacity=target.admission_capacity_per_replica,
-            relabel=True,
         )
     return True
 
@@ -1593,6 +1668,7 @@ def run_greedy_lifecycle(
     *,
     execute: Executor = _execute,
     validate_wheelhouses: WheelhouseValidator | None = None,
+    emit: ProgressEmitter | None = None,
 ) -> GreedyLifecycleResult:
     """Reconcile one environment and create exactly one finite controller Job."""
 
@@ -1605,6 +1681,20 @@ def run_greedy_lifecycle(
             return tuple(validate_wheelhouse(role, root=ROOT) for role in roles)
 
     target = launch.configuration
+    if emit is not None:
+        emit(
+            "Selected Greedy topology: "
+            f"{target.num_flows} flows x {target.num_stages} stages x "
+            f"{target.num_replicas} replicas per stage"
+        )
+        emit(
+            "Greedy profile: "
+            f"seed={launch.profile_seed}, fingerprint={launch.runtime_profiles.fingerprint}"
+        )
+        emit(
+            "Greedy image mode: "
+            + ("validated skip-build reuse" if launch.skip_build else "change-scoped offline build")
+        )
     deployment = launch.deployment
     resources = render_long_running_resources(deployment)
     source_fingerprints = image_source_fingerprints()
@@ -1624,6 +1714,7 @@ def run_greedy_lifecycle(
     current_state: GreedyLauncherState | None = None
     deployed_profile_before: GreedyKernelRuntimeProfileDocument | None = None
     before_processes: tuple[GreedyServingProcessSnapshot, ...] = ()
+    worker_allocatable: GreedyWorkerAllocatable | None = None
 
     if not cluster_exists:
         # Fresh bootstrap is the only path that builds both images unconditionally.
@@ -1671,7 +1762,9 @@ def run_greedy_lifecycle(
             False,
         )
         nodes, namespaces, _pods = _current_context_and_inventory(execute)
-        worker_resource_preflight(target, nodes)
+        worker_allocatable = worker_resource_preflight(target, nodes)
+        if emit is not None:
+            emit("Greedy worker-resource preflight: passed")
         loaded = _load_images(execute, built)
         validate_node_images(
             execute,
@@ -1687,7 +1780,9 @@ def run_greedy_lifecycle(
         cluster_created = True
     else:
         nodes, namespaces, _pods = _current_context_and_inventory(execute)
-        worker_resource_preflight(target, nodes)
+        worker_allocatable = worker_resource_preflight(target, nodes)
+        if emit is not None:
+            emit("Greedy worker-resource preflight: passed")
         if GREEDY_NAMESPACE not in _namespace_names(namespaces):
             raise GreedyLifecycleError(
                 "existing Greedy cluster has no owned namespace provenance"
@@ -1760,6 +1855,15 @@ def run_greedy_lifecycle(
             if current_state.service_restart_required:
                 raise GreedyLifecycleError(
                     "--skip-build cannot resume a pending service-image rollout"
+                )
+            if (
+                current_state.service_source_fingerprint
+                != source_fingerprints["service"]
+                or current_state.controller_source_fingerprint
+                != source_fingerprints["controller"]
+            ):
+                raise GreedyLifecycleError(
+                    "--skip-build cannot reuse images after source provenance changed"
                 )
             _validate_local_images_against_state(execute, current_state)
             image_ids = {
@@ -1854,7 +1958,7 @@ def run_greedy_lifecycle(
 
     if cluster_created:
         serving_changed = _bootstrap_serving(
-            execute, launch=launch, resources=resources
+            execute, launch=launch, resources=resources, emit=emit
         )
     else:
         if deployed_profile_before is None:
@@ -1867,6 +1971,7 @@ def run_greedy_lifecycle(
             current=current_topology,
             deployed_profile=deployed_profile_before,
             transition=transition,
+            emit=emit,
         )
 
     stable = _stable_state(transition)
@@ -1876,8 +1981,6 @@ def run_greedy_lifecycle(
         num_flows=target.num_flows,
         num_stages=target.num_stages,
         num_replicas=target.num_replicas,
-        final_capacity=target.admission_capacity_per_replica,
-        relabel=False,
     )
     final_topology = discover_existing_topology(_statefulset_inventory(execute))
     if (
@@ -1895,6 +1998,9 @@ def run_greedy_lifecycle(
         validate_retained_processes(before_processes, after_processes)
 
     job = render_controller_job(deployment, _controller_readiness(target))
+    if emit is not None:
+        emit("Greedy serving readiness: exact coverage passed")
+        emit("Greedy controller Job: starting")
     _apply_documents(execute, (job,))
     execute(
         _kubectl(
@@ -1907,6 +2013,10 @@ def run_greedy_lifecycle(
         ),
         False,
     )
+    if emit is not None:
+        emit("Greedy controller Job: completed")
+    if worker_allocatable is None:
+        raise GreedyLifecycleError("worker allocatable provenance is unavailable")
     return GreedyLifecycleResult(
         configuration=target,
         profile_fingerprint=launch.runtime_profiles.fingerprint,
@@ -1916,6 +2026,14 @@ def run_greedy_lifecycle(
         loaded_images=loaded,
         serving_changed=serving_changed,
         controller_jobs_created=1,
+        service_source_fingerprint=source_fingerprints["service"],
+        controller_source_fingerprint=source_fingerprints["controller"],
+        service_image_id=image_ids["service"],
+        controller_image_id=image_ids["controller"],
+        worker_allocatable_cpu_millicores=(
+            worker_allocatable.cpu_millicores
+        ),
+        worker_allocatable_memory_mib=worker_allocatable.memory_mib,
     )
 
 

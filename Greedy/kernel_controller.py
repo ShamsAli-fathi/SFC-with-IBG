@@ -11,6 +11,7 @@ import httpx
 
 from IBG import latency_model
 
+from .control_plane_footprint import GreedyControlPlaneMeter
 from .contracts import (
     PublicReplicaState,
     ReplicaIdentity,
@@ -38,6 +39,10 @@ from .kernel_route_contracts import (
 from .learning import apply_selected_learning
 from .metrics import compute_slot_metrics
 from .policy import GreedyPolicy
+from .runtime_resources import (
+    ResourceSampler,
+    controller_resource_delta,
+)
 from .simulation import resolve_flow_order
 from .slot_contracts import (
     GREEDY_EXPERIMENT_STOP_EQUILIBRIUM,
@@ -81,9 +86,11 @@ class GreedyKernelFlowGeneratorHttpClient:
         *,
         timeout_seconds: float = GREEDY_KERNEL_FLOW_GENERATOR_TIMEOUT_SECONDS,
         transport: httpx.BaseTransport | None = None,
+        control_plane_meter: GreedyControlPlaneMeter | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = float(timeout_seconds)
+        self.control_plane_meter = control_plane_meter
         if not self.base_url:
             raise ValueError("flow-generator base_url must not be empty")
         if self.timeout_seconds <= 0:
@@ -131,11 +138,23 @@ class GreedyKernelFlowGeneratorHttpClient:
         if self.is_closed:
             raise RuntimeError("Greedy flow-generator HTTP client is closed")
         self.requests_submitted += 1
+        payload = request.model_dump(mode="json")
+        if self.control_plane_meter is not None:
+            self.control_plane_meter.mark_route_dispatch()
         response = self._client.post(
             f"{self.base_url}/run-slot",
-            json=request.model_dump(mode="json"),
+            json=payload,
         )
+        if self.control_plane_meter is not None:
+            self.control_plane_meter.mark_telemetry_received()
         response.raise_for_status()
+        if self.control_plane_meter is not None:
+            self.control_plane_meter.record_exchange(
+                request_field="route_command_tx",
+                response_field="selected_telemetry_rx",
+                request_payload_bytes=len(response.request.content),
+                response_payload_bytes=len(response.content),
+            )
         return GreedyKernelRunSlotResponse.model_validate(response.json())
 
 
@@ -354,6 +373,8 @@ class GreedyKernelController:
         initial_beliefs: Mapping[ReplicaIdentity, Sequence[float]],
         policy: GreedyPolicy | None = None,
         clock: Callable[[], float] = time.perf_counter,
+        control_plane_meter: GreedyControlPlaneMeter | None = None,
+        resource_sampler: ResourceSampler | None = None,
     ) -> None:
         configuration = controller_configuration.configuration
         expected = {
@@ -370,6 +391,8 @@ class GreedyKernelController:
         if self.policy.configuration != configuration:
             raise ValueError("policy configuration does not match controller")
         self.clock = clock
+        self.control_plane_meter = control_plane_meter
+        self.resource_sampler = resource_sampler
         self._beliefs = {
             identity: tuple(float(value) for value in initial_beliefs[identity])
             for identity in sorted(expected)
@@ -388,14 +411,18 @@ class GreedyKernelController:
         flow_generator_kwargs: Mapping[str, object] | None = None,
         policy: GreedyPolicy | None = None,
         clock: Callable[[], float] = time.perf_counter,
+        control_plane_meter: GreedyControlPlaneMeter | None = None,
+        resource_sampler: ResourceSampler | None = None,
     ) -> GreedyKernelController:
         """Construct both persistent ports and clean earlier ones on any failure."""
 
         resources = []
         try:
+            api_options = dict(kubernetes_api_kwargs or {})
+            api_options.setdefault("control_plane_meter", control_plane_meter)
             api = GreedyKubernetesApi(
                 ownership=ownership,
-                **dict(kubernetes_api_kwargs or {}),
+                **api_options,
             )
             discovery = GreedyKubernetesReplicaDiscovery(
                 api,
@@ -403,9 +430,11 @@ class GreedyKernelController:
                 ownership=ownership,
             )
             resources.append(discovery)
+            flow_options = dict(flow_generator_kwargs or {})
+            flow_options.setdefault("control_plane_meter", control_plane_meter)
             flow_generator = GreedyKernelFlowGeneratorHttpClient(
                 flow_generator_url,
-                **dict(flow_generator_kwargs or {}),
+                **flow_options,
             )
             resources.append(flow_generator)
             return cls(
@@ -415,6 +444,8 @@ class GreedyKernelController:
                 initial_beliefs=initial_beliefs,
                 policy=policy,
                 clock=clock,
+                control_plane_meter=control_plane_meter,
+                resource_sampler=resource_sampler,
             )
         except Exception:
             for resource in reversed(resources):
@@ -492,16 +523,23 @@ class GreedyKernelController:
         if self._closed:
             raise RuntimeError("Greedy Kernel controller is closed")
         configuration = self.controller_configuration.configuration
+        resource_before = (
+            None if self.resource_sampler is None else self.resource_sampler()
+        )
+        if self.control_plane_meter is not None:
+            self.control_plane_meter.begin_slot()
+            self.control_plane_meter.begin_discovery()
         started_at = float(self.clock())
         snapshot = self.discovery.wait_for_complete_ready(**dict(discovery_wait or {}))
         discovered_at = float(self.clock())
+        if self.control_plane_meter is not None:
+            self.control_plane_meter.end_discovery()
         if snapshot.configuration != configuration:
             raise RuntimeError("Ready snapshot configuration does not match controller")
         public_replicas = tuple(
             PublicReplicaState(
                 identity=replica.identity,
                 ready=replica.ready,
-                max_assigned_flows=replica.max_assigned_flows,
                 belief=self._beliefs[replica.identity],
             )
             for replica in snapshot.replicas
@@ -547,6 +585,16 @@ class GreedyKernelController:
             measured_pairs=simulation_result.measured_pairs,
         )
         finished_at = float(self.clock())
+        control_plane = (
+            None
+            if self.control_plane_meter is None
+            else self.control_plane_meter.finish_slot()
+        )
+        controller_resources = (
+            None
+            if self.resource_sampler is None or resource_before is None
+            else controller_resource_delta(resource_before, self.resource_sampler())
+        )
         boundaries = (
             started_at,
             discovered_at,
@@ -602,6 +650,8 @@ class GreedyKernelController:
             phase_timings=phase_timings,
             controller_to_generator_requests=traffic.requests_submitted,
             selected_route_requests=len(request.routes),
+            control_plane=control_plane,
+            controller_resources=controller_resources,
         )
         # Commit only after every correlation, learning, metric, result, and
         # timing contract has succeeded. A failed slot leaves beliefs untouched.
@@ -614,6 +664,10 @@ class GreedyKernelController:
         flow_orders_by_slot: Mapping[int, Sequence[int]] | None = None,
         discovery_wait: Mapping[str, object] | None = None,
         use_cache: bool = True,
+        on_slot_completed: Callable[
+            [int, GreedyKernelControllerSlotResult], None
+        ]
+        | None = None,
     ) -> GreedyKernelControllerExperimentResult:
         """Run exactly one finite experiment and close owned ports in all cases."""
 
@@ -633,6 +687,8 @@ class GreedyKernelController:
                     use_cache=use_cache,
                 )
                 slots.append(outcome)
+                if on_slot_completed is not None:
+                    on_slot_completed(offset + 1, outcome)
                 if outcome.slot.metrics.equilibrium:
                     stop_reason = GREEDY_EXPERIMENT_STOP_EQUILIBRIUM
                     break
