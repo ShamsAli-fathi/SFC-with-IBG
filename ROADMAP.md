@@ -3862,6 +3862,89 @@ finds ownership, profile, source, or image drift.
 Gate: the corrected normal live run and unchanged skip-build repeat pass, with
 an observed load above the removed ceiling and no future-load reasoning.
 
+### Greedy Phase 8.3: offline end-to-end fairness metric correction
+
+Status: complete on 2026-09-01. It must precede the Phase 8.2 acceptance run so
+one live gate validates the corrected metric instead of two.
+
+Recommended intelligence level: `high`. This is a bounded reporting-contract
+migration with backward-compatible evidence requirements; it does not touch the
+policy, the learning signal, or any runtime resource.
+
+- Preparation: reread the four handoff documents and the utility, metric, and
+  Greedy-baseline passages of `misc/vesal_tex.tex`, especially Eq.
+  (e2e_utility) and the evaluation metric list. Confirm which per-flow series
+  each policy actually scores before editing.
+- Score the Jain index over `raw_end_to_end_reference_utility_per_flow`
+  (observed selected physical utility minus measured pair latency), which is
+  the paper's end-to-end per-flow utility. Stop scoring the link-free
+  predicted series; keep recording it.
+- Floor each per-flow value at zero before scoring and record
+  `fairness_domain_valid`, true only when every unclamped value was strictly
+  positive. Return the documented `0.0` convention with the flag false when no
+  flow gained anything. Never abort a slot over the reporting domain.
+- Bump only the affected contracts: `greedy-active-slot-metrics-v2`,
+  `greedy-kernel-slot-evidence-v3`, `greedy-experiment-jsonl-v3`. Leave
+  `pure-greedy-budgeted-l2-v2`, the learning, route, profile, timing, and
+  resource contracts alone.
+- Keep v1 and v2 evidence and traces immutable, readable, and validated against
+  the retired predicted formula. Refuse a v2 document that carries the new
+  field, and refuse an unknown generation.
+- Pin retained CSV on both the policy and trace contract and default to
+  `figures/Greedy/v3`. A pre-Phase-8.3 marker or a foreign trace generation
+  must fail closed.
+- Record the Greedy/Hybrid fairness divergence as an unresolved comparison
+  mismatch in `DECISIONS.md` without editing frozen `IBG_Hybrid/` or `IBG/`.
+- Add fixtures proving the clamped kernel's arithmetic, that a swamped slot is
+  flagged rather than reporting a fake index, that the uniform-belief
+  degeneracy no longer reaches the reported number, and that every persistence
+  and CSV generation boundary fails closed.
+
+Gate: the Greedy suite passes except the separately recorded unrelated Hybrid
+worktree-drift audit; historical traces still load; no policy, learning, SLA,
+or equilibrium behavior changes. Achieved: 215 passed and that one known
+failure; the new Phase 8.3 module contributes 19 tests.
+
+Follow-up owed to Phase 8.2: its acceptance run must be executed under the v3
+contracts, and the requested topology should use a small `M` so replica loads
+actually exceed one or two. Phase 9 must not start.
+
+#### Greedy Phase 8.3 rebuilt-service rollout repair
+
+Implemented locally: 2026-09-01. The first authorized Phase 8.3 rebuild built
+and loaded both images, then failed closed with `serving rollout provenance is
+mismatched: StatefulSet/greedy-stage-1`. `Greedy/slot_contracts.py` belongs to
+`SERVICE_SOURCE_FILES`, so the one added metrics field moved the service
+fingerprint from `d9d0e69e...` to `3a51cb93...` and rebuilt the service image,
+leaving every serving template on the previous provenance pair.
+
+`_classify_service_rollout` admitted only absent or exact provenance, so
+`exact(old) -> exact(new)` was unreachable and no service-source change could
+be applied to existing serving workloads. A partial teardown cannot recover
+either: the classifier requires complete coverage of all four serving
+resources.
+
+A first attempt compared the templates against the pair recorded in
+`greedy-launcher-state`. The user's retry proved that insufficient: the
+interrupted run had already persisted its transition marker, advancing the
+record to the new pair while the templates kept the superseded one, and the
+failure simply moved earlier to the pending-rollout check. The superseded pair
+is not recoverable from the record, so the repair instead gates on a declared
+`rebuild_pending`. Under a committed rebuild a uniform non-target pair is
+classified `template-update-required`. `_reconcile_existing` declares the run's
+`service_restart_required`; the pending-rollout check declares it
+unconditionally. Mixed modes, half-written annotation pairs, unexplained pairs
+with no pending rebuild, and the final post-apply gate all stay strict.
+
+Verified: six new focused classification tests, `tests/test_greedy_phase5.py`
+36 passed, Greedy selection 221 passed with the one recorded unrelated Hybrid
+worktree-drift audit failure, complete suite 1035 passed with that audit and
+the five guardrail-excluded `Chart/` tests. The live blocked inventory and its
+recorded launcher state were replayed read-only: the pending check raises
+without `rebuild_pending` and returns `template-update-required` with it, while
+the final gate correctly still raises until the canonical apply lands. No
+cluster mutation was performed by the implementation.
+
 ### Greedy Phase 9: separately authorized scale and final-baseline acceptance
 
 Status: planned after Phase 8.2.

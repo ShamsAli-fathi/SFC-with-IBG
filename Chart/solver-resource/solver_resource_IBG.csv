@@ -1,0 +1,2 @@
+trace,flows,stages,replicas_per_stage,iterations,baseline_rss_mib,peak_incremental_working_memory_mib,peak_rss_mib,peak_memo_entries
+ibg-experiment-20260722T112356Z.jsonl,15,3,8,13,247.27704326923077,7.774038461538462,255.05108173076923,490314.0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import fsum, isfinite
 from typing import Mapping, Sequence
 
 from IBG import latency_model
@@ -22,7 +23,8 @@ from .slot_contracts import (
 )
 
 
-GREEDY_METRIC_ASSEMBLY_VERSION = "greedy-active-slot-metrics-v1"
+LEGACY_GREEDY_METRIC_ASSEMBLY_VERSION = "greedy-active-slot-metrics-v1"
+GREEDY_METRIC_ASSEMBLY_VERSION = "greedy-active-slot-metrics-v2"
 GREEDY_RAW_PAIR_UTILITY_WEIGHT_PER_MS = 1.0
 
 
@@ -43,6 +45,37 @@ def jain_fairness(
     if denominator == 0:
         raise ValueError("Jain fairness is undefined when every flow value is zero")
     return float(aggregate_value) ** 2 / denominator
+
+
+def clamped_end_to_end_fairness(
+    values_per_flow: Mapping[int, float],
+) -> tuple[float, bool]:
+    """Jain over paper end-to-end utility, each flow floored at zero.
+
+    ``misc/vesal_tex.tex`` Eq. (e2e_utility) defines per-flow utility as the
+    stage utilities minus the inter-stage link costs, so fairness must read the
+    realized end-to-end series rather than the link-free prediction.  Jain's
+    index is only meaningful on nonnegative values: a congested flow can earn a
+    negative end-to-end utility, and squaring mixed signs reports a swamped slot
+    as fair.  Floor each flow at zero -- a flow that lost more to latency than
+    it earned gained no utility -- and report whether any flow required that
+    treatment.  When no flow gained anything the index is a genuine 0/0, so
+    return the documented zero convention instead of a computed value.
+    """
+
+    if not values_per_flow:
+        raise ValueError("Jain fairness requires at least one flow")
+    clamped = {
+        flow_id: max(0.0, float(value))
+        for flow_id, value in values_per_flow.items()
+    }
+    domain_valid = all(
+        isfinite(float(value)) and float(value) > 0.0
+        for value in values_per_flow.values()
+    )
+    if not any(clamped.values()):
+        return 0.0, False
+    return jain_fairness(clamped, fsum(clamped.values())), domain_valid
 
 
 def _physical_stage_utility(latency_ms: float) -> float:
@@ -103,6 +136,9 @@ def compute_slot_metrics(
         for flow_id in sorted(raw_latency)
     )
     maximum_change = maximum_belief_change(beliefs_before, beliefs_after)
+    fairness, fairness_domain_valid = clamped_end_to_end_fairness(
+        raw_reference_utility
+    )
 
     return GreedySlotMetrics(
         predicted_aggregate_utility=predicted_aggregate,
@@ -119,10 +155,8 @@ def compute_slot_metrics(
         sla_latency_threshold_ms=GREEDY_SLA_LATENCY_THRESHOLD_MS,
         end_to_end_sla_violations=sla_violations,
         end_to_end_sla_excess_ms=sla_excess,
-        jain_fairness=jain_fairness(
-            predicted_per_flow,
-            predicted_aggregate,
-        ),
+        jain_fairness=fairness,
+        fairness_domain_valid=fairness_domain_valid,
         maximum_belief_change=maximum_change,
         equilibrium=maximum_change < GREEDY_EQUILIBRIUM_THRESHOLD,
     )

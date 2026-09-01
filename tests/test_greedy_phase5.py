@@ -48,6 +48,8 @@ from Greedy.kernel_lifecycle import (
     GreedyLaunchConfiguration,
     GreedyLauncherState,
     GreedyLifecycleError,
+    GREEDY_SERVICE_IMAGE_ID_ANNOTATION,
+    GREEDY_SERVICE_SOURCE_FINGERPRINT_ANNOTATION,
     _classify_service_rollout,
     _launcher_state_resource,
     _service_rollout_resources,
@@ -1710,3 +1712,115 @@ def test_phase5_imports_are_silent_rng_neutral_and_file_safe(tmp_path):
     assert inspect.signature(run_greedy_lifecycle).parameters["launch"].default is inspect.Parameter.empty
     assert set(SERVICE_SOURCE_FILES).isdisjoint({"Greedy/policy.py", "Greedy/kernel_controller.py"})
     assert "Greedy/policy.py" in CONTROLLER_SOURCE_FILES
+
+
+def _rollout_inventory(*, image_id, fingerprint):
+    """One serving inventory whose templates carry an exact provenance pair."""
+
+    cluster = FakeGreedyCluster()
+    document = json.loads(
+        cluster.execute(
+            (
+                "kubectl", "--context", GREEDY_CONTEXT, "get",
+                "statefulsets,deployments", "-n", GREEDY_NAMESPACE, "-o", "json",
+            ),
+            True,
+        )
+    )
+    for item in document["items"]:
+        annotations = item["spec"]["template"]["metadata"].setdefault(
+            "annotations", {}
+        )
+        annotations[GREEDY_SERVICE_IMAGE_ID_ANNOTATION] = image_id
+        annotations[GREEDY_SERVICE_SOURCE_FINGERPRINT_ANNOTATION] = fingerprint
+    return document
+
+
+def test_phase83_rebuilt_service_provenance_is_an_update_not_an_ambiguity():
+    """A superseded pair during a committed rebuild is an update to apply."""
+
+    document = _rollout_inventory(
+        image_id=SERVICE_ID, fingerprint=image_source_fingerprints()["service"]
+    )
+    assert _classify_service_rollout(
+        document,
+        replica_counts=(2, 2, 2),
+        service_source_fingerprint="f" * 64,
+        service_image_id="e" * 64,
+        rebuild_pending=True,
+    ) == "template-update-required"
+
+
+def test_phase83_interrupted_transition_resumes_from_the_superseded_pair():
+    """The marker is persisted before the apply, so the old pair survives.
+
+    The record has already advanced to the target, so the superseded pair is
+    unrecoverable from it; the pending rollout must still resume.
+    """
+
+    document = _rollout_inventory(image_id="7" * 64, fingerprint="d" * 64)
+    assert _classify_service_rollout(
+        document,
+        replica_counts=(2, 2, 2),
+        service_source_fingerprint="3" * 64,
+        service_image_id="e" * 64,
+        rebuild_pending=True,
+    ) == "template-update-required"
+
+
+def test_phase83_settled_rollout_check_stays_strict_without_a_pending_rebuild():
+    document = _rollout_inventory(
+        image_id=SERVICE_ID, fingerprint=image_source_fingerprints()["service"]
+    )
+    with pytest.raises(GreedyLifecycleError, match="provenance is mismatched"):
+        _classify_service_rollout(
+            document,
+            replica_counts=(2, 2, 2),
+            service_source_fingerprint="f" * 64,
+            service_image_id="e" * 64,
+        )
+
+
+def test_phase83_unrebuilt_service_still_converges_under_a_pending_rebuild():
+    fingerprint = image_source_fingerprints()["service"]
+    document = _rollout_inventory(image_id=SERVICE_ID, fingerprint=fingerprint)
+    assert _classify_service_rollout(
+        document,
+        replica_counts=(2, 2, 2),
+        service_source_fingerprint=fingerprint,
+        service_image_id=SERVICE_ID,
+        rebuild_pending=True,
+    ) == "converged"
+
+
+def test_phase83_partially_superseded_service_provenance_is_refused():
+    document = _rollout_inventory(
+        image_id=SERVICE_ID, fingerprint=image_source_fingerprints()["service"]
+    )
+    document["items"][0]["spec"]["template"]["metadata"]["annotations"] = {}
+    with pytest.raises(GreedyLifecycleError, match="partial or ambiguous"):
+        _classify_service_rollout(
+            document,
+            replica_counts=(2, 2, 2),
+            service_source_fingerprint="f" * 64,
+            service_image_id="e" * 64,
+            rebuild_pending=True,
+        )
+
+
+def test_phase83_half_written_provenance_annotation_still_fails_closed():
+    document = _rollout_inventory(
+        image_id=SERVICE_ID, fingerprint=image_source_fingerprints()["service"]
+    )
+    for item in document["items"]:
+        del item["spec"]["template"]["metadata"]["annotations"][
+            GREEDY_SERVICE_SOURCE_FINGERPRINT_ANNOTATION
+        ]
+    with pytest.raises(GreedyLifecycleError, match="provenance is mismatched"):
+        _classify_service_rollout(
+            document,
+            replica_counts=(2, 2, 2),
+            service_source_fingerprint="f" * 64,
+            service_image_id="e" * 64,
+            rebuild_pending=True,
+        )

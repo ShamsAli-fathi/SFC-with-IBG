@@ -15,6 +15,7 @@ from .contracts import (
 from .control_plane_footprint import validate_greedy_control_plane_snapshot
 from .evidence_replay import replay_greedy_evidence_slot
 from .kernel_contracts import GreedyKernelControllerSlotResult
+from .metrics import clamped_end_to_end_fairness
 from .runtime_resources import validate_controller_resource_mapping
 from .simulation import GREEDY_FLOW_ORDER_SEED_SCHEME
 from .slot_contracts import (
@@ -25,11 +26,21 @@ from .slot_contracts import (
 
 GREEDY_SLOT_EVIDENCE_PREFIX = "GREEDY_SLOT_EVIDENCE="
 LEGACY_GREEDY_SLOT_EVIDENCE_VERSION = "greedy-kernel-slot-evidence-v1"
-GREEDY_SLOT_EVIDENCE_VERSION = "greedy-kernel-slot-evidence-v2"
+# v1 and v2 both scored Jain over the link-free predicted per-flow utility.
+# v3 scores the paper end-to-end series with the zero floor and records
+# ``fairness_domain_valid``.  Both older generations stay readable verbatim.
+PREDICTED_FAIRNESS_GREEDY_SLOT_EVIDENCE_VERSION = "greedy-kernel-slot-evidence-v2"
+GREEDY_SLOT_EVIDENCE_VERSION = "greedy-kernel-slot-evidence-v3"
 # Four independently rounded three-decimal posterior entries can differ from
-# unit mass by at most 4 * 0.0005.  Preserve those frozen learner outputs
-# verbatim while still rejecting malformed belief vectors.
-GREEDY_ROUNDED_BELIEF_SUM_TOLERANCE = 0.0020000001
+# unit mass by at most 4 * 0.0005 in a single slot.  The learner never
+# renormalizes, and each slot re-rounds a retained belief
+# (``GREEDY_BELIEF_RETENTION`` 0.8), so that per-slot error accumulates
+# geometrically toward 4 * 0.0005 / (1 - 0.8) = 0.01 across a long run.  The
+# former single-pass bound rejected legitimate frozen learner output from slot
+# 12 onward.  Expected utility already divides by the belief sum, so this drift
+# never reaches placement, learning, utility, SLA, or equilibrium.  Preserve
+# those learner outputs verbatim while still rejecting malformed vectors.
+GREEDY_ROUNDED_BELIEF_SUM_TOLERANCE = 0.0100001
 
 
 def _identity(identity: ReplicaIdentity) -> dict[str, int]:
@@ -301,9 +312,15 @@ def validate_greedy_slot_evidence(
     optional = {"pure_kernel_replay_parity", "control_plane", "controller_resources"}
     if not required.issubset(document) or not set(document).issubset(required | optional):
         raise ValueError("Greedy slot evidence fields are incomplete or unexpected")
-    legacy_v1 = document["contract_version"] == LEGACY_GREEDY_SLOT_EVIDENCE_VERSION
-    if not legacy_v1 and document["contract_version"] != GREEDY_SLOT_EVIDENCE_VERSION:
+    evidence_version = document["contract_version"]
+    if evidence_version not in {
+        LEGACY_GREEDY_SLOT_EVIDENCE_VERSION,
+        PREDICTED_FAIRNESS_GREEDY_SLOT_EVIDENCE_VERSION,
+        GREEDY_SLOT_EVIDENCE_VERSION,
+    }:
         raise ValueError("unsupported Greedy slot evidence version")
+    legacy_v1 = evidence_version == LEGACY_GREEDY_SLOT_EVIDENCE_VERSION
+    predicted_fairness = evidence_version != GREEDY_SLOT_EVIDENCE_VERSION
     expected_policy_version = (
         LEGACY_GREEDY_POLICY_VERSION if legacy_v1 else GREEDY_POLICY_VERSION
     )
@@ -529,6 +546,8 @@ def validate_greedy_slot_evidence(
         "end_to_end_sla_violations", "end_to_end_sla_excess_ms", "jain_fairness",
         "maximum_belief_change", "equilibrium",
     }
+    if not predicted_fairness:
+        metric_fields = metric_fields | {"fairness_domain_valid"}
     if set(metrics) != metric_fields:
         raise ValueError("Greedy evidence metric fields are incomplete or unexpected")
     raw = _flow_pairs(
@@ -574,14 +593,30 @@ def validate_greedy_slot_evidence(
         physical_utility = metric_pairs["physical_realized_utility_per_flow"][flow]
         if abs(reference - (physical_utility - pair_latency[flow])) > 1e-9:
             raise ValueError("Greedy evidence raw reference utility is inconsistent")
-    predicted = metric_pairs["predicted_utility_per_flow"]
-    denominator = len(predicted) * sum(round(value, 3) ** 2 for value in predicted.values())
-    if denominator == 0:
-        raise ValueError("Greedy evidence fairness denominator is zero")
-    expected_fairness = float(metrics["predicted_aggregate_utility"]) ** 2 / denominator
     fairness = _finite_number("jain_fairness", metrics.get("jain_fairness"), minimum=0.0)
+    if predicted_fairness:
+        predicted = metric_pairs["predicted_utility_per_flow"]
+        denominator = len(predicted) * sum(
+            round(value, 3) ** 2 for value in predicted.values()
+        )
+        if denominator == 0:
+            raise ValueError("Greedy evidence fairness denominator is zero")
+        expected_fairness = (
+            float(metrics["predicted_aggregate_utility"]) ** 2 / denominator
+        )
+        expected_domain_valid = None
+    else:
+        expected_fairness, expected_domain_valid = clamped_end_to_end_fairness(
+            metric_pairs["raw_end_to_end_reference_utility_per_flow"]
+        )
     if abs(fairness - expected_fairness) > 1e-9:
         raise ValueError("Greedy evidence fairness is inconsistent")
+    if expected_domain_valid is not None:
+        domain_valid = metrics["fairness_domain_valid"]
+        if not isinstance(domain_valid, bool):
+            raise ValueError("Greedy evidence fairness domain flag must be boolean")
+        if domain_valid is not expected_domain_valid:
+            raise ValueError("Greedy evidence fairness domain flag is inconsistent")
     maximum_change = max(
         abs(before - after)
         for identity in identities

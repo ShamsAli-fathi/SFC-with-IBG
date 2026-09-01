@@ -16,7 +16,7 @@ from .persistence import load_greedy_trace
 
 
 DEFAULT_GREEDY_CSV_DIR = (
-    Path(__file__).resolve().parents[1] / "figures" / "Greedy" / "v2"
+    Path(__file__).resolve().parents[1] / "figures" / "Greedy" / "v3"
 )
 GREEDY_CSV_FILENAMES = (
     "time.csv",
@@ -86,11 +86,24 @@ def _atomic_write(path: Path, fields: Sequence[str], rows: Sequence[Mapping[str,
 def _ensure_csv_policy_contract(
     output_dir: Path,
     policy_contract_version: str,
+    trace_contract_version: str,
 ) -> None:
-    """Refuse retained columns from another or unversioned policy contract."""
+    """Refuse retained columns from another or unversioned contract generation.
+
+    The policy contract alone no longer separates generations: the Phase 8.3
+    fairness correction changed the ``jain_index.csv`` series while leaving
+    ``pure-greedy-budgeted-l2-v2`` in place.  Pin the trace contract as well so
+    a predicted-fairness column can never be appended beside an end-to-end one.
+    """
 
     if not isinstance(policy_contract_version, str) or not policy_contract_version:
         raise ValueError("Greedy CSV policy contract version is missing")
+    if not isinstance(trace_contract_version, str) or not trace_contract_version:
+        raise ValueError("Greedy CSV trace contract version is missing")
+    expected = {
+        "policy_contract_version": policy_contract_version,
+        "trace_contract_version": trace_contract_version,
+    }
     directory = Path(output_dir)
     marker = directory / GREEDY_CSV_POLICY_MARKER
     if marker.exists():
@@ -98,12 +111,19 @@ def _ensure_csv_policy_contract(
             document = json.loads(marker.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError("Greedy CSV policy marker is malformed") from error
-        if not isinstance(document, Mapping) or set(document) != {
-            "policy_contract_version"
-        }:
+        if not isinstance(document, Mapping):
             raise ValueError("Greedy CSV policy marker is malformed")
-        if document["policy_contract_version"] != policy_contract_version:
-            raise ValueError("Greedy CSV refuses mixed v1/v2 policy-contract columns")
+        if set(document) == {"policy_contract_version"}:
+            raise ValueError(
+                "Greedy CSV refuses predicted-fairness columns from a "
+                "pre-Phase-8.3 marker"
+            )
+        if set(document) != set(expected):
+            raise ValueError("Greedy CSV policy marker is malformed")
+        if dict(document) != expected:
+            raise ValueError(
+                "Greedy CSV refuses mixed policy or trace contract columns"
+            )
         return
     if directory.exists() and any(directory.rglob("*.csv")):
         raise ValueError("Greedy CSV refuses unversioned retained columns")
@@ -116,11 +136,7 @@ def _ensure_csv_policy_contract(
         ) as destination:
             temporary = destination.name
             destination.write(
-                json.dumps(
-                    {"policy_contract_version": policy_contract_version},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
+                json.dumps(expected, sort_keys=True, separators=(",", ":"))
             )
             destination.write("\n")
             destination.flush()
@@ -163,6 +179,7 @@ def export_greedy_csv(
     _ensure_csv_policy_contract(
         Path(output_dir),
         started.get("policy_contract_version"),
+        started.get("trace_contract_version"),
     )
     run_id = _run_column(started)
     metrics = []

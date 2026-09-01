@@ -351,6 +351,17 @@ def _legacy_v1_events(events):
         if event.get("event") == "iteration_completed":
             event["contract_version"] = LEGACY_GREEDY_SLOT_EVIDENCE_VERSION
             event["policy_contract_version"] = LEGACY_GREEDY_POLICY_VERSION
+            # A faithful v1 document carries the retired predicted-utility
+            # fairness index and no Phase 8.3 domain flag.
+            metrics = event["metrics"]
+            metrics.pop("fairness_domain_valid", None)
+            predicted = [
+                value for _flow, value in metrics["predicted_utility_per_flow"]
+            ]
+            metrics["jain_fairness"] = (
+                float(metrics["predicted_aggregate_utility"]) ** 2
+                / (len(predicted) * sum(round(value, 3) ** 2 for value in predicted))
+            )
     return validate_greedy_trace_events(legacy)
 
 
@@ -512,7 +523,7 @@ def test_v1_trace_remains_readable_v2_omits_capacity_and_csv_refuses_mixing(tmp_
         run_id="v2-fixture",
         recorded_at=datetime(2026, 8, 27, 0, 0, 1, tzinfo=timezone.utc),
     )
-    with pytest.raises(ValueError, match="mixed v1/v2"):
+    with pytest.raises(ValueError, match="refuses mixed"):
         export_greedy_csv(v2_trace.path, csv_dir)
 
 

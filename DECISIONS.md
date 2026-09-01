@@ -3352,6 +3352,107 @@ Accepted for planning and completed offline in Phase 8.1 on 2026-08-27.
   `assigned_flow_capacity=ceil(N/M)` as an unresolved comparison mismatch.
   A final same-input performance claim requires a separately accepted common
   physical/admission rule; frozen `IBG_Hybrid/` remains unchanged.
+
+## Greedy end-to-end fairness correction decisions
+
+Accepted for planning and completed offline in Phase 8.3 on 2026-09-01.
+
+- Score Greedy's Jain index over the paper's end-to-end per-flow utility. Eq.
+  (e2e_utility) in `misc/vesal_tex.tex` defines per-flow utility as the
+  selected stage utilities minus the inter-stage link costs, and the metric
+  list scores fairness over that same quantity. The retired Greedy input
+  summed only the stage utilities and dropped the link term entirely, so it was
+  not the paper's `U_i` under any reading.
+- Treat the previous behavior as a defect, not a preference. With the link term
+  absent the index is a function of belief and final load alone; a slot with
+  uniform slot-start beliefs and near-uniform loads yields one identical
+  predicted value per flow and a near-perfect index no matter what the flows
+  experienced. The observed `40x3x20` slot reported `0.999994` while its
+  realized end-to-end values ranged 59.69 to 159.15 and its per-flow measured
+  pair cost ranged 8.74 to 66.98 ms.
+- Use the realized series rather than a belief-weighted reconstruction. Greedy
+  is deliberately forbidden from reading link costs at selection time, so it
+  owns no planning link cost to subtract and cannot reproduce Hybrid's
+  predicted form. Realized physical utility minus measured pair latency is the
+  quantity Greedy can compute honestly, and it is what a testbed results
+  section should report.
+- Floor each per-flow end-to-end utility at zero before scoring. Jain is only
+  meaningful on nonnegative values: on mixed signs it reported a slot with
+  three healthy flows and one ruined flow as `0.075`, and a slot with every
+  flow ruined as a fair-looking `0.67`. A flow that loses more to latency than
+  it earns gained no utility. This is a deliberate, documented deviation from
+  the paper's raw expression, made because the paper never bounds `U_i` below.
+- Record `fairness_domain_valid` beside the index, true only when every
+  unclamped per-flow value was strictly positive. Do not silently bake the
+  floor in, and do not fail the slot closed: aborting a live multi-slot run
+  over a reporting-domain condition would destroy operable evidence.
+- Report `0.0` with the flag false when no flow gained anything. That case is a
+  genuine 0/0 and any value is a convention; record it as an explicit
+  convention rather than a computed number.
+- Version only the affected contracts. The policy is unchanged and stays
+  `pure-greedy-budgeted-l2-v2`. Bump metric assembly to
+  `greedy-active-slot-metrics-v2`, slot evidence to
+  `greedy-kernel-slot-evidence-v3`, and the trace to
+  `greedy-experiment-jsonl-v3`. Keep v1 and v2 documents immutable, readable,
+  and validated against the retired predicted formula; new writers must not
+  backfill `fairness_domain_valid` into them.
+- Pin the retained CSV generation on both the policy and trace contract, and
+  move the default output to `figures/Greedy/v3`. The policy version alone no
+  longer separates generations, so a pre-Phase-8.3 marker or a foreign trace
+  version must fail closed rather than append a predicted-fairness column
+  beside an end-to-end one.
+- Record the resulting Greedy/Hybrid fairness divergence as an unresolved
+  comparison mismatch. Active Hybrid scores predicted stage utility at final
+  loads minus its planning link cost and applies no zero floor; frozen
+  `IBG_Hybrid/` and `IBG/` are not edited by this correction. `Greedy/
+  comparison.py` still lists `learning_and_metric_semantics` as a matched row;
+  that row is now stale by explicit user decision and no same-metric fairness
+  claim is permitted until a separately authorized matched correction is made.
+- Change reporting only. Placement, expected-utility scoring, selected-only
+  learning, separated jitter, physical/raw utilities, the SLA count and excess,
+  and the equilibrium rule are untouched, and no historical trace is rewritten.
+
+## Greedy rebuilt-service rollout classification decisions
+
+Accepted and implemented on 2026-09-01 after Phase 8.3's first authorized
+rebuild failed closed on a legitimate service-image change.
+
+- Treat `exact(old) -> exact(new)` as a supported rollout state. The classifier
+  previously admitted only absent or exact provenance, which meant no service
+  source change could ever be applied to existing serving workloads. This was
+  a latent gap, not a Phase 8.3 regression; earlier rebuilds passed only
+  because the annotations were introduced in the same change and read absent.
+- Gate the relaxation on a declared pending rebuild, not on matching the
+  recorded pair. Comparing against `greedy-launcher-state` was tried first and
+  is wrong: the transition marker is persisted before the canonical apply, so a
+  run interrupted between those steps leaves the record already advanced to the
+  target while the templates hold the superseded pair. That pair is then
+  unrecoverable from the record and no equality test can identify it. The
+  launcher can always assert that it rebuilt the service, which makes any
+  non-target template stale by construction.
+- Keep the fail-closed default for everything else. All four serving resources
+  must agree on one mode, a mixed set stays `partial or ambiguous`, a
+  half-written annotation pair still raises, and with no pending rebuild any
+  non-target pair remains foreign mutation. An unrebuilt service still reports
+  `converged` because its templates already match the target exactly.
+- Accept that a declared rebuild will overwrite an unexpected uniform pair.
+  The launcher already asserts exclusive ownership of the Greedy namespace, the
+  canonical apply is the corrective action, and refusing instead would force a
+  cluster teardown to recover.
+- Scope the declaration to the two reconciliation call sites.
+  `_reconcile_existing` passes the run's `service_restart_required`; the
+  pending-rollout check passes it unconditionally because it only runs when a
+  restart is already recorded. The final post-apply gate omits it, so a settled
+  rollout must show exact provenance and cannot pass on a stale template.
+- Reject full-cluster `cleanup` as the standing answer. It works, but forcing a
+  kind teardown for every service-source change would make Phase 8.2 and all
+  later rebuilds needlessly destructive.
+- Accept that `Greedy/slot_contracts.py` sits in both `SERVICE_SOURCE_FILES`
+  and `CONTROLLER_SOURCE_FILES`, so a controller-only metrics field still
+  churns the service fingerprint. Splitting `GreedySlotMetrics` out to avoid
+  that would introduce a circular import and worse layering; the correct fix
+  was the rollout classifier, not the file layout.
+
 ## Planned Hybrid posterior-transmission measurement decisions
 
 Accepted for phased implementation: 2026-08-31.
@@ -3448,3 +3549,37 @@ Accepted: 2026-09-01.
 - Keep the 120-second inactivity timer and independent topology-bounded total
   deadline. Normal readiness observations are not progress, and repeated UID
   churn cannot keep a rollout alive forever.
+
+## Greedy belief unit-mass tolerance and live launcher output decisions
+
+Accepted and applied on 2026-09-01, after a user `40x3x20`, 50-iteration run
+failed on iteration 12 with `beliefs_after belief vectors exceed the rounded
+unit-mass tolerance`.
+
+- Correct the validator bound, not the learner. The frozen selected-only
+  learner rounds each of the four posterior entries to three decimals
+  independently and never renormalizes, so a single slot can miss unit mass by
+  4 * 0.0005. Because every slot re-rounds a retained belief at
+  `GREEDY_BELIEF_RETENTION` 0.8, that per-slot error accumulates geometrically
+  toward `4 * 0.0005 / (1 - 0.8)` = 0.01. The former `0.0020000001` bound was
+  derived for one rounding pass and therefore rejected legitimate learner
+  output on any sufficiently long run. Set
+  `GREEDY_ROUNDED_BELIEF_SUM_TOLERANCE` to `0.0100001`.
+- Do not renormalize in `aggregation()`. That would change actual belief values
+  and diverge the Greedy learner from the frozen Exact learner it mirrors, to
+  repair what is only a validation bound. The drift is already inert:
+  `expected_stage_utility_from_belief` divides by the belief sum, so placement,
+  learning, utility, SLA, fairness, and equilibrium never see it.
+- Bump no contract. The evidence, trace, metric, and policy semantics are
+  unchanged; only a malformed-input bound moved. Historical traces stay
+  readable and are not rewritten.
+- Treat completed-slot console output as display only. The launcher now follows
+  the finite controller Job with `kubectl logs --follow` and prints each
+  non-evidence line as it arrives, so a long run reports progress instead of
+  emitting everything after completion. Machine-readable
+  `GREEDY_SLOT_EVIDENCE=` lines stay hidden from that stream.
+- Keep the follow strictly separate from evidence. Job completion is still
+  decided by the `kubectl wait` condition, and the authoritative log text is
+  still re-read from the finished Job, so a dropped, truncated, or reordered
+  follow cannot shorten or alter a persisted trace. The lifecycle hook defaults
+  to absent, so every non-launcher caller keeps the previous behavior.

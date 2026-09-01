@@ -111,7 +111,7 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         choices=(0, 1),
         default=0,
-        help="export the validated v2 host trace to figures/Greedy/v2 when set to 1",
+        help="export the validated v3 host trace to figures/Greedy/v3 when set to 1",
     )
     run_parser.add_argument(
         "--parity-replay",

@@ -46,7 +46,10 @@ from .simulation import (
 
 
 LEGACY_GREEDY_TRACE_CONTRACT_VERSION = "greedy-experiment-jsonl-v1"
-GREEDY_TRACE_CONTRACT_VERSION = "greedy-experiment-jsonl-v2"
+# v1 and v2 recorded the link-free predicted fairness index; v3 records the
+# clamped end-to-end index plus its domain flag.  All three stay readable.
+PREDICTED_FAIRNESS_GREEDY_TRACE_CONTRACT_VERSION = "greedy-experiment-jsonl-v2"
+GREEDY_TRACE_CONTRACT_VERSION = "greedy-experiment-jsonl-v3"
 DEFAULT_GREEDY_TRACE_DIR = Path(__file__).resolve().parents[1] / "runs"
 
 
@@ -295,6 +298,7 @@ def validate_greedy_trace_events(
     trace_version = documents[0].get("trace_contract_version")
     if trace_version not in {
         LEGACY_GREEDY_TRACE_CONTRACT_VERSION,
+        PREDICTED_FAIRNESS_GREEDY_TRACE_CONTRACT_VERSION,
         GREEDY_TRACE_CONTRACT_VERSION,
     } or any(item.get("trace_contract_version") != trace_version for item in documents):
         raise ValueError("Greedy trace mixes schema versions")

@@ -4564,6 +4564,96 @@ uses a policy-contract marker and a separate default `figures/Greedy/v2`
 directory; retained mixed v1/v2 policy columns fail closed. The matched
 comparison is now `greedy-hybrid-matched-comparison-v2` and records active
 Hybrid's synthetic admission as an unresolved mismatch, not a matched row.
+
+## Greedy end-to-end fairness boundary
+
+Phase 8.3 corrects which per-flow series the Greedy Jain index reads. The
+paper's Eq. (e2e_utility) in `misc/vesal_tex.tex` defines per-flow utility as
+the selected stage utilities minus the inter-stage link costs, and its metric
+list scores Jain over exactly that end-to-end quantity. Greedy previously
+scored the link-free predicted series, so a slot whose replicas carried equal
+beliefs and equal final loads produced one identical predicted value per flow
+and a structurally near-perfect index regardless of what the flows actually
+experienced.
+
+The active assembly is `greedy-active-slot-metrics-v2`. `compute_slot_metrics`
+now scores `raw_end_to_end_reference_utility_per_flow` -- observed selected
+physical utility minus the measured pair latency -- and records a
+`fairness_domain_valid` boolean beside the index. Jain is only meaningful on
+nonnegative values, and a congested flow can lose more to latency than it
+earns, so each flow is floored at zero before scoring: a flow with negative
+end-to-end utility gained no utility. The flag is true only when every
+unclamped per-flow value was strictly positive, so a report can distinguish an
+ordinary equality measurement from one that required the floor. When no flow
+gained anything the index is a genuine 0/0; the slot records the documented
+`0.0` convention with the flag false rather than a computed value. Unclamped
+per-flow end-to-end utilities, the retired predicted series, physical
+utilities, pair costs, and raw latency all remain recorded.
+
+Greedy is forbidden from reading link costs at selection time
+(`planning_link_cost_ms` and `measured_pair_latency_ms` are
+`POLICY_FORBIDDEN_INPUT_FIELDS`, and `link-cost-selection-term` stays in
+`EXCLUDED_SELECTION_FEATURES`). This correction therefore changes reporting
+only: placement, expected-utility scoring, selected-only learning, SLA, and
+equilibrium are untouched.
+
+Persistence stays version-bounded. New evidence and JSONL use
+`greedy-kernel-slot-evidence-v3` and `greedy-experiment-jsonl-v3`; v1 and v2
+documents remain readable and are still validated against the retired
+predicted-utility formula, and must not carry `fairness_domain_valid`. Because
+the policy contract is unaffected and remains `pure-greedy-budgeted-l2-v2`, the
+CSV marker now pins both the policy and the trace contract, and the default
+output directory moves to `figures/Greedy/v3`; a pre-Phase-8.3 marker or a
+foreign trace generation fails closed instead of appending a
+predicted-fairness column beside an end-to-end one.
+
+## Greedy rebuilt-service rollout classification
+
+`_classify_service_rollout` originally accepted exactly two Pod-template
+provenance states: **absent**, the legacy or not-started case that triggers a
+canonical apply, and **exact**, matching the target image ID and service source
+fingerprint. Anything else failed closed as ambiguous.
+
+That admitted `absent -> exact` but never `exact(old) -> exact(new)`, so a
+legitimate service-source change could not be rolled onto existing serving
+workloads at all. Earlier rebuilds only passed because the provenance
+annotations were being introduced in the same change and therefore read as
+absent. Phase 8.3 exposed the gap: `Greedy/slot_contracts.py` is a
+`SERVICE_SOURCE_FILES` member, so adding one metrics field moved the service
+fingerprint, rebuilt the service image, and left every StatefulSet template on
+the previous pair. A partial teardown cannot recover, because the classifier
+also requires complete coverage of all four serving resources.
+
+The classifier now accepts a third state, **superseded**, gated on the caller
+declaring `rebuild_pending`. When the launcher knows a service rebuild is
+committed for this run, a uniform non-target pair is the pre-rebuild template
+rather than an ambiguity, and is classified `template-update-required`.
+
+`rebuild_pending` rather than a comparison against the recorded pair is the
+correct discriminator, because the transition marker is persisted to
+`greedy-launcher-state` *before* the canonical apply. A run interrupted between
+those two steps leaves the record already advanced to the target while the
+templates still hold the superseded pair, so that pair is no longer recoverable
+from the record and no equality test can identify it. What the launcher can
+always assert is that it rebuilt the service, which makes any non-target
+template stale by construction.
+
+Two call sites declare it. `_reconcile_existing` passes the run's
+`service_restart_required`, which is true when the recorded state carries a
+pending restart or the service image was built this run. The pending-rollout
+check passes it unconditionally, since it only executes when
+`service_restart_required` is already recorded.
+
+The fail-closed intent is preserved. Every mode must still agree across all
+four serving resources, a mixed set is still `partial or ambiguous`, a
+half-written annotation pair still raises, and with no pending rebuild any
+non-target pair is still foreign mutation. The final post-apply gate omits
+`rebuild_pending` entirely, so a settled rollout must show exact provenance and
+cannot be satisfied by a stale template. Overwriting an unexpected uniform pair
+during a declared rebuild is safe because the launcher already asserts
+exclusive ownership of the namespace and the canonical apply is the corrective
+action.
+
 ## Planned Hybrid opt-in posterior-transmission mirror
 
 Planned: 2026-08-31. The Hybrid controller currently owns, updates, and reuses

@@ -403,6 +403,10 @@ class GreedySlotMetrics:
     end_to_end_sla_violations: int
     end_to_end_sla_excess_ms: float
     jain_fairness: float
+    # True only when every unclamped per-flow end-to-end utility was strictly
+    # positive.  False marks a slot whose fairness index required the zero
+    # floor, so reports must not read it as an ordinary equality measurement.
+    fairness_domain_valid: bool
     maximum_belief_change: float
     equilibrium: bool
 

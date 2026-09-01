@@ -4678,3 +4678,224 @@ forced replay or CSV; an unchanged `--skip-build` repeat was intentionally not
 started. The separate Phase 8.2 gate still requires its deterministic
 above-old-ceiling live demonstration, forced replay/CSV validation, and
 unchanged skip-build repeat. Phase 9 remains blocked until those pass.
+
+## Greedy Phase 8.3 offline end-to-end fairness correction completed
+
+Completed offline: 2026-09-01. Nothing was run live and no experiment was
+rerun.
+
+The reported Greedy Jain index scored the wrong per-flow series. Eq.
+(e2e_utility) in `misc/vesal_tex.tex` defines per-flow utility as the selected
+stage utilities minus the inter-stage link costs, and the paper scores fairness
+over that quantity. `Greedy/metrics.py` summed only the stage utilities and
+dropped the link term, so the index was a function of belief and final load
+alone. In `runs/greedy-experiment-20260901T164804.903455Z.jsonl` that made all
+40 flows share the identical predicted value `134.619568` and report fairness
+`0.999994`, while the same slot's realized end-to-end values ranged 59.69 to
+159.15 and its per-flow measured pair cost ranged 8.74 to 66.98 ms. Recomputing
+that slot over the corrected series gives `0.958115`. Active Hybrid already
+subtracts its planning link cost (`IBG_Hybrid/runner.py:293-305`) and IBG
+applies a link penalty (`IBG/runner.py:229`), so Greedy was the only policy of
+the three omitting it.
+
+What changed, in `Greedy/` only:
+
+- `metrics.py`: new `clamped_end_to_end_fairness` scores
+  `raw_end_to_end_reference_utility_per_flow` with each flow floored at zero
+  and returns the index plus `fairness_domain_valid`; assembly bumped to
+  `greedy-active-slot-metrics-v2`. The zero floor exists because Jain is only
+  meaningful on nonnegative values: on mixed signs it rated three healthy flows
+  plus one ruined flow at `0.075`, and a slot with every flow ruined at a
+  fair-looking `0.67`.
+- `slot_contracts.py`: `GreedySlotMetrics.fairness_domain_valid`.
+- `evidence.py`: three readable generations. v3 recomputes the clamped
+  end-to-end index and the flag; v1 and v2 keep the retired predicted formula
+  and must not carry the new field; unknown generations are refused. Slot
+  evidence bumped to `greedy-kernel-slot-evidence-v3`.
+- `persistence.py`: trace bumped to `greedy-experiment-jsonl-v3`, with v1 and
+  v2 still loadable.
+- `csv_export.py`: the marker pins policy and trace contract together because
+  the policy version did not change; default output moved to
+  `figures/Greedy/v3`; a pre-Phase-8.3 marker or foreign generation fails
+  closed.
+- `console_output.py`: the slot line now reads `end-to-end fairness=` and
+  appends `(clamped)` when the domain flag is false.
+
+Verification actually run:
+
+- `PYTHONPATH=. .venv/bin/pytest tests/test_greedy_phase83.py -q`: 19 passed.
+- `PYTHONPATH=. .venv/bin/pytest tests/ -k greedy -q`: 215 passed, 1 failed.
+- Complete suite `PYTHONPATH=. .venv/bin/pytest tests/ -q`: 1029 passed, 6
+  failed.
+
+Every failure is pre-existing and unrelated. One is the frozen comparison audit
+for dirty `IBG_Hybrid/kernel_controller.py` (expected blob
+`b9408745de6175316481a47915423d16c9b1aea8`, current
+`81d0d3514b9c41f720763938a7f0b0c83412e030`); the other five are
+user-controlled `Chart/` tests excluded under their repository guardrail, and
+neither Chart module imports `Greedy`. `tests/test_greedy_phase6.py` was
+updated only so its synthetic v1 downgrade emits a faithful historical
+document.
+
+Not done, and owed:
+
+- No live run. Phase 8.2's acceptance evidence must now be produced under the
+  v3 contracts, and its topology should use a small `M` so replica loads
+  actually exceed one or two; every completed `40x3x20` trace so far peaked at
+  load two, which is why fairness had no congestion to measure.
+- `Greedy/comparison.py` still lists `learning_and_metric_semantics` as a
+  matched Greedy/Hybrid row. That row is now stale by explicit user decision;
+  the divergence is recorded in `DECISIONS.md` and no same-metric fairness
+  claim is permitted.
+- The paper's node-capacity constraint (`misc/vesal_tex.tex` line 819,
+  `sum_i d_{i,k,j} * rho_{k,j} <= C_{h(k,j)}`) remains unimplemented. It is the
+  paper's real per-replica flow limit and is unrelated to the removed
+  `ceil(N/M)` ceiling; the user explicitly deferred it.
+
+Phase 9 remains blocked.
+
+## Greedy Phase 8.3 rebuilt-service rollout repair completed
+
+Completed offline: 2026-09-01. No cluster mutation was performed by the
+implementation; the user ran the build.
+
+The user's first authorized Phase 8.3 rebuild built and loaded both images and
+then failed closed:
+
+```
+Greedy cluster isolation failure: serving rollout provenance is mismatched:
+StatefulSet/greedy-stage-1
+```
+
+Cause: `Greedy/slot_contracts.py` is a member of both `SERVICE_SOURCE_FILES`
+and `CONTROLLER_SOURCE_FILES`, so the single `fairness_domain_valid` field
+added in Phase 8.3 moved the service source fingerprint from
+`d9d0e69efcf870a201c0a44f618380dcf8e51057b3c32b5509b56d6b824bcfdb` to
+`3a51cb938bcd197a21eba3c4ad1def30a7cb6fbfa7b67be76c467e9c85c33311` and rebuilt
+the service image, while every serving Pod template still carried the previous
+pair.
+
+This was a latent launcher gap, not a Phase 8.3 regression.
+`_classify_service_rollout` accepted only absent provenance (legacy or
+not-started) or exact target provenance, so `exact(old) -> exact(new)` was
+unreachable and no service-source change could ever be applied to existing
+serving workloads. Earlier rebuilds passed only because the annotations were
+introduced in that same change and read as absent. Deleting serving workloads
+is not a workaround either, because the classifier requires complete coverage
+of all four serving resources.
+
+Repair, in `Greedy/kernel_lifecycle.py` only. The first attempt compared the
+templates against the pair recorded in `greedy-launcher-state`. The user's
+retry proved that insufficient and is worth recording: the interrupted run had
+already persisted its transition marker, so the record had advanced to
+`service_source_fingerprint=3a51cb93...`,
+`service_image_id=eda4c834...`, `service_restart_required=true`,
+`transition_active=true`, while the templates still held the superseded pair.
+The recorded pair therefore no longer identified them and the failure moved
+earlier, to the pending-rollout check.
+
+The landed repair gates on a declared `rebuild_pending` instead. When the
+launcher knows a service rebuild is committed for this run, a uniform
+non-target pair is the pre-rebuild template and classifies as
+`template-update-required`. This is the correct discriminator because the
+marker is persisted before the canonical apply, so the superseded pair is not
+recoverable from the record by any equality test; what the launcher can always
+assert is that it rebuilt the service. `_reconcile_existing` declares the run's
+`service_restart_required`, and the pending-rollout check declares it
+unconditionally because it only executes when a restart is already recorded.
+
+Everything else stays strict: all four serving resources must agree on one
+mode, a mixed set is still `partial or ambiguous`, a half-written annotation
+pair still raises, a non-target pair with no pending rebuild is still foreign
+mutation, and the final post-apply gate omits `rebuild_pending` so a settled
+rollout must show exact provenance. Overwriting an unexpected uniform pair
+during a declared rebuild is acceptable because the launcher already asserts
+exclusive namespace ownership and the canonical apply is the corrective action.
+
+Verification actually run:
+
+- `PYTHONPATH=. .venv/bin/pytest tests/test_greedy_phase5.py -q`: 36 passed,
+  including six new classification tests covering a clean rebuild, the
+  interrupted-transition resume, the strict settled-rollout check, an unrebuilt
+  service under a pending rebuild, partial provenance, and a half-written
+  annotation pair.
+- `PYTHONPATH=. .venv/bin/pytest tests/ -k greedy -q`: 221 passed, 1 failed.
+- Complete suite: 1035 passed, 6 failed.
+- The live blocked inventory and its recorded launcher state were replayed
+  read-only. The pending check raises `serving rollout provenance is
+  mismatched` without `rebuild_pending` and returns `template-update-required`
+  with it; the final gate still raises, correctly, until the canonical apply
+  updates the templates.
+
+The six failures are the same pre-existing unrelated ones recorded for Phase
+8.3: the frozen comparison audit for dirty `IBG_Hybrid/kernel_controller.py`
+and five guardrail-excluded user-controlled `Chart/` tests.
+
+Next action: rerun the launcher. The previously blocked command should now
+reconcile the serving templates and create one finite controller Job. The
+`--csv` help text was corrected to name `figures/Greedy/v3`. Phase 8.2 still
+owes its acceptance run under the v3 contracts, preferably at a small `M` so
+replica loads exceed one or two. Phase 9 remains blocked.
+
+## Greedy belief-tolerance repair and live launcher output
+
+Implemented locally: 2026-09-01, after the Phase 8.3 contracts were already in
+the tree.
+
+A user `40x3x20`, 50-iteration run with `--profile-seed 17 --skip-build --csv 1`
+created its controller Job normally and completed eleven slots, then the Job
+failed with `BackoffLimitExceeded`. The pod traceback was
+`ValueError: beliefs_after belief vectors exceed the rounded unit-mass
+tolerance` from `Greedy/evidence.py` `_belief_mapping`, reached through
+`kernel_controller_service.py` slot persistence on iteration 12. No trace was
+written for that run.
+
+The cause was the validator bound, not the learner. Measured
+`max |sum(belief) - 1|` per slot in the two completed ten-slot traces
+`runs/greedy-experiment-20260901T184309.744815Z.jsonl` and
+`...T184835.529758Z.jsonl` rises from 0.000 to 0.002 and then sits pinned at
+0.002, which is exactly the former tolerance; slot 12 was the first to exceed
+it. The frozen learner rounds four posterior entries independently to three
+decimals and never renormalizes, and each slot re-rounds a belief retained at
+0.8, so the per-slot 4 * 0.0005 error accumulates toward 0.01.
+
+Changes:
+
+- `evidence.py`: `GREEDY_ROUNDED_BELIEF_SUM_TOLERANCE` `0.0020000001` ->
+  `0.0100001`, with the accumulation derivation recorded in the comment. No
+  contract version moved; expected utility already normalizes by the belief
+  sum, so no mathematical or evidence semantics changed.
+- `kernel_reporting.py`: `_follow_controller_logs` follows the finite Job with
+  `kubectl logs --follow --pod-running-timeout=600s` and prints each
+  non-evidence line live. The captured log is still re-read afterwards for
+  trace construction, and the post-run projection is silenced when the live
+  follow already displayed the same text.
+- `kernel_lifecycle.py`: `run_greedy_lifecycle` gained an optional
+  display-only `stream_logs` hook, invoked once the Job exists and before the
+  unchanged `kubectl wait --for=condition=complete`. It defaults to absent.
+- `tests/test_greedy_phase8.py`: the rounding-bound cases encoded the retired
+  single-pass assumption. A vector off by exactly 0.01 is now an accepted
+  accumulated extreme; the rejection cases moved to 0.96 and 1.02.
+
+Verification actually run:
+
+- `PYTHONPATH=. .venv/bin/pytest tests/test_greedy_*.py -q`: 219 passed,
+  1 failed.
+- The sole failure is
+  `test_greedy_phase7.py::test_phase7_comparison_envelope_matches_current_active_hybrid_sources`,
+  the pre-existing frozen comparison audit. Its recorded constant is
+  `b9408745de61...`, while both the committed and the worktree blob of
+  `IBG_Hybrid/kernel_controller.py` are `81d0d3514b9c...`, so it fails on a
+  clean checkout of HEAD and is unrelated to this repair. `IBG_Hybrid/` was not
+  edited.
+- Changed Python compiles and imports.
+- No experiment was rerun by the implementation agent.
+
+Next action: rerun the failed command **without** `--skip-build`. The
+controller image copies `Greedy/evidence.py` at build time
+(`deploy/greedy-kubernetes/Dockerfile.controller`), so a skip-build reuse would
+run the retired bound and fail on iteration 12 again. Phase 8.2 still owes its
+acceptance run under the v3 contracts, preferably at a small `M`: the completed
+`40x3x20` runs reached a maximum replica load of four, left 24 of 60 replicas
+unobserved in the final slot, and never approached the 0.04 equilibrium
+threshold. Phase 9 remains blocked.

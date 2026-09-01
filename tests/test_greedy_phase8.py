@@ -38,6 +38,11 @@ def test_lifecycle_source_fingerprints_match_trace_sha256_width():
     (
         [0.199, 0.399, 0.201, 0.2],  # 0.999 after frozen learner rounding
         [0.201, 0.399, 0.201, 0.2],  # 1.001 after frozen learner rounding
+        # The learner never renormalizes and re-rounds a retained belief every
+        # slot, so a single slot's 4 * 0.0005 error accumulates geometrically
+        # toward 0.01.  Both accumulated extremes stay legitimate output.
+        [0.195, 0.395, 0.2, 0.2],  # 0.99 after repeated retained rounding
+        [0.21, 0.4, 0.2, 0.2],  # 1.01 after repeated retained rounding
     ),
 )
 def test_evidence_accepts_bounded_three_decimal_belief_rounding(belief):
@@ -52,8 +57,8 @@ def test_evidence_accepts_bounded_three_decimal_belief_rounding(belief):
 @pytest.mark.parametrize(
     "belief",
     (
-        [0.19, 0.39, 0.2, 0.2],
-        [0.21, 0.4, 0.2, 0.2],
+        [0.18, 0.38, 0.2, 0.2],  # 0.96, beyond the accumulated 0.01 bound
+        [0.22, 0.4, 0.2, 0.2],  # 1.02, beyond the accumulated 0.01 bound
     ),
 )
 def test_evidence_rejects_belief_mass_beyond_rounding_bound(belief):

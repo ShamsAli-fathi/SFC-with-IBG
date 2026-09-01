@@ -1261,11 +1261,19 @@ def _classify_service_rollout(
     replica_counts: Sequence[int],
     service_source_fingerprint: str,
     service_image_id: str,
+    rebuild_pending: bool = False,
 ) -> str:
     """Classify one exact target rollout as update-required/progressing/converged.
 
-    Missing provenance is the single supported legacy/not-started state.  A
-    partial or mismatched provenance pair is ambiguous and fails closed.
+    Missing provenance is the legacy or not-started state.  When the launcher
+    record says a service rebuild is committed but not yet rolled out, a
+    uniform non-target pair is simply the pre-rebuild template rather than an
+    ambiguity, so it is an update to apply.  That covers both a clean rebuild
+    and a run interrupted after the transition marker was persisted, where the
+    superseded pair is no longer recoverable from the record.  Callers that
+    must observe a settled rollout leave ``rebuild_pending`` false so only
+    exact provenance can pass.  Every mode must still agree across all four
+    serving resources, and a partial or unexplained pair fails closed.
     """
 
     counts = tuple(replica_counts)
@@ -1337,6 +1345,12 @@ def _classify_service_rollout(
             and source_marker == service_source_fingerprint
         ):
             provenance_modes.add("exact")
+        elif (
+            rebuild_pending
+            and isinstance(image_marker, str)
+            and isinstance(source_marker, str)
+        ):
+            provenance_modes.add("superseded")
         else:
             raise GreedyLifecycleError(
                 f"serving rollout provenance is mismatched: {kind}/{name}"
@@ -1377,7 +1391,11 @@ def _classify_service_rollout(
         raise GreedyLifecycleError("serving rollout resource coverage is incomplete")
     if len(provenance_modes) != 1:
         raise GreedyLifecycleError("serving rollout provenance is partial or ambiguous")
-    if provenance_modes == {"absent"} or correction_required:
+    if (
+        provenance_modes == {"absent"}
+        or provenance_modes == {"superseded"}
+        or correction_required
+    ):
         return "template-update-required"
     return "converged" if complete else "progressing"
 
@@ -1944,6 +1962,7 @@ def _reconcile_existing(
     current: GreedyExistingTopology,
     deployed_profile: GreedyKernelRuntimeProfileDocument,
     transition: GreedyLauncherState,
+    rebuild_pending: bool,
     emit: ProgressEmitter | None = None,
 ) -> tuple[bool, bool]:
     target = launch.configuration
@@ -2053,6 +2072,7 @@ def _reconcile_existing(
         replica_counts=current_counts,
         service_source_fingerprint=transition.service_source_fingerprint,
         service_image_id=transition.service_image_id,
+        rebuild_pending=rebuild_pending,
     )
     if rollout_state == "template-update-required":
         if launch.skip_build:
@@ -2232,8 +2252,16 @@ def run_greedy_lifecycle(
     execute: Executor = _execute,
     validate_wheelhouses: WheelhouseValidator | None = None,
     emit: ProgressEmitter | None = None,
+    stream_logs: Callable[[], None] | None = None,
 ) -> GreedyLifecycleResult:
-    """Reconcile one environment and create exactly one finite controller Job."""
+    """Reconcile one environment and create exactly one finite controller Job.
+
+    ``stream_logs`` is an optional display-only hook invoked once the finite Job
+    exists.  It must block until that Job stops producing output.  Completion is
+    still decided by the ``kubectl wait`` condition below, and the authoritative
+    evidence text is still read afterwards, so a caller that omits the hook --
+    every test does -- keeps the exact previous behaviour.
+    """
 
     if not isinstance(launch, GreedyLaunchConfiguration):
         raise TypeError("launch must be GreedyLaunchConfiguration")
@@ -2497,6 +2525,10 @@ def run_greedy_lifecycle(
             replica_counts=discovered_before_transition.replica_counts,
             service_source_fingerprint=current_state.service_source_fingerprint,
             service_image_id=current_state.service_image_id,
+            # The marker is persisted before the canonical apply, so a run
+            # interrupted in between leaves the templates on the superseded
+            # pair.  That is an unstarted rollout to resume, not a foreign one.
+            rebuild_pending=True,
         )
         if launch.skip_build and pending_rollout_state != "converged":
             raise GreedyLifecycleError(
@@ -2558,6 +2590,7 @@ def run_greedy_lifecycle(
             current=current_topology,
             deployed_profile=deployed_profile_before,
             transition=transition,
+            rebuild_pending=service_restart_required,
             emit=emit,
         )
 
@@ -2605,6 +2638,8 @@ def run_greedy_lifecycle(
         emit("Greedy serving readiness: exact coverage passed")
         emit("Greedy controller Job: starting")
     _apply_documents(execute, (job,))
+    if stream_logs is not None:
+        stream_logs()
     execute(
         _kubectl(
             "wait",
