@@ -277,6 +277,44 @@ def test_dynamic_patch_targets_only_all_three_replica_statefulsets(tmp_path):
     ) == ""
 
 
+def test_reconciliation_preserves_external_template_annotations_without_netem(
+    tmp_path,
+):
+    statefulsets = _statefulsets(
+        HybridNetworkImpairment.enabled_with(delay_ms=2, jitter_ms=2)
+    )
+    for item in statefulsets["items"]:
+        item["spec"]["template"]["metadata"]["annotations"][
+            "kubectl.kubernetes.io/restartedAt"
+        ] = "2026-08-22T16:40:55+03:30"
+
+    paths = runner._write_preserved_template_annotation_patches(
+        tmp_path,
+        statefulsets,
+    )
+
+    assert paths == tuple(
+        f"preserve-hybrid-stage-{stage}-template-annotations.json"
+        for stage in range(1, 4)
+    )
+    for path in paths:
+        patch = json.loads((tmp_path / path).read_text())
+        annotations = patch["spec"]["template"]["metadata"]["annotations"]
+        assert annotations == {
+            "kubectl.kubernetes.io/restartedAt": "2026-08-22T16:40:55+03:30"
+        }
+        assert HYBRID_NETWORK_IMPAIRMENT_ANNOTATION not in annotations
+
+    fragment = runner._write_network_impairment_patches(
+        tmp_path,
+        HybridNetworkImpairment.disabled(),
+        additional_paths=paths,
+    )
+    assert fragment == "patches:\n" + "".join(
+        f"  - path: {path}\n" for path in paths
+    )
+
+
 def test_statefulset_inventory_requires_one_consistent_exact_configuration():
     enabled = HybridNetworkImpairment.enabled_with(
         delay_ms=10,

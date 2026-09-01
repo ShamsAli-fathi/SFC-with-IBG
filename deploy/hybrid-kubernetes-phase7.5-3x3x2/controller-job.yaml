@@ -31,6 +31,10 @@ spec:
               value: /etc/ibg-hybrid-controller/controller-inputs.json
             - name: FLOW_GENERATOR_URL
               value: http://ibg-hybrid-flow-generator.ibg-hybrid-testbed.svc.cluster.local.:8080
+            - name: HYBRID_POSTERIOR_MIRROR_URL
+              value: http://ibg-hybrid-posterior-mirror.ibg-hybrid-testbed.svc.cluster.local.:8080
+            - name: HYBRID_CONTROLLER_POD_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
             - name: SLOT_ID
               value: "1"
             - name: MAX_ITERATIONS
@@ -62,6 +66,10 @@ spec:
             - name: controller-phase75-source
               mountPath: /app/IBG_Hybrid/console_output.py
               subPath: console_output.py
+              readOnly: true
+            - name: controller-phase75-source
+              mountPath: /app/IBG_Hybrid/posterior_mirror.py
+              subPath: posterior_mirror.py
               readOnly: true
           resources:
             requests: {cpu: "2", memory: 256Mi}

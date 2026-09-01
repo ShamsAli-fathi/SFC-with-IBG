@@ -3896,3 +3896,124 @@ Gate: scale transitions, repeatability, replay, and the declared final evidence
 pass; documentation records the supported dimensions and any exploratory
 larger runs separately. Optional robustness or new baseline-comparison features
 require a new roadmap.
+## Hybrid posterior-transmission mirror plan
+
+Planned: 2026-08-31. This is a three-phase, opt-in measurement extension for
+the paper's belief-update control-plane claim. It does not replace local belief
+ownership or change Hybrid decisions.
+
+1. **Phase 1: measurement contract and implementation — medium difficulty.**
+   Inspect the existing learning-result boundary and define the canonical set
+   and order of completed posterior updates. Add a versioned deterministic
+   serializer, a lightweight validation/discard HTTP receiver, a worker-only
+   Pod and ClusterIP Service, controller-side opt-in transmission, lifecycle
+   provenance, and exact vector/body byte and message accounting. Disabled
+   mode must render and execute no receiver or transmission. Add focused unit,
+   manifest, serialization, arithmetic, failure, and semantics-neutrality
+   tests, but do not mutate a live cluster.
+2. **Phase 2: complete local verification and handoff completion — medium
+   difficulty.** Run focused tests, the complete Hybrid suite in bounded
+   groups, relevant frozen Exact regressions, changed-Python compilation,
+   launcher checks, all applicable offline Hybrid renders, and
+   `git diff --check`. Finalize validated JSONL/CSV and summary behavior if it
+   is not already complete in Phase 1. Append actual results only after these
+   gates pass.
+3. **Phase 3: separately authorized live gate — medium difficulty.** Build and
+   load the affected Hybrid image(s), run matched disabled/enabled experiments,
+   prove the receiver obtains the exact bodies and counts recorded by the
+   controller, and prove placement, beliefs, learning, utility, SLA, fairness,
+   telemetry, and serving-Pod behavior are unchanged. Report payload-only
+   results without wire-byte, NIC, multi-host, or operational distributed-
+   learning claims.
+
+Phase 1 is the next action. Phase 2 and all live work require later explicit
+user authorization.
+
+## Hybrid posterior-transmission mirror Phase 1 and Phase 2 complete
+
+Completed locally: 2026-08-31. Phase 1 implemented the default-off receiver,
+canonical serializer, persistent sender, strict evidence/provenance, resource
+preflight, production option, lifecycle cleanup, and fail-before-commit
+behavior. Phase 2 completed the three mirror CSVs, the Hybrid-only summary
+command, integration coverage, and the requested offline verification.
+
+Acceptance evidence:
+
+- 104 focused posterior-mirror, evidence, CSV, summary, launcher, lifecycle,
+  resource, packaging, and control-plane tests passed in the final focused run.
+- The complete Hybrid suite passed in three memory-bounded groups: 162, 103,
+  and 146 tests, for 411 passing tests total.
+- Changed Python compilation with external bytecode, clean imports, launcher
+  and summary help, all seven retained offline Kustomize renders, an additional
+  enabled-receiver offline render, and `git diff --check` passed.
+- IBG-Exact was not inspected, changed, or tested. No image build/load, Docker,
+  kind, API-server, Job, Pod, traffic, cluster mutation, or live experiment was
+  performed.
+
+Phase 3 is next but remains blocked on separate explicit authorization. It must
+perform a matched disabled/enabled live gate, verify exact receiver receipts and
+semantic non-regression, and report only instrumented application-payload
+evidence. It must not claim wire bytes, NIC behavior, multi-host behavior, or
+that Hybrid operationally requires distributed belief exchange.
+
+Pre-Phase-3 integration addendum: the first user-run preflight exposed a
+fail-closed difference caused solely by a retained
+`kubectl.kubernetes.io/restartedAt` Pod-template annotation. Reconciliation now
+preserves non-netem annotations instead of removing them. The correction passed
+65 focused network-impairment, topology, and infrastructure tests, compilation,
+and `git diff --check`; no experiment was rerun by the implementation agent.
+
+Receiver-startup addendum: the first enabled user attempt exposed that the
+initial receiver manifest selected the Uvicorn-free controller image. The
+receiver now selects the existing Uvicorn-equipped service image, and that
+image copies only the self-contained mirror module in addition to its retained
+service sources. Fifty-eight focused mirror, image-isolation, wheelhouse, and
+netem tests pass with compilation and `git diff --check`. The agent did not
+restart the Deployment or run traffic.
+
+### Greedy Phase 8.2 rollout-timeout repair
+
+Implemented locally: 2026-09-01. Two user-started `40x3x20` normal attempts
+made steady ordered rollout progress but exceeded the former single
+120-second command deadline before all 60 replica Pods converged. Each rollout
+subsequently reached 20/20 Ready per stage, but the launcher had already exited
+and created no controller Job. A following `--skip-build` attempt correctly
+refused the pending service-image marker.
+
+The readiness gate now uses a 120-second progress-reset stall timer plus a
+separate topology-bounded total deadline. Focused lifecycle tests prove a
+140-second progressing rollout succeeds and 122 seconds without verified
+progress fails. The complete Phase 5 lifecycle file passes 21 tests; changed
+Python compiles and `git diff --check` passes. The complete Greedy selection
+has 183 passing tests and one comparison-audit failure caused by unrelated
+current `IBG_Hybrid/kernel_controller.py` worktree drift. Phase 8.2 remains
+incomplete: no corrected controller run/evidence exists, and the retained v1
+capacity-label reconciliation issue remains to be closed before acceptance.
+
+#### Greedy Phase 8.2 rollout-recovery substep result
+
+Completed: 2026-09-01. The launcher now binds service Pod templates to exact
+public source/image provenance, classifies a pending transition before
+mutation, waits an exact in-progress revision without starting another, and
+fails closed on partial or mismatched provenance. A required canonical apply
+also removes the retired v1 capacity label; the former unconditional rollout
+restart was removed so that correction produces one revision only. Focused
+progress, stall, noise, churn, recovery, image-mismatch, stale-label, Job-order,
+immutability, deterministic-executor, and import tests pass.
+
+The authorized recovery command completed the interrupted `40x3x20`, one-slot
+request. All three StatefulSets converged at 20/20 updated and Ready after a
+162-second observed serving-Pod replacement window, the flow generator became
+Ready, all 60 replica Pods and the generator used the exact target OCI config
+image, and the stale capacity label was absent. Exactly one controller Job then
+succeeded. The validated v2 trace is
+`runs/greedy-experiment-20260901T163749.921241Z.jsonl`: one iteration,
+40 placements, 80 observations, 40 measured pairs, no CSV, no replay, and no
+build/load.
+
+This substep closes interrupted-rollout recovery, not the complete Phase 8.2
+gate. The requested `40x3x20` trace reached a maximum replica load of two and
+did not enable forced replay or CSV, and no unchanged `--skip-build` repeat was
+run. Phase 8.2 therefore remains incomplete until its separately specified
+above-old-ceiling, replay/CSV, and unchanged-repeat acceptance evidence passes.
+Phase 9 must not start.

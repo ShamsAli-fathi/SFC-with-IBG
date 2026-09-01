@@ -4564,3 +4564,115 @@ uses a policy-contract marker and a separate default `figures/Greedy/v2`
 directory; retained mixed v1/v2 policy columns fail closed. The matched
 comparison is now `greedy-hybrid-matched-comparison-v2` and records active
 Hybrid's synthetic admission as an unresolved mismatch, not a matched row.
+## Planned Hybrid opt-in posterior-transmission mirror
+
+Planned: 2026-08-31. The Hybrid controller currently owns, updates, and reuses
+the complete authoritative belief state locally, so the existing observed
+control-plane footprint correctly records zero belief TX/RX bytes and messages.
+To answer the manuscript's separate posterior-exchange overhead question
+without changing that operational architecture, Hybrid will gain a default-off
+measurement mirror.
+
+When enabled, a lightweight receiver will run as a separate worker-only Pod
+behind a dedicated ClusterIP Service. After the controller has computed a
+completed timeslot's posterior updates, it will send deterministic serialized
+copies across the Pod network. The receiver will validate the message identity
+and payload length and then discard the copy. It will never own, modify, return,
+or supply beliefs to placement. The controller's existing local belief state
+remains authoritative for every subsequent decision.
+
+The measurement contract will distinguish the exact canonical posterior-vector
+bytes from the complete serialized HTTP application-body bytes containing any
+required replica identity or envelope fields. It will record message counts and
+per-timeslot sums across all mirrored posterior updates. HTTP/TCP/IP/Ethernet
+headers, acknowledgements, retransmissions, NIC traffic, and forwarder traffic
+remain outside this payload-only result. Existing observed `belief_tx` and
+`belief_rx` fields remain zero and must not be relabelled; the new record is an
+instrumented posterior-mirror measurement with its own versioned schema.
+
+Disabled mode deploys no receiver and performs no mirror transmission. Enabled
+mode changes only the measurement deployment shape and creates real HTTP
+traffic carrying non-authoritative copies. Placement, pruning, lookahead/MC,
+randomness, physical and observation jitter, learning arithmetic, authoritative
+belief continuity, utility, SLA, fairness, equilibrium, selected-route traffic,
+and telemetry semantics remain unchanged.
+
+## Hybrid posterior-transmission mirror implemented and locally verified
+
+Completed locally: 2026-08-31. The default-off production mirror now consists
+of a worker-only validation/discard HTTP receiver and one persistent controller
+sender. After a slot has produced its completed aggregated posteriors, the
+controller sends one canonically ordered copy per unique sampled replica across
+the Pod boundary. A rejected or incomplete copy prevents authoritative belief
+commit and completed-slot evidence. The receiver never supplies beliefs back to
+the controller; controller-local beliefs remain the sole decision input.
+
+The versioned snapshot records canonical posterior-vector payload bytes,
+complete compact-JSON application-body bytes, and message counts separately.
+Enabled evidence is revalidated against the completed belief map, sampled
+replica identities, exact body lengths, SHA-256 digests, totals, slot identity,
+and receiver-run identity. Existing observed control-plane `belief_tx` and
+`belief_rx` remain zero because the mirror is a separate instrumented boundary,
+not operational distributed belief ownership.
+
+When both `--posterior-mirror 1` and `--csv 1` are active, host export creates
+three atomic wide tables under `figures/IBG_hybrid/posterior_mirror/`: vector
+payload bytes, complete application-body bytes, and update messages. Disabled
+or legacy traces create no mirror directory. The Hybrid-only summary command
+reports each timeslot, run totals, median, and p95 while explicitly excluding
+wire/protocol overhead and required distributed-learning claims.
+
+This measurement path does not enter Hybrid metrics or Pure/Kernel parity and
+cannot alter placement, pruning, lookahead/MC, learning, utility, SLA, fairness,
+equilibrium, selected-route execution, or telemetry. It is application-body
+payload evidence only: no NIC, HTTP-header, TCP/IP/Ethernet, multi-host, or
+wire-byte measurement is claimed.
+
+The receiver ASGI process is packaged in the existing Hybrid service image,
+which owns the pinned Uvicorn runtime. The controller image retains the same
+mirror module for its sender/client boundary but remains intentionally free of
+Uvicorn. This split reuses existing offline wheelhouses without broadening the
+controller runtime dependency set.
+
+The retained-cluster reconciler also carries forward existing non-netem
+StatefulSet Pod-template annotations while rendering an impairment transition.
+This prevents externally added rollout provenance such as
+`kubectl.kubernetes.io/restartedAt` from being silently removed and triggering
+an unrelated replica rollout; the requested netem annotation and init container
+remain the only impairment-owned template fields.
+
+## Greedy progress-aware rollout waiting
+
+Updated: 2026-09-01. Greedy serving readiness no longer uses one fixed
+120-second `kubectl rollout status` deadline for an entire multi-Pod rollout.
+The launcher polls exact StatefulSet/Deployment generations, updated/Ready/
+available replica counts, revision convergence, and owned Pod UIDs/readiness.
+A verified monotonic rollout advance resets a 120-second stall clock. Merely
+waiting, restarting a container, or emitting output does not reset it. A
+separate topology-bounded total deadline prevents endless Pod replacement from
+keeping the launcher alive indefinitely. Final completion still requires exact
+revision convergence and exact owned Running/Ready Pod coverage before any
+controller Job is created.
+
+## Greedy restart-safe service-rollout provenance
+
+Updated: 2026-09-01. Greedy serving Pod templates now carry two public,
+non-policy annotations binding a rollout to the exact service OCI config image
+ID and service-source fingerprint already persisted by launcher state. The
+launcher classifies the retained serving state as legacy/template-update
+required, progressing, or converged. Missing provenance is the one supported
+legacy state; partial, mixed, or mismatched provenance fails closed. A
+converged pending rollout is reused, and an exact progressing rollout is waited
+without another apply or restart.
+
+Canonical reconciliation removes the retired
+`greedy.max-assigned-flows` label from retained StatefulSet and flow-generator
+Pod templates. When either provenance or this v1 label requires correction,
+one canonical apply combines both changes into one Pod-template revision. The
+old unconditional `kubectl rollout restart` is removed, preventing the apply
+from being followed by a second revision. After exact template and Ready
+convergence, the launcher verifies every running private processor, public
+forwarder, and flow generator against the expected node-local OCI config ID
+before it marks launcher state stable or creates the controller Job. These
+annotations never contain hidden state or stochastic seeds and never enter the
+policy, learning, or outcome path.

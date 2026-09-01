@@ -972,6 +972,10 @@ def test_milp_kernel_launcher_keeps_runtime_dimensions_cutoff_and_verbose_explic
         "--verbose",
     ]
     assert controller["image"] == "milp-testbed:kernel-controller-phase5"
+    assert controller["resources"] == {
+        "requests": {"cpu": "100m", "memory": "8Gi"},
+        "limits": {"cpu": "2", "memory": "16Gi"},
+    }
     assert job["metadata"]["namespace"] == "milp-testbed"
     preflight = module._preflight_lines(arguments)
     assert preflight[:3] == (
@@ -1086,6 +1090,26 @@ def test_milp_kernel_launcher_scales_and_waits_every_batch_before_the_next(monke
     module._apply_long_running("kind-ibg", args, profile, profiles)
 
     commands = [command for command, _kwargs in calls]
+    profile_apply_command, profile_apply_kwargs = next(
+        (command, kwargs)
+        for command, kwargs in calls
+        if (
+            command[-1] == "-"
+            and json.loads(kwargs["input_text"])["metadata"]["name"]
+            == "milp-experiment-profile"
+        )
+    )
+    assert profile_apply_command == [
+        "kubectl",
+        "--context",
+        "kind-ibg",
+        "apply",
+        "--server-side",
+        "--field-manager=milp-kernel-launcher",
+        "--filename",
+        "-",
+    ]
+    assert json.loads(profile_apply_kwargs["input_text"])["kind"] == "ConfigMap"
     resource_manifest = next(
         json.loads(kwargs["input_text"])
         for command, kwargs in calls
@@ -1125,6 +1149,56 @@ def test_milp_kernel_launcher_scales_and_waits_every_batch_before_the_next(monke
     wait_indices = [index for index, command in enumerate(commands) if "rollout" in command]
     assert scale_indices[0] > wait_indices[2]
     assert scale_indices[-1] < wait_indices[3]
+
+
+def test_milp_kernel_launcher_uses_server_side_profile_apply_at_large_scale(monkeypatch):
+    path = ROOT / "scripts/run_milp_kernel.py"
+    spec = importlib.util.spec_from_file_location("run_milp_kernel_large_profile", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    args = module.build_parser().parse_args(
+        [
+            "--flow",
+            "40",
+            "--stage",
+            "3",
+            "--replica",
+            "20",
+            "--cutoff",
+            "1800",
+            "--planner-profile",
+            "synthetic-scale",
+            "--profile-seed",
+            "50",
+            "--rollout-batch-size",
+            "3",
+        ]
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[3] == "get" and command[4].startswith("statefulset/stage-"):
+            return SimpleNamespace(stdout="")
+        return SimpleNamespace(stdout="NAME READY DESIRED\n")
+
+    monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module, "_announce", lambda _message: None)
+    profile, profiles = module.build_launcher_experiment_profile(args)
+    module._apply_long_running("kind-ibg", args, profile, profiles)
+
+    command, kwargs = next(
+        (command, kwargs)
+        for command, kwargs in calls
+        if (
+            command[-1] == "-"
+            and json.loads(kwargs["input_text"])["metadata"]["name"]
+            == "milp-experiment-profile"
+        )
+    )
+    assert "--server-side" in command
+    assert "--field-manager=milp-kernel-launcher" in command
+    assert len(kwargs["input_text"].encode("utf-8")) > 262_144
 
 
 def test_milp_kernel_launcher_adds_only_missing_replicas_to_an_existing_scale(monkeypatch):
@@ -1174,6 +1248,56 @@ def test_milp_kernel_launcher_adds_only_missing_replicas_to_an_existing_scale(mo
     ]
 
 
+def test_milp_kernel_launcher_scale_down_validates_only_retained_profiles(monkeypatch):
+    path = ROOT / "scripts/run_milp_kernel.py"
+    spec = importlib.util.spec_from_file_location("run_milp_kernel_scale_down", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    target_args = module.build_parser().parse_args(
+        [
+            "--flow", "10", "--stage", "3", "--replica", "5", "--cutoff", "60",
+            "--planner-profile", "synthetic-scale", "--profile-seed", "50",
+            "--rollout-batch-size", "3",
+        ]
+    )
+    existing_args = module.build_parser().parse_args(
+        [
+            "--flow", "40", "--stage", "3", "--replica", "20", "--cutoff", "1800",
+            "--planner-profile", "synthetic-scale", "--profile-seed", "50",
+            "--rollout-batch-size", "3",
+        ]
+    )
+    _, existing_profiles = module.build_launcher_experiment_profile(existing_args)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[3] == "get" and command[4].startswith("statefulset/stage-"):
+            return SimpleNamespace(stdout="20")
+        if command[3] == "get" and command[4] == "configmap/milp-replica-profiles":
+            return SimpleNamespace(
+                stdout=json.dumps(milp_runtime_profiles_document(existing_profiles))
+            )
+        return SimpleNamespace(stdout="NAME READY DESIRED\n")
+
+    monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module, "_announce", lambda _message: None)
+    profile, profiles = module.build_launcher_experiment_profile(target_args)
+    module._apply_long_running("kind-ibg", target_args, profile, profiles)
+
+    resource_manifest = next(
+        json.loads(kwargs["input_text"])
+        for command, kwargs in calls
+        if command[-1] == "-" and '"kind": "List"' in kwargs.get("input_text", "")
+    )
+    assert {
+        item["spec"]["replicas"]
+        for item in resource_manifest["items"]
+        if item["kind"] == "StatefulSet"
+    } == {5}
+    assert not [command for command, _kwargs in calls if "scale" in command]
+
+
 def test_milp_kernel_launcher_rejects_existing_runtime_profile_drift(monkeypatch):
     path = ROOT / "scripts/run_milp_kernel.py"
     spec = importlib.util.spec_from_file_location("run_milp_kernel_profile_drift", path)
@@ -1196,7 +1320,7 @@ def test_milp_kernel_launcher_rejects_existing_runtime_profile_drift(monkeypatch
         return SimpleNamespace(stdout="NAME READY DESIRED\n")
 
     monkeypatch.setattr(module, "_run", fake_run)
-    with pytest.raises(RuntimeError, match="would change the runtime profile"):
+    with pytest.raises(RuntimeError, match="would alter the runtime profile"):
         module._apply_long_running("kind-ibg", args, experiment_profile, profiles)
 
 

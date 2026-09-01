@@ -18,6 +18,7 @@ import secrets
 import subprocess
 import tarfile
 import tempfile
+import time
 from typing import Callable, Mapping, Sequence
 
 from .contracts import GreedyConfiguration, ReplicaIdentity
@@ -91,6 +92,15 @@ GREEDY_SYSTEM_NAMESPACES = frozenset(
 GREEDY_FORBIDDEN_BASELINE_NAMESPACES = frozenset(
     {"ibg-testbed", "ibg-hybrid-testbed", "milp-testbed"}
 )
+GREEDY_ROLLOUT_STALL_TIMEOUT_SECONDS = 120.0
+GREEDY_ROLLOUT_POLL_SECONDS = 1.0
+GREEDY_SERVICE_IMAGE_ID_ANNOTATION = (
+    "greedy.sfc-with-ibg/service-image-id"
+)
+GREEDY_SERVICE_SOURCE_FINGERPRINT_ANNOTATION = (
+    "greedy.sfc-with-ibg/service-source-fingerprint"
+)
+GREEDY_LEGACY_CAPACITY_LABEL = "greedy.max-assigned-flows"
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1020,6 +1030,70 @@ def _apply_documents(execute: Executor, resources: Sequence[Mapping[str, object]
         execute(_kubectl("apply", "-f", str(manifest)), False)
 
 
+def _service_rollout_resources(
+    resources: Sequence[Mapping[str, object]],
+    *,
+    service_source_fingerprint: str,
+    service_image_id: str,
+) -> tuple[dict[str, object], ...]:
+    """Return canonical resources carrying public service-rollout provenance.
+
+    The annotation binds a Pod-template revision to the exact source and OCI
+    config identities already persisted in launcher state.  It replaces the
+    old unprovable ``rollout restart`` side effect and also removes the retired
+    v1 flow-capacity label without mutating caller-owned resources.
+    """
+
+    if (
+        not isinstance(service_source_fingerprint, str)
+        or len(service_source_fingerprint) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in service_source_fingerprint
+        )
+    ):
+        raise GreedyLifecycleError("service source fingerprint is invalid")
+    _image_id("sha256:" + service_image_id, "service rollout image ID")
+    prepared = tuple(deepcopy(tuple(resources)))
+    for resource in prepared:
+        metadata = resource.get("metadata")
+        if isinstance(metadata, dict):
+            labels = metadata.get("labels")
+            if isinstance(labels, dict):
+                labels.pop(GREEDY_LEGACY_CAPACITY_LABEL, None)
+        kind = resource.get("kind")
+        name = metadata.get("name") if isinstance(metadata, Mapping) else None
+        if kind != "StatefulSet" and not (
+            kind == "Deployment" and name == GREEDY_FLOW_GENERATOR
+        ):
+            continue
+        spec = resource.get("spec")
+        template = spec.get("template") if isinstance(spec, Mapping) else None
+        template_metadata = (
+            template.get("metadata") if isinstance(template, Mapping) else None
+        )
+        if not isinstance(template_metadata, dict):
+            raise GreedyLifecycleError(
+                f"canonical serving template is malformed: {kind}/{name}"
+            )
+        labels = template_metadata.get("labels")
+        if not isinstance(labels, dict):
+            raise GreedyLifecycleError(
+                f"canonical serving template labels are malformed: {kind}/{name}"
+            )
+        labels.pop(GREEDY_LEGACY_CAPACITY_LABEL, None)
+        annotations = template_metadata.setdefault("annotations", {})
+        if not isinstance(annotations, dict):
+            raise GreedyLifecycleError(
+                f"canonical serving template annotations are malformed: {kind}/{name}"
+            )
+        annotations[GREEDY_SERVICE_IMAGE_ID_ANNOTATION] = service_image_id
+        annotations[GREEDY_SERVICE_SOURCE_FINGERPRINT_ANNOTATION] = (
+            service_source_fingerprint
+        )
+    return prepared
+
+
 def _launcher_state_resource(state: GreedyLauncherState) -> dict[str, object]:
     return {
         "apiVersion": "v1",
@@ -1070,6 +1144,322 @@ def _deployment_resource(
     if len(selected) != 1:
         raise GreedyLifecycleError(f"canonical Deployment {name} is incomplete")
     return selected[0]
+
+
+def _serving_workload_inventory(execute: Executor) -> Mapping[str, object]:
+    return _json_output(
+        execute,
+        _kubectl(
+            "get",
+            "statefulsets,deployments",
+            "-n",
+            GREEDY_NAMESPACE,
+            "-o",
+            "json",
+        ),
+    )
+
+
+def _retained_serving_documents(
+    resources: Sequence[Mapping[str, object]],
+    replica_counts: Sequence[int],
+) -> tuple[Mapping[str, object], ...]:
+    """Select canonical retained serving resources at their observed widths."""
+
+    counts = tuple(replica_counts)
+    if len(counts) < 2 or any(
+        isinstance(count, bool) or not isinstance(count, Integral) or count < 1
+        for count in counts
+    ):
+        raise GreedyLifecycleError("retained serving replica counts are invalid")
+    selected: list[Mapping[str, object]] = []
+    expected = {
+        ("Service", GREEDY_FLOW_GENERATOR),
+        ("Deployment", GREEDY_FLOW_GENERATOR),
+    } | {
+        (kind, f"greedy-stage-{stage}")
+        for stage in range(1, len(counts) + 1)
+        for kind in ("Service", "StatefulSet")
+    }
+    found: set[tuple[str, str]] = set()
+    for original in resources:
+        metadata = original.get("metadata")
+        kind = original.get("kind")
+        name = metadata.get("name") if isinstance(metadata, Mapping) else None
+        identity = (kind, name)
+        if identity not in expected:
+            continue
+        if identity in found:
+            raise GreedyLifecycleError(
+                f"canonical retained serving resource is duplicated: {kind}/{name}"
+            )
+        found.add(identity)
+        resource = deepcopy(original)
+        if kind == "StatefulSet":
+            stage = int(str(name).removeprefix("greedy-stage-"))
+            resource["spec"]["replicas"] = counts[stage - 1]
+        selected.append(resource)
+    if found != expected:
+        raise GreedyLifecycleError("canonical retained serving resources are incomplete")
+    return tuple(selected)
+
+
+def _nonnegative_rollout_count(
+    status: Mapping[str, object], field: str, resource_name: str
+) -> int:
+    value = status.get(field, 0)
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < 0:
+        raise GreedyLifecycleError(
+            f"rollout resource {resource_name} has invalid {field}"
+        )
+    return int(value)
+
+
+def _rollout_resource_complete(
+    item: Mapping[str, object], *, desired: int, statefulset: bool
+) -> bool:
+    metadata = item.get("metadata")
+    spec = item.get("spec")
+    status = item.get("status")
+    if not all(isinstance(value, Mapping) for value in (metadata, spec, status)):
+        raise GreedyLifecycleError("rollout resource is incomplete")
+    name = metadata.get("name")
+    generation = metadata.get("generation")
+    observed = status.get("observedGeneration", 0)
+    if (
+        not isinstance(name, str)
+        or isinstance(generation, bool)
+        or not isinstance(generation, Integral)
+        or generation < 1
+        or isinstance(observed, bool)
+        or not isinstance(observed, Integral)
+        or observed < 0
+    ):
+        raise GreedyLifecycleError("rollout resource generation is invalid")
+    revision_converged = True
+    if statefulset:
+        current_revision = status.get("currentRevision")
+        update_revision = status.get("updateRevision")
+        revision_converged = (
+            isinstance(current_revision, str)
+            and bool(current_revision)
+            and current_revision == update_revision
+        )
+    return (
+        spec.get("replicas") == desired
+        and observed >= generation
+        and _nonnegative_rollout_count(status, "updatedReplicas", name) == desired
+        and _nonnegative_rollout_count(status, "readyReplicas", name) == desired
+        and _nonnegative_rollout_count(status, "availableReplicas", name) == desired
+        and revision_converged
+    )
+
+
+def _classify_service_rollout(
+    document: Mapping[str, object],
+    *,
+    replica_counts: Sequence[int],
+    service_source_fingerprint: str,
+    service_image_id: str,
+) -> str:
+    """Classify one exact target rollout as update-required/progressing/converged.
+
+    Missing provenance is the single supported legacy/not-started state.  A
+    partial or mismatched provenance pair is ambiguous and fails closed.
+    """
+
+    counts = tuple(replica_counts)
+    expected_names = {
+        f"greedy-stage-{stage}" for stage in range(1, len(counts) + 1)
+    } | {GREEDY_FLOW_GENERATOR}
+    resources: dict[str, Mapping[str, object]] = {}
+    provenance_modes: set[str] = set()
+    correction_required = False
+    complete = True
+    for raw_item in _items(document, "serving rollout inventory"):
+        if not isinstance(raw_item, Mapping):
+            raise GreedyLifecycleError("serving rollout item is malformed")
+        metadata = raw_item.get("metadata")
+        spec = raw_item.get("spec")
+        if not isinstance(metadata, Mapping) or not isinstance(spec, Mapping):
+            raise GreedyLifecycleError("serving rollout resource is incomplete")
+        name = metadata.get("name")
+        kind = raw_item.get("kind")
+        if name not in expected_names or kind not in {"StatefulSet", "Deployment"}:
+            raise GreedyLifecycleError(
+                f"unexpected serving rollout resource: {kind}/{name}"
+            )
+        if name in resources:
+            raise GreedyLifecycleError(f"duplicate serving rollout resource: {name}")
+        if (
+            metadata.get("namespace") != GREEDY_NAMESPACE
+            or (name == GREEDY_FLOW_GENERATOR and kind != "Deployment")
+            or (name != GREEDY_FLOW_GENERATOR and kind != "StatefulSet")
+        ):
+            raise GreedyLifecycleError(
+                f"serving rollout identity is malformed: {kind}/{name}"
+            )
+        resources[name] = raw_item
+        labels = metadata.get("labels")
+        if isinstance(labels, Mapping) and GREEDY_LEGACY_CAPACITY_LABEL in labels:
+            correction_required = True
+        template = spec.get("template")
+        template_metadata = (
+            template.get("metadata") if isinstance(template, Mapping) else None
+        )
+        template_spec = template.get("spec") if isinstance(template, Mapping) else None
+        if not isinstance(template_metadata, Mapping) or not isinstance(
+            template_spec, Mapping
+        ):
+            raise GreedyLifecycleError(
+                f"serving Pod template is malformed: {kind}/{name}"
+            )
+        template_labels = template_metadata.get("labels")
+        if not isinstance(template_labels, Mapping):
+            raise GreedyLifecycleError(
+                f"serving Pod-template labels are malformed: {kind}/{name}"
+            )
+        if GREEDY_LEGACY_CAPACITY_LABEL in template_labels:
+            correction_required = True
+        annotations = template_metadata.get("annotations", {})
+        if not isinstance(annotations, Mapping):
+            raise GreedyLifecycleError(
+                f"serving Pod-template annotations are malformed: {kind}/{name}"
+            )
+        image_marker = annotations.get(GREEDY_SERVICE_IMAGE_ID_ANNOTATION)
+        source_marker = annotations.get(
+            GREEDY_SERVICE_SOURCE_FINGERPRINT_ANNOTATION
+        )
+        if image_marker is None and source_marker is None:
+            provenance_modes.add("absent")
+        elif (
+            image_marker == service_image_id
+            and source_marker == service_source_fingerprint
+        ):
+            provenance_modes.add("exact")
+        else:
+            raise GreedyLifecycleError(
+                f"serving rollout provenance is mismatched: {kind}/{name}"
+            )
+        containers = template_spec.get("containers")
+        if not isinstance(containers, list):
+            raise GreedyLifecycleError(
+                f"serving Pod-template containers are malformed: {kind}/{name}"
+            )
+        expected_containers = (
+            {"flow-generator"}
+            if name == GREEDY_FLOW_GENERATOR
+            else {"private-processor", "public-forwarder"}
+        )
+        actual_containers = {
+            container.get("name")
+            for container in containers
+            if isinstance(container, Mapping)
+        }
+        if actual_containers != expected_containers or any(
+            not isinstance(container, Mapping)
+            or container.get("image") != GREEDY_SERVICE_IMAGE
+            or container.get("imagePullPolicy") != "Never"
+            for container in containers
+        ):
+            raise GreedyLifecycleError(
+                f"serving Pod-template image contract is mismatched: {kind}/{name}"
+            )
+        desired = 1 if name == GREEDY_FLOW_GENERATOR else counts[
+            int(str(name).removeprefix("greedy-stage-")) - 1
+        ]
+        complete = complete and _rollout_resource_complete(
+            raw_item,
+            desired=desired,
+            statefulset=kind == "StatefulSet",
+        )
+    if set(resources) != expected_names:
+        raise GreedyLifecycleError("serving rollout resource coverage is incomplete")
+    if len(provenance_modes) != 1:
+        raise GreedyLifecycleError("serving rollout provenance is partial or ambiguous")
+    if provenance_modes == {"absent"} or correction_required:
+        return "template-update-required"
+    return "converged" if complete else "progressing"
+
+
+def _validate_running_service_images(
+    execute: Executor,
+    *,
+    configuration: GreedyConfiguration,
+    service_image_id: str,
+) -> None:
+    """Bind every running serving container to the exact target OCI config."""
+
+    expected = {
+        (f"greedy-stage-{stage}-{ordinal}", container)
+        for stage in configuration.stages
+        for ordinal in range(configuration.num_replicas)
+        for container in ("private-processor", "public-forwarder")
+    }
+    expected.add(("greedy-flow-generator", "flow-generator"))
+    inventory = _json_output(
+        execute,
+        (
+            "docker",
+            "exec",
+            GREEDY_WORKER_NODE,
+            "crictl",
+            "ps",
+            "--label",
+            f"io.kubernetes.pod.namespace={GREEDY_NAMESPACE}",
+            "-o",
+            "json",
+        ),
+    )
+    containers = inventory.get("containers")
+    if not isinstance(containers, list):
+        raise GreedyLifecycleError("worker CRI container inventory is malformed")
+    actual: set[tuple[str, str]] = set()
+    for raw_container in containers:
+        if not isinstance(raw_container, Mapping):
+            raise GreedyLifecycleError("worker CRI container entry is malformed")
+        labels = raw_container.get("labels")
+        metadata = raw_container.get("metadata")
+        image = raw_container.get("image")
+        if not all(isinstance(value, Mapping) for value in (labels, metadata, image)):
+            raise GreedyLifecycleError("worker CRI serving metadata is malformed")
+        if labels.get("io.kubernetes.pod.namespace") != GREEDY_NAMESPACE:
+            raise GreedyLifecycleError("worker CRI namespace filter returned foreign data")
+        pod_name = labels.get("io.kubernetes.pod.name")
+        container_name = labels.get("io.kubernetes.container.name")
+        if not isinstance(pod_name, str) or not isinstance(container_name, str):
+            raise GreedyLifecycleError("worker CRI serving identity is malformed")
+        normalized_pod_name = (
+            "greedy-flow-generator"
+            if pod_name.startswith("greedy-flow-generator-")
+            else pod_name
+        )
+        identity = (normalized_pod_name, container_name)
+        if identity not in expected or identity in actual:
+            raise GreedyLifecycleError(
+                f"worker CRI serving identity is unexpected or duplicated: {identity}"
+            )
+        actual.add(identity)
+        if (
+            raw_container.get("state") != "CONTAINER_RUNNING"
+            or metadata.get("name") != container_name
+            or image.get("userSpecifiedImage") != GREEDY_SERVICE_IMAGE
+            or _image_id(
+                raw_container.get("imageId"),
+                f"running service image for {normalized_pod_name}/{container_name}",
+            )
+            != service_image_id
+        ):
+            raise GreedyLifecycleError(
+                "running service image provenance is mismatched: "
+                f"{normalized_pod_name}/{container_name}"
+            )
+    if actual != expected:
+        raise GreedyLifecycleError(
+            "running service container coverage is incomplete: "
+            f"missing={sorted(expected - actual)}, "
+            f"unexpected={sorted(actual - expected)}"
+        )
 
 
 def _stage_resources(
@@ -1254,26 +1644,177 @@ def _wait_ready(
     num_flows: int,
     num_stages: int,
     num_replicas: int,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    stall_timeout_seconds: float = GREEDY_ROLLOUT_STALL_TIMEOUT_SECONDS,
+    poll_seconds: float = GREEDY_ROLLOUT_POLL_SECONDS,
+    total_timeout_seconds: float | None = None,
 ) -> None:
-    statefulsets = tuple(
-        f"statefulset/greedy-stage-{stage}" for stage in range(1, num_stages + 1)
+    """Wait for exact serving readiness with a progress-reset stall timeout.
+
+    A StatefulSet rollout replaces ordered Pods one at a time, so a fixed
+    wall-clock deadline can reject a healthy large rollout.  Verified
+    generation/revision progress or a newly observed/Ready Pod UID resets the
+    stall clock.  A separate topology-bounded total deadline prevents endless
+    Pod replacement churn from keeping the launcher alive forever.
+    """
+
+    configuration = GreedyConfiguration(num_flows, num_stages, num_replicas)
+    if (
+        stall_timeout_seconds <= 0
+        or poll_seconds <= 0
+        or (
+            total_timeout_seconds is not None
+            and total_timeout_seconds <= 0
+        )
+    ):
+        raise ValueError("Greedy rollout wait durations must be positive")
+    expected_statefulsets = {
+        f"greedy-stage-{stage}" for stage in range(1, num_stages + 1)
+    }
+    expected_resources = expected_statefulsets | {GREEDY_FLOW_GENERATOR}
+    best_frontier: dict[str, tuple[int, int, int, int]] = {}
+    observed_pod_uids: set[tuple[str, str]] = set()
+    ready_pod_uids: set[tuple[str, str]] = set()
+    started = last_progress = clock()
+    total_timeout = (
+        max(600.0, stall_timeout_seconds * (num_replicas + 2))
+        if total_timeout_seconds is None
+        else total_timeout_seconds
     )
-    execute(
-        _kubectl(
-            "rollout",
-            "status",
-            *statefulsets,
-            f"deployment/{GREEDY_FLOW_GENERATOR}",
-            "-n",
-            GREEDY_NAMESPACE,
-            "--timeout=120s",
-        ),
-        False,
-    )
-    validate_ready_coverage(
-        _pod_inventory(execute),
-        configuration=GreedyConfiguration(num_flows, num_stages, num_replicas),
-    )
+
+    while True:
+        rollout = _serving_workload_inventory(execute)
+        raw_items = rollout.get("items")
+        if not isinstance(raw_items, list):
+            raise GreedyLifecycleError("rollout inventory lacks an items list")
+        resources: dict[str, Mapping[str, object]] = {}
+        progress = False
+        complete = True
+        for raw_item in raw_items:
+            if not isinstance(raw_item, Mapping):
+                raise GreedyLifecycleError("rollout inventory item is malformed")
+            metadata = raw_item.get("metadata")
+            spec = raw_item.get("spec")
+            status = raw_item.get("status")
+            if not all(isinstance(value, Mapping) for value in (metadata, spec, status)):
+                raise GreedyLifecycleError("rollout resource is incomplete")
+            name = metadata.get("name")
+            if name not in expected_resources:
+                raise GreedyLifecycleError(
+                    f"unexpected rollout resource identity: {name!r}"
+                )
+            if name in resources:
+                raise GreedyLifecycleError(f"duplicate rollout resource: {name}")
+            resources[name] = raw_item
+            desired = num_replicas if name in expected_statefulsets else 1
+
+            def count(field: str) -> int:
+                value = status.get(field, 0)
+                if isinstance(value, bool) or not isinstance(value, Integral) or value < 0:
+                    raise GreedyLifecycleError(
+                        f"rollout resource {name} has invalid {field}"
+                    )
+                return int(value)
+
+            generation = metadata.get("generation")
+            observed_generation = status.get("observedGeneration", 0)
+            if (
+                isinstance(generation, bool)
+                or not isinstance(generation, Integral)
+                or generation < 1
+                or isinstance(observed_generation, bool)
+                or not isinstance(observed_generation, Integral)
+                or observed_generation < 0
+            ):
+                raise GreedyLifecycleError(
+                    f"rollout resource {name} has invalid generation status"
+                )
+            updated = count("updatedReplicas")
+            ready = count("readyReplicas")
+            available = count("availableReplicas")
+            revision_converged = 1
+            if name in expected_statefulsets:
+                current_revision = status.get("currentRevision")
+                update_revision = status.get("updateRevision")
+                revision_converged = int(
+                    isinstance(current_revision, str)
+                    and current_revision
+                    and current_revision == update_revision
+                )
+            frontier = (
+                int(observed_generation),
+                updated,
+                ready,
+                revision_converged,
+            )
+            previous = best_frontier.get(name)
+            if previous is None or frontier > previous:
+                best_frontier[name] = frontier
+                progress = True
+            desired_spec = spec.get("replicas")
+            complete = complete and (
+                desired_spec == desired
+                and observed_generation >= generation
+                and updated == desired
+                and ready == desired
+                and available == desired
+                and revision_converged == 1
+            )
+        if set(resources) != expected_resources:
+            complete = False
+
+        pods = _pod_inventory(execute)
+        pod_items = pods.get("items")
+        if not isinstance(pod_items, list):
+            raise GreedyLifecycleError("Pod inventory lacks an items list")
+        for raw_pod in pod_items:
+            if not isinstance(raw_pod, Mapping):
+                raise GreedyLifecycleError("Pod inventory item is malformed")
+            metadata = raw_pod.get("metadata")
+            if not isinstance(metadata, Mapping):
+                raise GreedyLifecycleError("Pod metadata is malformed")
+            name = metadata.get("name")
+            uid = metadata.get("uid")
+            if not isinstance(name, str) or not isinstance(uid, str) or not uid:
+                continue
+            if not (
+                name.startswith("greedy-stage-")
+                or name.startswith("greedy-flow-generator-")
+            ):
+                continue
+            identity = (name, uid)
+            if identity not in observed_pod_uids:
+                observed_pod_uids.add(identity)
+                progress = True
+            status = raw_pod.get("status")
+            conditions = status.get("conditions") if isinstance(status, Mapping) else None
+            is_ready = isinstance(conditions, list) and any(
+                isinstance(condition, Mapping)
+                and condition.get("type") == "Ready"
+                and condition.get("status") == "True"
+                for condition in conditions
+            )
+            if is_ready and identity not in ready_pod_uids:
+                ready_pod_uids.add(identity)
+                progress = True
+
+        now = clock()
+        if progress:
+            last_progress = now
+        if complete:
+            validate_ready_coverage(pods, configuration=configuration)
+            return
+        if now - last_progress >= stall_timeout_seconds:
+            raise GreedyLifecycleError(
+                "Greedy rollout made no verified progress for "
+                f"{stall_timeout_seconds:g} seconds"
+            )
+        if now - started >= total_timeout:
+            raise GreedyLifecycleError(
+                "Greedy rollout exceeded its topology-bounded total deadline"
+            )
+        sleep(poll_seconds)
 
 
 def _wait_removed_pods(execute: Executor, names: Sequence[str]) -> None:
@@ -1404,7 +1945,7 @@ def _reconcile_existing(
     deployed_profile: GreedyKernelRuntimeProfileDocument,
     transition: GreedyLauncherState,
     emit: ProgressEmitter | None = None,
-) -> bool:
+) -> tuple[bool, bool]:
     target = launch.configuration
     validate_profile_transition(
         deployed=deployed_profile,
@@ -1433,6 +1974,7 @@ def _reconcile_existing(
             )
 
     serving_changed = False
+    retained_process_change_expected = False
     current_stage_count = current.num_stages
     current_counts = list(current.replica_counts)
 
@@ -1506,6 +2048,43 @@ def _reconcile_existing(
     # so subsequent newly created Pods can resolve their private identities.
     _apply_documents(execute, _configmap_documents(resources))
 
+    rollout_state = _classify_service_rollout(
+        _serving_workload_inventory(execute),
+        replica_counts=current_counts,
+        service_source_fingerprint=transition.service_source_fingerprint,
+        service_image_id=transition.service_image_id,
+    )
+    if rollout_state == "template-update-required":
+        if launch.skip_build:
+            raise GreedyLifecycleError(
+                "--skip-build cannot reconcile service Pod-template provenance drift"
+            )
+        if emit is not None:
+            emit("Greedy rollout: applying canonical service template")
+        _apply_documents(
+            execute,
+            _retained_serving_documents(resources, current_counts),
+        )
+        _wait_ready(
+            execute,
+            num_flows=target.num_flows,
+            num_stages=current_stage_count,
+            num_replicas=current_counts[0],
+        )
+        serving_changed = True
+        retained_process_change_expected = True
+    elif rollout_state == "progressing":
+        if emit is not None:
+            emit("Greedy rollout: continuing recorded service template rollout")
+        _wait_ready(
+            execute,
+            num_flows=target.num_flows,
+            num_stages=current_stage_count,
+            num_replicas=current_counts[0],
+        )
+        serving_changed = True
+        retained_process_change_expected = transition.service_restart_required
+
     if current_counts:
         minimum_count = min(current_counts)
         maximum_count = max(current_counts)
@@ -1570,29 +2149,13 @@ def _reconcile_existing(
         )
         serving_changed = True
 
-    if transition.service_restart_required:
-        execute(
-            _kubectl(
-                "rollout",
-                "restart",
-                *(
-                    f"statefulset/greedy-stage-{stage}"
-                    for stage in target.stages
-                ),
-                f"deployment/{GREEDY_FLOW_GENERATOR}",
-                "-n",
-                GREEDY_NAMESPACE,
-            ),
-            False,
-        )
-        serving_changed = True
     _wait_ready(
         execute,
         num_flows=target.num_flows,
         num_stages=target.num_stages,
         num_replicas=target.num_replicas,
     )
-    return serving_changed
+    return serving_changed, retained_process_change_expected
 
 
 def _bootstrap_serving(
@@ -1713,6 +2276,7 @@ def run_greedy_lifecycle(
     cluster_created = False
     current_state: GreedyLauncherState | None = None
     deployed_profile_before: GreedyKernelRuntimeProfileDocument | None = None
+    discovered_before_transition: GreedyExistingTopology | None = None
     before_processes: tuple[GreedyServingProcessSnapshot, ...] = ()
     worker_allocatable: GreedyWorkerAllocatable | None = None
 
@@ -1852,10 +2416,6 @@ def run_greedy_lifecycle(
                     "unmarked partial topology transition is unsafe"
                 )
         if launch.skip_build:
-            if current_state.service_restart_required:
-                raise GreedyLifecycleError(
-                    "--skip-build cannot resume a pending service-image rollout"
-                )
             if (
                 current_state.service_source_fingerprint
                 != source_fingerprints["service"]
@@ -1922,6 +2482,32 @@ def run_greedy_lifecycle(
 
     if current_state is None:
         raise GreedyLifecycleError("launcher state construction failed")
+    resources = _service_rollout_resources(
+        resources,
+        service_source_fingerprint=source_fingerprints["service"],
+        service_image_id=image_ids["service"],
+    )
+    if current_state.service_restart_required:
+        if discovered_before_transition is None:
+            raise GreedyLifecycleError(
+                "pending service rollout has no discovered topology"
+            )
+        pending_rollout_state = _classify_service_rollout(
+            _serving_workload_inventory(execute),
+            replica_counts=discovered_before_transition.replica_counts,
+            service_source_fingerprint=current_state.service_source_fingerprint,
+            service_image_id=current_state.service_image_id,
+        )
+        if launch.skip_build and pending_rollout_state != "converged":
+            raise GreedyLifecycleError(
+                "--skip-build cannot resume an incomplete pending service rollout"
+            )
+        if pending_rollout_state == "converged":
+            _validate_running_service_images(
+                execute,
+                configuration=current_state.target_configuration,
+                service_image_id=current_state.service_image_id,
+            )
     service_restart_required = (
         current_state.service_restart_required or "service" in built
     )
@@ -1960,11 +2546,12 @@ def run_greedy_lifecycle(
         serving_changed = _bootstrap_serving(
             execute, launch=launch, resources=resources, emit=emit
         )
+        retained_process_change_expected = True
     else:
         if deployed_profile_before is None:
             raise GreedyLifecycleError("deployed runtime profile was not prevalidated")
         current_topology = discover_existing_topology(_statefulset_inventory(execute))
-        serving_changed = _reconcile_existing(
+        serving_changed, retained_process_change_expected = _reconcile_existing(
             execute,
             launch=launch,
             resources=resources,
@@ -1974,8 +2561,6 @@ def run_greedy_lifecycle(
             emit=emit,
         )
 
-    stable = _stable_state(transition)
-    _apply_documents(execute, (_launcher_state_resource(stable),))
     _wait_ready(
         execute,
         num_flows=target.num_flows,
@@ -1992,10 +2577,28 @@ def run_greedy_lifecycle(
     final_profile = _deployed_runtime_profile(_configmap_inventory(execute))
     if final_profile != launch.runtime_profiles:
         raise GreedyLifecycleError("final Greedy runtime profile is not exact")
+    final_rollout_state = _classify_service_rollout(
+        _serving_workload_inventory(execute),
+        replica_counts=(target.num_replicas,) * target.num_stages,
+        service_source_fingerprint=transition.service_source_fingerprint,
+        service_image_id=transition.service_image_id,
+    )
+    if final_rollout_state != "converged":
+        raise GreedyLifecycleError(
+            "final Greedy service rollout provenance is not converged"
+        )
+    _validate_running_service_images(
+        execute,
+        configuration=target,
+        service_image_id=transition.service_image_id,
+    )
 
     after_processes = _serving_snapshot(_pod_inventory(execute))
-    if before_processes and not service_restart_required:
+    if before_processes and not retained_process_change_expected:
         validate_retained_processes(before_processes, after_processes)
+
+    stable = _stable_state(transition)
+    _apply_documents(execute, (_launcher_state_resource(stable),))
 
     job = render_controller_job(deployment, _controller_readiness(target))
     if emit is not None:

@@ -58,6 +58,12 @@ from IBG_Hybrid.network_impairment import (
     HybridNetworkImpairment,
     validate_hybrid_network_impairment_events,
 )
+from IBG_Hybrid.posterior_mirror import (
+    HYBRID_POSTERIOR_MIRROR_ENV,
+    posterior_mirror_provenance,
+    validate_hybrid_posterior_mirror_snapshot,
+    validate_posterior_mirror_provenance,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,6 +104,18 @@ HYBRID_FOOTPRINT_CSV_FIELDS = (
     ("belief_rx_messages.csv", "messages", "belief_rx"),
     ("belief_exchange_total_messages.csv", "messages", "belief_exchange_total"),
     ("control_plane_messages_total.csv", "messages", "total"),
+)
+HYBRID_POSTERIOR_MIRROR_CSV_OUTPUT_DIR = (
+    HYBRID_CSV_OUTPUT_DIR / "posterior_mirror"
+)
+HYBRID_POSTERIOR_MIRROR_CSV_FIELDS = (
+    ("posterior_vector_payload_bytes.csv", "payload_bytes", "posterior_vectors"),
+    (
+        "posterior_application_body_bytes.csv",
+        "payload_bytes",
+        "application_bodies",
+    ),
+    ("posterior_update_messages.csv", "messages", "posterior_updates"),
 )
 HYBRID_RANDOM_SERIES_SEED_BITS = 63
 HYBRID_POLICY_ROOT_SEED_ENV = "HYBRID_POLICY_ROOT_SEED"
@@ -143,6 +161,7 @@ PHASE75_CONTROLLER_SOURCES = (
     ROOT / "IBG_Hybrid" / "kernel_phase4_validation.py",
     ROOT / "IBG_Hybrid" / "kernel_controller_cli.py",
     ROOT / "IBG_Hybrid" / "console_output.py",
+    ROOT / "IBG_Hybrid" / "posterior_mirror.py",
 )
 MAX_HYBRID_KERNEL_MC_WORKERS = 2
 SERVICE_IMAGE = "ibg-hybrid-testbed:kernel-service-v1"
@@ -168,6 +187,11 @@ STATEFULSET_RESOURCES = tuple(
     f"statefulset/hybrid-stage-{stage}" for stage in range(1, 4)
 )
 FLOW_GENERATOR_RESOURCE = "deployment/ibg-hybrid-flow-generator"
+POSTERIOR_MIRROR_NAME = "ibg-hybrid-posterior-mirror"
+POSTERIOR_MIRROR_RESOURCE = f"deployment/{POSTERIOR_MIRROR_NAME}"
+POSTERIOR_MIRROR_MANIFEST = (
+    ROOT / "deploy" / "hybrid-kubernetes" / "posterior-mirror.yaml"
+)
 RUNTIME_PROFILES = OVERLAY / "runtime-profiles.json"
 CONTROLLER_INPUTS = OVERLAY / "controller-inputs.json"
 SERVICE_DOCKERFILE = (
@@ -181,6 +205,8 @@ NETEM_DOCKERFILE = (
 )
 CONTROLLER_CPU_REQUEST_MILLI = 2000
 CONTROLLER_MEMORY_REQUEST_BYTES = 256 * 1024**2
+POSTERIOR_MIRROR_CPU_REQUEST_MILLI = 25
+POSTERIOR_MIRROR_MEMORY_REQUEST_BYTES = 64 * 1024**2
 
 Command = tuple[str, ...]
 Executor = Callable[[Command, bool], str]
@@ -435,6 +461,14 @@ def validate_cluster_inventory(
                     part_of == "ibg-hybrid-testbed"
                     and labels.get("app.kubernetes.io/name")
                     == "ibg-hybrid-flow-generator"
+                )
+            elif name.startswith("ibg-hybrid-posterior-mirror-"):
+                owned = (
+                    part_of == "ibg-hybrid-testbed"
+                    and labels.get("app.kubernetes.io/name")
+                    == POSTERIOR_MIRROR_NAME
+                    and labels.get("app.kubernetes.io/component")
+                    == "measurement"
                 )
             elif name.startswith(
                 (
@@ -1122,8 +1156,12 @@ def _validate_node_resource_capacity(
     *,
     existing_replica_count: int,
     requested_replica_count: int,
+    posterior_mirror_enabled: bool = False,
 ) -> HybridNodeResourcePreflight:
     """Fail before mutation when the worker scheduler envelope is too small."""
+
+    if not isinstance(posterior_mirror_enabled, bool):
+        raise RuntimeError("Hybrid posterior-mirror setting must be boolean")
 
     nodes = _json_output(execute, _kubectl("get", "nodes", "-o", "json"))
     worker = _validate_node_topology(nodes)[WORKER_NODE_NAME]
@@ -1140,6 +1178,7 @@ def _validate_node_resource_capacity(
         raise RuntimeError("Hybrid resource preflight has no Pod inventory")
     requested_cpu = 0
     requested_memory = 0
+    existing_mirror_requests = []
     for pod in pod_items:
         if not isinstance(pod, Mapping):
             raise RuntimeError("Hybrid resource preflight Pod is invalid")
@@ -1154,6 +1193,17 @@ def _validate_node_resource_capacity(
         pod_cpu, pod_memory = _pod_request(pod)
         requested_cpu += pod_cpu
         requested_memory += pod_memory
+        metadata = pod.get("metadata")
+        name = metadata.get("name") if isinstance(metadata, Mapping) else None
+        if isinstance(name, str) and name.startswith(
+            "ibg-hybrid-posterior-mirror-"
+        ):
+            existing_mirror_requests.append((pod_cpu, pod_memory))
+    if len(existing_mirror_requests) > 1:
+        raise RuntimeError("Hybrid resource preflight found multiple mirror Pods")
+    if existing_mirror_requests:
+        requested_cpu -= existing_mirror_requests[0][0]
+        requested_memory -= existing_mirror_requests[0][1]
 
     added_stage_pods = 3 * max(
         0, requested_replica_count - existing_replica_count
@@ -1161,18 +1211,30 @@ def _validate_node_resource_capacity(
     # Accepted Phase 7 candidate requests: processor 50m with 64 binary MiB,
     # plus forwarder 25m with 128 binary MiB. A fresh cluster also adds the
     # flow generator at 50m/128 binary MiB. The finite controller adds
-    # 2000m/256 binary MiB after old Jobs are deleted. Current Running Pods are
-    # already included above.
+    # 2000m/256 binary MiB after old Jobs are deleted. Enabled posterior
+    # measurement adds a separate 25m/64 binary MiB receiver. Current Running
+    # Pods are already included above; any old receiver is replaced by the
+    # requested target state rather than counted twice.
     added_flow_generators = 1 if existing_replica_count == 0 else 0
     requested_cpu += (
         added_stage_pods * 75
         + added_flow_generators * 50
         + CONTROLLER_CPU_REQUEST_MILLI
+        + (
+            POSTERIOR_MIRROR_CPU_REQUEST_MILLI
+            if posterior_mirror_enabled
+            else 0
+        )
     )
     requested_memory += (
         added_stage_pods * (64 + 128) * 1024**2
         + added_flow_generators * 128 * 1024**2
         + CONTROLLER_MEMORY_REQUEST_BYTES
+        + (
+            POSTERIOR_MIRROR_MEMORY_REQUEST_BYTES
+            if posterior_mirror_enabled
+            else 0
+        )
     )
     result = HybridNodeResourcePreflight(
         requested_cpu_milli=requested_cpu,
@@ -1576,26 +1638,100 @@ def _network_impairment_patch_document(
 
 
 def _write_network_impairment_patches(
-    root: Path, network_impairment: HybridNetworkImpairment
+    root: Path,
+    network_impairment: HybridNetworkImpairment,
+    *,
+    additional_paths: Sequence[str] = (),
 ) -> str:
-    if not network_impairment.enabled:
-        return ""
-    patch_lines = []
-    for stage in range(1, 4):
-        name = f"netem-stage-{stage}.json"
-        (root / name).write_text(
-            json.dumps(
-                _network_impairment_patch_document(
-                    stage=stage,
-                    network_impairment=network_impairment,
+    patch_lines = [f"  - path: {name}" for name in additional_paths]
+    if network_impairment.enabled:
+        for stage in range(1, 4):
+            name = f"netem-stage-{stage}.json"
+            (root / name).write_text(
+                json.dumps(
+                    _network_impairment_patch_document(
+                        stage=stage,
+                        network_impairment=network_impairment,
+                    ),
+                    sort_keys=True,
+                    separators=(",", ":"),
                 ),
+                encoding="utf-8",
+            )
+            patch_lines.append(f"  - path: {name}")
+    if not patch_lines:
+        return ""
+    return "patches:\n" + "\n".join(patch_lines) + "\n"
+
+
+def _write_preserved_template_annotation_patches(
+    root: Path,
+    existing_statefulsets: Mapping[str, object] | None,
+) -> tuple[str, ...]:
+    """Carry external non-netem annotations through an owned reconciliation."""
+
+    if existing_statefulsets is None:
+        return ()
+    items = existing_statefulsets.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("StatefulSet template inventory has no item list")
+    statefulsets = []
+    for item in items:
+        if not isinstance(item, Mapping) or item.get("kind") != "StatefulSet":
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, Mapping):
+            raise RuntimeError("StatefulSet template item is invalid")
+        name = metadata.get("name")
+        if not isinstance(name, str) or not name:
+            raise RuntimeError("StatefulSet template item has no stable name")
+        statefulsets.append((name, item))
+
+    paths = []
+    for name, item in sorted(statefulsets):
+        metadata = item.get("metadata")
+        spec = item.get("spec")
+        template = spec.get("template") if isinstance(spec, Mapping) else None
+        template_metadata = (
+            template.get("metadata") if isinstance(template, Mapping) else None
+        )
+        if not isinstance(metadata, Mapping) or not isinstance(
+            template_metadata, Mapping
+        ):
+            raise RuntimeError("StatefulSet has no stable Pod template")
+        annotations = template_metadata.get("annotations", {})
+        if not isinstance(annotations, Mapping):
+            raise RuntimeError("StatefulSet template annotations are invalid")
+        retained = {
+            key: value
+            for key, value in annotations.items()
+            if key != HYBRID_NETWORK_IMPAIRMENT_ANNOTATION
+        }
+        if not retained:
+            continue
+        if any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in retained.items()
+        ):
+            raise RuntimeError("StatefulSet template annotations are invalid")
+        filename = f"preserve-{name}-template-annotations.json"
+        (root / filename).write_text(
+            json.dumps(
+                {
+                    "apiVersion": "apps/v1",
+                    "kind": "StatefulSet",
+                    "metadata": {"name": name, "namespace": HYBRID_NAMESPACE},
+                    "spec": {
+                        "template": {"metadata": {"annotations": retained}}
+                    },
+                },
                 sort_keys=True,
                 separators=(",", ":"),
             ),
             encoding="utf-8",
         )
-        patch_lines.append(f"  - path: {name}")
-    return "patches:\n" + "\n".join(patch_lines) + "\n"
+        paths.append(filename)
+    return tuple(paths)
 
 
 def _statefulset_template_snapshot(
@@ -1691,8 +1827,14 @@ def _apply_reconciled_boundary(
                 "generatorOptions:\n"
                 "  disableNameSuffixHash: true\n"
             )
+        preserved_annotation_patches = _write_preserved_template_annotation_patches(
+            temporary_root,
+            existing_statefulsets,
+        )
         network_patches = _write_network_impairment_patches(
-            temporary_root, network_impairment
+            temporary_root,
+            network_impairment,
+            additional_paths=preserved_annotation_patches,
         )
         kustomization.write_text(
             "apiVersion: kustomize.config.k8s.io/v1beta1\n"
@@ -1868,6 +2010,52 @@ def _reconcile_phase75_controller_sources(execute: Executor) -> None:
         execute(_kubectl("apply", "-f", str(manifest)), False)
 
 
+def _reconcile_posterior_mirror(
+    execute: Executor,
+    *,
+    enabled: bool,
+) -> None:
+    """Reconcile only the opt-in measurement receiver and its Service."""
+
+    if not isinstance(enabled, bool):
+        raise RuntimeError("Hybrid posterior-mirror setting must be boolean")
+    if enabled:
+        if not POSTERIOR_MIRROR_MANIFEST.is_file():
+            raise RuntimeError(
+                f"missing Hybrid posterior-mirror manifest: "
+                f"{POSTERIOR_MIRROR_MANIFEST}"
+            )
+        execute(
+            _kubectl("apply", "-f", str(POSTERIOR_MIRROR_MANIFEST)),
+            False,
+        )
+        execute(
+            _kubectl(
+                "rollout",
+                "status",
+                "-n",
+                HYBRID_NAMESPACE,
+                POSTERIOR_MIRROR_RESOURCE,
+                "--timeout=120s",
+            ),
+            False,
+        )
+        return
+    execute(
+        _kubectl(
+            "delete",
+            "deployment",
+            "service",
+            POSTERIOR_MIRROR_NAME,
+            "-n",
+            HYBRID_NAMESPACE,
+            "--ignore-not-found",
+            "--wait=true",
+        ),
+        False,
+    )
+
+
 def _apply_controller_job(
     execute: Executor,
     *,
@@ -1987,6 +2175,7 @@ def _persist_hybrid_experiment_trace(
     series_id: str | None = None,
     control_plane_footprint_enabled: bool = False,
     parity_replay_enabled: bool = False,
+    posterior_mirror_enabled: bool = False,
     network_impairment: HybridNetworkImpairment | None = None,
 ) -> Path:
     """Validate and persist completed-slot evidence as a host-side JSONL run."""
@@ -2007,6 +2196,11 @@ def _persist_hybrid_experiment_trace(
                 "Hybrid controller evidence must not supply host impairment "
                 "provenance"
             )
+        if "posterior_mirror_configuration" in document:
+            raise RuntimeError(
+                "Hybrid controller evidence must not supply host posterior-"
+                "mirror provenance"
+            )
         documents.append(document)
     if not documents:
         raise RuntimeError("Hybrid production run emitted no slot evidence")
@@ -2018,6 +2212,8 @@ def _persist_hybrid_experiment_trace(
         raise RuntimeError("Hybrid control-plane footprint setting must be boolean")
     if not isinstance(parity_replay_enabled, bool):
         raise RuntimeError("Hybrid parity-replay setting must be boolean")
+    if not isinstance(posterior_mirror_enabled, bool):
+        raise RuntimeError("Hybrid posterior-mirror setting must be boolean")
 
     expected_configuration = {
         "num_flows": requested_flows,
@@ -2026,6 +2222,7 @@ def _persist_hybrid_experiment_trace(
         "stage_budget": 2,
     }
     previous_slot = None
+    posterior_mirror_run_id = None
     for document in documents:
         if document.get("configuration") != expected_configuration:
             raise RuntimeError("Hybrid trace configuration is inconsistent")
@@ -2170,6 +2367,60 @@ def _persist_hybrid_experiment_trace(
             raise RuntimeError(
                 "Hybrid trace contains disabled control-plane footprint data"
             )
+        posterior_mirror = document.get("posterior_mirror")
+        if posterior_mirror_enabled:
+            if posterior_mirror is None:
+                raise RuntimeError(
+                    "Hybrid trace lacks enabled posterior-mirror data"
+                )
+            beliefs_after = {
+                ReplicaChoice(*identity): belief
+                for identity, belief in _hybrid_csv_belief_snapshot(
+                    document.get("beliefs_after")
+                ).items()
+            }
+            updated_choices = []
+            for observation in observations:
+                if not isinstance(observation, Mapping):
+                    raise RuntimeError(
+                        "Hybrid trace has invalid posterior-mirror observations"
+                    )
+                stage = observation.get("stage")
+                replica = observation.get("replica")
+                if (
+                    isinstance(stage, bool)
+                    or not isinstance(stage, int)
+                    or stage < 1
+                    or isinstance(replica, bool)
+                    or not isinstance(replica, int)
+                    or replica < 1
+                ):
+                    raise RuntimeError(
+                        "Hybrid trace has invalid posterior-mirror observations"
+                    )
+                updated_choices.append(ReplicaChoice(stage, replica))
+            try:
+                validate_hybrid_posterior_mirror_snapshot(
+                    posterior_mirror,
+                    expected_slot_id=slot_id,
+                    expected_beliefs=beliefs_after,
+                    expected_updated_choices=updated_choices,
+                )
+                current_mirror_run_id = posterior_mirror["run_id"]
+                if posterior_mirror_run_id is None:
+                    posterior_mirror_run_id = current_mirror_run_id
+                elif current_mirror_run_id != posterior_mirror_run_id:
+                    raise ValueError(
+                        "posterior-mirror run identity changed within the trace"
+                    )
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Hybrid trace has invalid posterior-mirror data: {error}"
+                ) from error
+        elif "posterior_mirror" in document:
+            raise RuntimeError(
+                "Hybrid trace contains disabled posterior-mirror data"
+            )
     if (
         expected_experiment_seed is not None
         and documents[0]["slot_id"] != expected_experiment_seed
@@ -2230,8 +2481,13 @@ def _persist_hybrid_experiment_trace(
         "parity_replay_enabled": parity_replay_enabled,
     }
     impairment_provenance = network_impairment.to_dict()
+    mirror_provenance = posterior_mirror_provenance(posterior_mirror_enabled)
     events = [
-        {**event, "network_impairment": impairment_provenance}
+        {
+            **event,
+            "network_impairment": impairment_provenance,
+            "posterior_mirror_configuration": mirror_provenance,
+        }
         for event in (started, *completed_slots, completed)
     ]
     try:
@@ -2242,6 +2498,16 @@ def _persist_hybrid_experiment_trace(
         raise RuntimeError(
             f"Hybrid trace has invalid network-impairment provenance: {error}"
         ) from error
+    for event in events:
+        try:
+            validate_posterior_mirror_provenance(
+                event.get("posterior_mirror_configuration"),
+                expected_enabled=posterior_mirror_enabled,
+            )
+        except ValueError as error:
+            raise RuntimeError(
+                f"Hybrid trace has invalid posterior-mirror provenance: {error}"
+            ) from error
     with trace_path.open("x", encoding="utf-8") as trace:
         for event in events:
             trace.write(json.dumps(event, sort_keys=True, separators=(",", ":")))
@@ -2345,6 +2611,94 @@ def _hybrid_footprint_csv_rows(
     return rows
 
 
+def _hybrid_posterior_mirror_csv_rows(
+    events: Sequence[Mapping[str, object]],
+    iterations: Sequence[Mapping[str, object]],
+) -> list[dict[str, dict[str, int]]] | None:
+    provenance_present = [
+        "posterior_mirror_configuration" in event for event in events
+    ]
+    if any(provenance_present) and not all(provenance_present):
+        raise ValueError("Hybrid CSV trace has mixed posterior-mirror provenance")
+    if not any(provenance_present):
+        if any("posterior_mirror" in event for event in iterations):
+            raise ValueError(
+                "Hybrid CSV trace has posterior-mirror data without provenance"
+            )
+        return None
+
+    enabled_values = []
+    for event in events:
+        provenance = validate_posterior_mirror_provenance(
+            event.get("posterior_mirror_configuration")
+        )
+        enabled_values.append(provenance["enabled"])
+    if len(set(enabled_values)) != 1:
+        raise ValueError("Hybrid CSV trace has drifted posterior-mirror provenance")
+    enabled = enabled_values[0]
+    if not enabled:
+        if any("posterior_mirror" in event for event in iterations):
+            raise ValueError("Hybrid CSV trace contains disabled posterior-mirror data")
+        return None
+
+    rows = []
+    mirror_run_id = None
+    for event in iterations:
+        snapshot = event.get("posterior_mirror")
+        if snapshot is None:
+            raise ValueError("Hybrid CSV trace lacks enabled posterior-mirror data")
+        slot_id = event.get("slot_id")
+        if (
+            isinstance(slot_id, bool)
+            or not isinstance(slot_id, int)
+            or slot_id < 1
+        ):
+            raise ValueError("Hybrid CSV trace has invalid mirror slot identity")
+        beliefs_after = {
+            ReplicaChoice(*identity): belief
+            for identity, belief in _hybrid_csv_belief_snapshot(
+                event.get("beliefs_after")
+            ).items()
+        }
+        observations = event.get("observations")
+        if not isinstance(observations, list) or not observations:
+            raise ValueError("Hybrid CSV trace has invalid mirror observations")
+        updated_choices = []
+        for observation in observations:
+            if not isinstance(observation, Mapping):
+                raise ValueError("Hybrid CSV trace has invalid mirror observations")
+            stage = observation.get("stage")
+            replica = observation.get("replica")
+            if (
+                isinstance(stage, bool)
+                or not isinstance(stage, int)
+                or stage < 1
+                or isinstance(replica, bool)
+                or not isinstance(replica, int)
+                or replica < 1
+            ):
+                raise ValueError("Hybrid CSV trace has invalid mirror observations")
+            updated_choices.append(ReplicaChoice(stage, replica))
+        validate_hybrid_posterior_mirror_snapshot(
+            snapshot,
+            expected_slot_id=slot_id,
+            expected_beliefs=beliefs_after,
+            expected_updated_choices=updated_choices,
+        )
+        current_run_id = snapshot["run_id"]
+        if mirror_run_id is None:
+            mirror_run_id = current_run_id
+        elif current_run_id != mirror_run_id:
+            raise ValueError("Hybrid CSV trace has drifted mirror run identity")
+        rows.append(
+            {
+                "payload_bytes": dict(snapshot["payload_bytes"]),
+                "messages": dict(snapshot["messages"]),
+            }
+        )
+    return rows
+
+
 def export_hybrid_csv(
     trace_path: Path,
     output_dir: Path = HYBRID_CSV_OUTPUT_DIR,
@@ -2433,6 +2787,7 @@ def export_hybrid_csv(
     if any(set(snapshot) != expected_belief_identities for snapshot in belief_snapshots):
         raise ValueError("Hybrid CSV belief identities change within one run")
     footprint_rows = _hybrid_footprint_csv_rows(iterations)
+    posterior_mirror_rows = _hybrid_posterior_mirror_csv_rows(events, iterations)
 
     run_id = _hybrid_csv_run_hash(started[0])
     metric_paths = tuple(output_dir / name for name in HYBRID_CSV_FILENAMES[:4])
@@ -2461,6 +2816,19 @@ def export_hybrid_csv(
                 raise ValueError(
                     f"Hybrid CSV run identifier already exists in {path}: {run_id}"
                 )
+    posterior_mirror_paths: tuple[Path, ...] = ()
+    if posterior_mirror_rows is not None:
+        posterior_mirror_dir = output_dir / "posterior_mirror"
+        posterior_mirror_paths = tuple(
+            posterior_mirror_dir / filename
+            for filename, _section, _field in HYBRID_POSTERIOR_MIRROR_CSV_FIELDS
+        )
+        for path in posterior_mirror_paths:
+            fieldnames, _rows = read_csv_table(path)
+            if run_id in fieldnames:
+                raise ValueError(
+                    f"Hybrid CSV run identifier already exists in {path}: {run_id}"
+                )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for elapsed, violations, excess_ms, end_to_end_utility, fairness in metric_rows:
@@ -2481,7 +2849,21 @@ def export_hybrid_csv(
                 strict=True,
             ):
                 append_metric_value(path, run_id, row[section][field])
-    return (*metric_paths, belief_path, excess_path, *footprint_paths)
+    if posterior_mirror_rows is not None:
+        for row in posterior_mirror_rows:
+            for path, (_filename, section, field) in zip(
+                posterior_mirror_paths,
+                HYBRID_POSTERIOR_MIRROR_CSV_FIELDS,
+                strict=True,
+            ):
+                append_metric_value(path, run_id, row[section][field])
+    return (
+        *metric_paths,
+        belief_path,
+        excess_path,
+        *footprint_paths,
+        *posterior_mirror_paths,
+    )
 
 
 def _report_hybrid_csv(paths: Sequence[Path]) -> None:
@@ -2553,6 +2935,7 @@ def run_small(
     first_slot_id: int | None = None,
     control_plane_footprint_enabled: bool = False,
     parity_replay_enabled: bool = False,
+    posterior_mirror_enabled: bool = False,
     network_impairment: HybridNetworkImpairment | None = None,
     execute: Executor = _execute,
 ) -> str:
@@ -2564,8 +2947,12 @@ def run_small(
         raise RuntimeError("Hybrid control-plane footprint setting must be boolean")
     if not isinstance(parity_replay_enabled, bool):
         raise RuntimeError("Hybrid parity-replay setting must be boolean")
+    if not isinstance(posterior_mirror_enabled, bool):
+        raise RuntimeError("Hybrid posterior-mirror setting must be boolean")
     if parity_replay_enabled and not production_experiment:
         raise RuntimeError("parity replay belongs to the production run command")
+    if posterior_mirror_enabled and not production_experiment:
+        raise RuntimeError("posterior mirror belongs to the production run command")
     if production_experiment:
         if (
             isinstance(max_iterations, bool)
@@ -2610,6 +2997,10 @@ def run_small(
         print(
             "Hybrid Pure/Kernel parity replay: "
             + ("enabled" if parity_replay_enabled else "disabled")
+        )
+        print(
+            "Hybrid posterior transmission mirror: "
+            + ("enabled" if posterior_mirror_enabled else "disabled")
         )
     boundary = _validate_static_profile_boundary(
         requested_replicas,
@@ -2794,6 +3185,7 @@ def run_small(
                 execute,
                 existing_replica_count=existing_count or 0,
                 requested_replica_count=requested_replicas,
+                posterior_mirror_enabled=posterior_mirror_enabled,
             )
             print(
                 "Hybrid resource preflight: "
@@ -2842,6 +3234,7 @@ def run_small(
                 execute,
                 existing_replica_count=0,
                 requested_replica_count=requested_replicas,
+                posterior_mirror_enabled=posterior_mirror_enabled,
             )
             print(
                 "Hybrid resource preflight: "
@@ -3052,6 +3445,10 @@ def run_small(
     preflight(execute=execute)
     if boundary.runtime_document is not None or controller_arguments is not None:
         _reconcile_phase75_controller_sources(execute)
+    _reconcile_posterior_mirror(
+        execute,
+        enabled=posterior_mirror_enabled,
+    )
     if before_controller_job is not None:
         before_controller_job()
     execute(
@@ -3080,6 +3477,9 @@ def run_small(
                 ),
                 HYBRID_PARITY_REPLAY_ENV: (
                     "1" if parity_replay_enabled else "0"
+                ),
+                HYBRID_POSTERIOR_MIRROR_ENV: (
+                    "1" if posterior_mirror_enabled else "0"
                 ),
                 **(
                     {}
@@ -3181,6 +3581,7 @@ def run_experiment(
     first_slot_id: int | None = None,
     control_plane_footprint_enabled: bool = False,
     parity_replay_enabled: bool = False,
+    posterior_mirror_enabled: bool = False,
     network_impairment: HybridNetworkImpairment | None = None,
     before_controller_job: RunHook | None = None,
     controller_job_started: RunHook | None = None,
@@ -3217,6 +3618,7 @@ def run_experiment(
         first_slot_id=first_slot_id,
         control_plane_footprint_enabled=control_plane_footprint_enabled,
         parity_replay_enabled=parity_replay_enabled,
+        posterior_mirror_enabled=posterior_mirror_enabled,
         network_impairment=network_impairment,
         execute=execute,
     )
@@ -3269,6 +3671,7 @@ def run_experiment_series(
     mc_workers: int | None = None,
     csv_enabled: bool = False,
     parity_replay_enabled: bool = False,
+    posterior_mirror_enabled: bool = False,
     network_impairment: HybridNetworkImpairment | None = None,
     csv_output_dir: Path = HYBRID_CSV_OUTPUT_DIR,
     execute: Executor = _execute,
@@ -3318,6 +3721,7 @@ def run_experiment_series(
             first_slot_id=experiment_seed,
             control_plane_footprint_enabled=csv_enabled,
             parity_replay_enabled=parity_replay_enabled,
+            posterior_mirror_enabled=posterior_mirror_enabled,
             network_impairment=network_impairment,
             stream_controller_logs=stream_controller_logs,
             execute=execute,
@@ -3335,6 +3739,7 @@ def run_experiment_series(
             series_id=series_id,
             control_plane_footprint_enabled=csv_enabled,
             parity_replay_enabled=parity_replay_enabled,
+            posterior_mirror_enabled=posterior_mirror_enabled,
             network_impairment=network_impairment,
         )
         trace_paths.append(trace_path)
@@ -3534,6 +3939,16 @@ def _add_run_arguments(
             ),
         )
         parser.add_argument(
+            "--posterior-mirror",
+            type=int,
+            choices=(0, 1),
+            default=0,
+            help=(
+                "send non-authoritative completed posterior copies to the "
+                "worker-only measurement receiver (1=enabled, 0=disabled)"
+            ),
+        )
+        parser.add_argument(
             "--netem",
             type=int,
             choices=(0, 1),
@@ -3617,6 +4032,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     mc_workers=args.mc_workers,
                     csv_enabled=bool(args.csv),
                     parity_replay_enabled=bool(args.parity_replay),
+                    posterior_mirror_enabled=bool(args.posterior_mirror),
                     network_impairment=args.network_impairment,
                 )
             else:
@@ -3634,6 +4050,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     mc_workers=args.mc_workers,
                     control_plane_footprint_enabled=bool(args.csv),
                     parity_replay_enabled=bool(args.parity_replay),
+                    posterior_mirror_enabled=bool(args.posterior_mirror),
                     network_impairment=args.network_impairment,
                 )
                 trace_path = _persist_hybrid_experiment_trace(
@@ -3645,6 +4062,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     max_iterations=args.max_iterations,
                     control_plane_footprint_enabled=bool(args.csv),
                     parity_replay_enabled=bool(args.parity_replay),
+                    posterior_mirror_enabled=bool(args.posterior_mirror),
                     network_impairment=args.network_impairment,
                 )
                 print(f"Detailed Hybrid JSONL trace: {trace_path}")

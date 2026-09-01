@@ -25,6 +25,7 @@ COPY Greedy/slot_contracts.py Greedy/simulation.py Greedy/learning.py Greedy/met
 COPY Greedy/kernel_contracts.py Greedy/kernel_route_contracts.py /app/Greedy/
 COPY Greedy/kernel_kubernetes_discovery.py Greedy/kernel_controller_config.py /app/Greedy/
 COPY Greedy/kernel_controller.py Greedy/kernel_controller_service.py /app/Greedy/
+COPY Greedy/console_output.py Greedy/control_plane_footprint.py Greedy/runtime_resources.py Greedy/evidence_replay.py Greedy/evidence.py /app/Greedy/
 
 USER 10001:10001
 

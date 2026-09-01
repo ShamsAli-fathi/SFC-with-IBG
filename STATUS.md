@@ -4499,3 +4499,182 @@ Not verified or claimed: live image rebuild/load, cluster reconciliation,
 traffic, production v2 JSONL/CSV, corrected live replay, performance, scale,
 or a Greedy/Hybrid same-admission comparison. Phase 8.2 is the next separately
 authorized live correction gate. Phase 9 remains deferred until it passes.
+## Hybrid posterior-transmission mirror planned
+
+Updated: 2026-08-31. The current Hybrid implementation keeps and updates all
+authoritative beliefs inside the controller. Consequently, the existing
+observed application-body footprint correctly reports belief TX/RX as zero.
+The manuscript, however, discusses exchanged posterior summaries and defines
+control-plane overhead using telemetry plus belief updates. A new opt-in
+measurement extension is therefore planned to isolate and measure posterior
+payload volume without converting the algorithm to distributed belief
+ownership.
+
+The accepted design adds a separate worker-only HTTP receiver only when
+enabled. The controller sends deterministic, non-authoritative copies of its
+completed posterior updates; the receiver validates and discards them. Exact
+canonical vector bytes, complete application-body bytes, message counts, and
+per-timeslot totals will be kept separate from protocol overhead and from the
+existing Kubernetes/route/telemetry footprint. Local beliefs continue to drive
+all future decisions, and existing observed belief TX/RX fields and historical
+traces remain unchanged.
+
+Three phases are recorded. Phase 1 implements the contract, receiver,
+deployment integration, evidence, and focused tests locally. Phase 2 performs
+complete local verification and records actual results. Phase 3 is a separately
+authorized matched live validation. No implementation, test, build, render,
+Docker, kind, Kubernetes, Job, Pod, traffic, or experiment action has been
+performed for this feature yet.
+
+## Hybrid posterior-transmission mirror Phase 2 complete locally
+
+Updated: 2026-08-31. Phase 1 and Phase 2 are complete in the local worktree.
+`--posterior-mirror 1` enables real HTTP copies of completed aggregated
+posteriors to a separate worker-only validation/discard receiver; the default is
+disabled. The controller's local beliefs remain authoritative, and existing
+observed control-plane belief TX/RX values remain zero.
+
+Enabled `--csv 1` runs now export vector payload bytes, complete application-
+body bytes, and update-message counts under
+`figures/IBG_hybrid/posterior_mirror/`. The Hybrid-only posterior-mirror summary
+reports per-timeslot values plus total, median, and p95 and clearly labels the
+result as an instrumented non-authoritative payload mirror rather than wire or
+required distributed-learning traffic.
+
+Local evidence is green: 104 final focused tests passed; the complete Hybrid
+suite passed as 162 + 103 + 146 = 411 tests; changed Python compilation, clean
+imports, CLI help, seven retained offline renders, the enabled-receiver offline
+render, and `git diff --check` passed. IBG-Exact was untouched and not tested.
+No live cluster mutation, build/load, Job, Pod, traffic, or experiment occurred.
+
+Next action: prepare Phase 3 read-only preflight and exact matched disabled/
+enabled commands only after explicit user authorization. Live receiver and
+semantic evidence remain unvalidated until that gate runs.
+
+User-run preflight follow-up: a retained manual-rollout annotation caused the
+template guard to reject reconciliation before apply. The local launcher now
+preserves that non-netem annotation while changing only requested impairment
+fields. Sixty-five focused tests, compilation, and `git diff --check` pass. The
+agent performed only live read-only inspection and server-side dry-run; it did
+not rerun traffic or mutate the cluster.
+
+The subsequent enabled receiver Pod entered `CrashLoopBackOff` before traffic
+because the controller image intentionally lacks Uvicorn. Read-only logs
+confirmed `/usr/bin/python3: No module named uvicorn`. The local manifest now
+uses the Hybrid service image and its existing pinned Uvicorn runtime; the
+service image also includes the self-contained mirror module. Fifty-eight
+focused tests, compilation, and `git diff --check` pass. The failed live
+Deployment was not restarted or modified by the agent, and no controller Job
+or experiment traffic was started by this failed gate.
+
+## Greedy Phase 8.2 live rollout timeout status
+
+Updated: 2026-09-01. The owned Greedy nodes were restarted explicitly and both
+became Ready; the Greedy isolation preflight passed. The retained `3x10`
+serving topology then recovered to complete readiness. A user-started normal
+`40-flow/3-stage/20-replica`, one-iteration run scaled and rolled all three
+StatefulSets, but the single fixed 120-second `kubectl rollout status` command
+timed out despite continuing progress. All stages subsequently reached 20/20
+Ready, but no controller Job was created. `--skip-build` correctly refused the
+still-active service-image transition marker. A second normal attempt repeated
+the full revision rollout and hit the same fixed-deadline condition; it too
+eventually reached 20/20 Ready per stage with no controller Job.
+
+The local launcher now treats 120 seconds as a stall timeout reset only by
+verified generation/revision, updated/Ready count, or new owned Pod UID/
+readiness progress. It also enforces a topology-bounded total deadline and
+retains exact final revision and Pod coverage validation. Verification:
+
+- `PYTHONPYCACHEPREFIX=/tmp/greedy-rollout-timeout-phase5-pycache .venv/bin/python -m pytest -q tests/test_greedy_phase5.py`: 21 passed.
+- Focused rollout/bootstrap/scale/skip-build checks: 6 passed.
+- The synthetic progress test succeeds after 140 seconds of continuing
+  progress and fails after 122 seconds without progress.
+- Changed Python compilation and `git diff --check` pass.
+- Complete Greedy Phase 0--8.1 selection: 183 passed, one failed solely because
+  the current unrelated dirty `IBG_Hybrid/kernel_controller.py` blob no longer
+  equals the frozen Phase 7 comparison audit. No Hybrid file was changed for
+  this Greedy repair.
+
+Phase 8.2 is not accepted yet. No corrected experiment trace or CSV exists, no
+controller Job is running, and the live StatefulSet templates still retain the
+historical `greedy.max-assigned-flows` label despite the local v2 renderer
+excluding it. Do not claim v2 live completion until the pending transition is
+resumed with this progress-aware launcher and the stale-label reconciliation
+gate is fixed and verified.
+
+## Greedy Phase 8.2 rollout recovery completed
+
+Updated: 2026-09-01. Starting state was branch `IBG` at
+`ac026c77506fd4cf115106a1d7696255290d9238`, with unrelated dirty Hybrid
+posterior-mirror work preserved. Read-only preflight found exactly the expected
+Ready control-plane/worker pair, no launcher process or controller Job, three
+fully Ready but transition-marked 20-replica StatefulSets, exact running
+service image ID
+`7df0670f2107506093812904e9f9bd80ded049b9869235603384b7062da2bf89`,
+and the pending `40x3x20` launcher target with profile fingerprint
+`ef7c80158b547c94d26f40cd158d1381`. All retained serving templates and Pods
+still carried `greedy.max-assigned-flows=2` and lacked deterministic rollout
+provenance.
+
+The repaired lifecycle now annotates each serving template with the exact
+service image ID and source fingerprint, distinguishes legacy/update-required,
+progressing, and converged transitions, rejects ambiguous provenance, and
+validates running CRI image IDs. It applies a canonical template correction at
+most once, removes the stale capacity label, and no longer follows an apply
+with `kubectl rollout restart`. The 120-second value is a verified-progress
+stall timeout; an independent topology-bounded deadline rejects endless UID
+replacement churn. Launcher state is marked stable only after exact template,
+revision, Ready identity, profile, and image convergence.
+
+The exact authorized live command was:
+
+```text
+.venv/bin/python scripts/run_greedy_kernel.py run --flow 40 --stage 3 --replica 20 --max-iterations 1 --profile-seed 17 --rollout-batch-size 3
+```
+
+It performed no image build/load because local source fingerprints and exact
+local/node OCI config IDs already matched. One canonical apply combined the
+provenance and stale-label correction. The observed serving-Pod replacement
+window was 162 seconds, from `2026-09-01T16:34:47Z` through
+`2026-09-01T16:37:29Z`, and progressed beyond the former fixed 120-second
+deadline. Revisions converged as follows:
+
+- stage 1: `greedy-stage-1-6ff5769677` at 20/20 updated and Ready;
+- stage 2: `greedy-stage-2-54bdd8ddb` at 20/20 updated and Ready;
+- stage 3: `greedy-stage-3-64f5c7f4c` at 20/20 updated and Ready.
+
+All 60 replica Pod UIDs and the flow-generator UID changed in this one
+necessary template rollout; all new serving containers had zero restarts. The
+capacity label is absent from every active Pod and template. CRI inspection
+found 60 private processors, 60 public forwarders, and one flow generator,
+all Running with exact image ID `7df0670f...bf89`. Launcher state is now stable
+at `40x3x20` with `transition_active=false` and
+`service_restart_required=false`.
+
+Exactly one controller Pod, `greedy-controller-7vt5g`, completed successfully
+with zero restarts. The validated evidence is
+`runs/greedy-experiment-20260901T163749.921241Z.jsonl` using
+`greedy-experiment-jsonl-v2` and `pure-greedy-budgeted-l2-v2`. It contains one
+completed iteration, 40 complete placements, 80 selected observations,
+40 measured-pair records, 40 route requests, one controller-to-generator
+request, and no hidden-state or stochastic-seed keys. CSV and replay were not
+requested or performed. No second experiment was started.
+
+Final offline verification for this recovery:
+
+- `PYTHONPYCACHEPREFIX=/tmp/greedy-phase82-final-focused .venv/bin/python -m pytest -q tests/test_greedy_phase5.py tests/test_greedy_phase81.py`: 36 passed.
+- Complete Greedy Phase 0--8.1 selection: 192 passed and one failed. The sole
+  failure remains the frozen comparison audit for unrelated dirty
+  `IBG_Hybrid/kernel_controller.py`: expected blob
+  `b9408745de6175316481a47915423d16c9b1aea8`, current blob
+  `81d0d3514b9c41f720763938a7f0b0c83412e030`. Hybrid was not modified and the
+  audit was not weakened.
+- Changed Python compilation with external bytecode and `git diff --check`
+  pass.
+
+The rollout-recovery substep passes, but complete Phase 8.2 remains open. This
+specific `40x3x20` trace had maximum final replica load two and did not request
+forced replay or CSV; an unchanged `--skip-build` repeat was intentionally not
+started. The separate Phase 8.2 gate still requires its deterministic
+above-old-ceiling live demonstration, forced replay/CSV validation, and
+unchanged skip-build repeat. Phase 9 remains blocked until those pass.

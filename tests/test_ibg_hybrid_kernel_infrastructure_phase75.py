@@ -403,6 +403,7 @@ def test_phase75_job_patch_and_source_configmap_are_controller_only():
         "kernel_kubernetes_discovery.py",
         "kernel_phase4_validation.py",
         "kernel_controller_cli.py",
+        "posterior_mirror.py",
     }
     assert captured["Job"]["spec"]["template"]["spec"]["containers"][0][
         "args"

@@ -25,6 +25,7 @@ COPY testbed/__init__.py testbed/profiles.py testbed/cnf_service.py testbed/rout
 COPY deploy/hybrid-kubernetes/service-package-init.py /app/IBG_Hybrid/__init__.py
 COPY deploy/hybrid-kubernetes/image-stage-budget.py /app/IBG_Hybrid/budgeted.py
 COPY IBG_Hybrid/contracts.py IBG_Hybrid/kernel_infrastructure_contract.py IBG_Hybrid/kernel_runtime_profiles.py /app/IBG_Hybrid/
+COPY IBG_Hybrid/posterior_mirror.py /app/IBG_Hybrid/
 COPY IBG_Hybrid/kernel_route_contracts.py IBG_Hybrid/kernel_route_execution.py IBG_Hybrid/kernel_route_forwarder.py /app/IBG_Hybrid/
 COPY IBG_Hybrid/kernel_processor_service.py IBG_Hybrid/kernel_route_forwarder_service.py IBG_Hybrid/kernel_flow_generator.py /app/IBG_Hybrid/
 

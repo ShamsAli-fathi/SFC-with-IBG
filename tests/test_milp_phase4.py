@@ -16,6 +16,7 @@ from MILP.scaling import (
     MILP_PHASE4_MEMORY_SCOPE,
     MILP_PHASE4_SCALE_CONTRACT_VERSION,
     MILP_PHASE4_SYNTHETIC_PROFILE_VERSION,
+    MILP_PHASE4_SYNTHETIC_PROFILE_V1,
     MILP_SCALE_LADDER,
     build_scale_slot_input,
     format_scale_evidence,
@@ -76,6 +77,34 @@ def test_synthetic_scale_profile_is_complete_deterministic_and_rng_neutral():
     assert numpy_after[0] == numpy_before[0]
     assert np.array_equal(numpy_after[1], numpy_before[1])
     assert numpy_after[2:] == numpy_before[2:]
+
+
+def test_synthetic_scale_v2_planning_links_are_near_70ms_and_v1_remains_reproducible():
+    current = build_scale_slot_input(
+        make_scale_case(
+            flow_count=2,
+            stage_count=3,
+            replicas_per_stage=2,
+            cutoff_seconds=2.0,
+            profile_seed=50,
+        )
+    )
+    current_costs = [item.cost_ms for item in current.problem.planning_links]
+    assert min(current_costs) >= 65.0
+    assert max(current_costs) <= 74.999
+
+    legacy_case = make_scale_case(
+        flow_count=2,
+        stage_count=3,
+        replicas_per_stage=2,
+        cutoff_seconds=2.0,
+        profile_seed=50,
+        profile_version=MILP_PHASE4_SYNTHETIC_PROFILE_V1,
+    )
+    legacy = build_scale_slot_input(legacy_case)
+    legacy_costs = [item.cost_ms for item in legacy.problem.planning_links]
+    assert min(legacy_costs) >= 0.5
+    assert max(legacy_costs) <= 5.499
 
 
 def test_tiny_scale_case_proves_oracle_parity_and_retains_complete_evidence():

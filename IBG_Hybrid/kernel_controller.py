@@ -68,6 +68,19 @@ class HybridKernelReadyDiscoveryPort(Protocol):
         ...
 
 
+class HybridPosteriorMirrorPort(Protocol):
+    """Transmit non-authoritative copies of completed posterior updates."""
+
+    def mirror_slot(
+        self,
+        *,
+        slot_id: int,
+        beliefs_after: Mapping[ReplicaChoice, Sequence[float]],
+        updated_choices: Sequence[ReplicaChoice],
+    ) -> Mapping[str, object]:
+        ...
+
+
 class HybridKernelFlowGeneratorHttpClient:
     """Persistent controller-side client; exactly one POST per slot call."""
 
@@ -339,6 +352,7 @@ class HybridKernelControllerSlotResult:
     discovery: HybridKernelDiscoverySnapshot
     slot: HybridSlotResult
     control_plane: Mapping[str, object] | None = None
+    posterior_mirror: Mapping[str, object] | None = None
     lookahead_process_workers: int = 0
     lookahead_pool_lifecycle_version: str | None = None
     controller_contract_version: str = HYBRID_KERNEL_CONTROLLER_ADAPTER_VERSION
@@ -373,6 +387,7 @@ class HybridKernelControllerAdapter:
         mc_workers: int = DEFAULT_HYBRID_MC_WORKERS,
         policy: IBGHybridPolicy | None = None,
         control_plane_meter: HybridControlPlaneDataMeter | None = None,
+        posterior_mirror: HybridPosteriorMirrorPort | None = None,
         lookahead_executor: Executor | None = None,
     ) -> None:
         expected = {item.choice for item in controller_inputs.admission}
@@ -408,6 +423,7 @@ class HybridKernelControllerAdapter:
             DEFAULT_HYBRID_POLICY_PARAMETERS,
         )
         self.control_plane_meter = control_plane_meter
+        self.posterior_mirror = posterior_mirror
         self._closed = False
         self._beliefs = {
             choice: tuple(float(value) for value in initial_beliefs[choice])
@@ -456,7 +472,13 @@ class HybridKernelControllerAdapter:
                 lookahead_executor.shutdown(wait=True, cancel_futures=True)
             except Exception as error:
                 first_error = error
-        for resource in (self.flow_generator, self.discovery):
+        for resource in (
+            self.posterior_mirror,
+            self.flow_generator,
+            self.discovery,
+        ):
+            if resource is None:
+                continue
             close = getattr(resource, "close", None)
             if not callable(close):
                 continue
@@ -544,12 +566,22 @@ class HybridKernelControllerAdapter:
             if self.control_plane_meter is None
             else self.control_plane_meter.finish_slot()
         )
+        posterior_mirror = None
+        if self.posterior_mirror is not None:
+            posterior_mirror = self.posterior_mirror.mirror_slot(
+                slot_id=slot_id,
+                beliefs_after=result.beliefs_after_mapping,
+                updated_choices=tuple(
+                    sorted({observation.choice for observation in result.observations})
+                ),
+            )
         self._beliefs = dict(result.beliefs_after)
         process_workers = self.lookahead_process_workers
         return HybridKernelControllerSlotResult(
             discovery=snapshot,
             slot=result,
             control_plane=control_plane,
+            posterior_mirror=posterior_mirror,
             lookahead_process_workers=process_workers,
             lookahead_pool_lifecycle_version=(
                 HYBRID_KERNEL_LOOKAHEAD_POOL_LIFECYCLE_VERSION

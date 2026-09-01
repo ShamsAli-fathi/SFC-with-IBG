@@ -46,7 +46,11 @@ from .solver import solve_coupled_milp
 
 
 MILP_PHASE4_SCALE_CONTRACT_VERSION = "milp-coupled-phase4-scale-v1"
-MILP_PHASE4_SYNTHETIC_PROFILE_VERSION = "milp-scale-synthetic-profile-v1"
+MILP_PHASE4_SYNTHETIC_PROFILE_V1 = "milp-scale-synthetic-profile-v1"
+MILP_PHASE4_SYNTHETIC_PROFILE_VERSION = "milp-scale-synthetic-profile-v2"
+MILP_SUPPORTED_SYNTHETIC_PROFILE_VERSIONS = frozenset(
+    (MILP_PHASE4_SYNTHETIC_PROFILE_V1, MILP_PHASE4_SYNTHETIC_PROFILE_VERSION)
+)
 MILP_PHASE4_MEMORY_SCOPE = "current-process-ru_maxrss-high-water-mark-v1"
 MILP_PHASE4_BACKEND_PARITY = "not-applicable-single-available-backend"
 MILP_SYNTHETIC_SCALE_EXPERIMENT_IDENTITY = "phase4-synthetic-scale"
@@ -108,7 +112,7 @@ class MILPScaleCase:
             _nonnegative_integer(self.root_seed, "root_seed"),
         )
         object.__setattr__(self, "slot_id", _positive_integer(self.slot_id, "slot_id"))
-        if self.profile_version != MILP_PHASE4_SYNTHETIC_PROFILE_VERSION:
+        if self.profile_version not in MILP_SUPPORTED_SYNTHETIC_PROFILE_VERSIONS:
             raise MILPContractError("unexpected Phase 4 synthetic profile version")
 
 
@@ -168,7 +172,7 @@ class MILPScaleEvidence:
             raise MILPContractError("slot execution does not match incumbent status")
         if self.contract_version != MILP_PHASE4_SCALE_CONTRACT_VERSION:
             raise MILPContractError("unexpected Phase 4 scale contract version")
-        if self.profile_version != MILP_PHASE4_SYNTHETIC_PROFILE_VERSION:
+        if self.profile_version not in MILP_SUPPORTED_SYNTHETIC_PROFILE_VERSIONS:
             raise MILPContractError("unexpected Phase 4 evidence profile version")
         if self.memory_scope != MILP_PHASE4_MEMORY_SCOPE:
             raise MILPContractError("unexpected Phase 4 memory scope")
@@ -229,6 +233,7 @@ def make_scale_case(
     profile_seed: int = 20260801,
     root_seed: int = 20260802,
     slot_id: int = 1,
+    profile_version: str = MILP_PHASE4_SYNTHETIC_PROFILE_VERSION,
 ) -> MILPScaleCase:
     configuration = MILPConfiguration.uniform(
         flow_count=flow_count,
@@ -242,6 +247,7 @@ def make_scale_case(
         profile_seed=profile_seed,
         root_seed=root_seed,
         slot_id=slot_id,
+        profile_version=profile_version,
     )
 
 
@@ -277,17 +283,22 @@ def build_scale_slot_input(case: MILPScaleCase) -> MILPSlotInput:
         for key in dimensions.replica_keys
     }
     pairs = required_directed_pairs(dimensions)
+    planning_base_ms, planning_span_millis, planning_scheme = (
+        (0.5, 5_000, "milp-scale-planning-link-v1")
+        if case.profile_version == MILP_PHASE4_SYNTHETIC_PROFILE_V1
+        else (65.0, 10_000, "milp-scale-planning-link-v2")
+    )
     planning_links = {
-        pair: 0.5
+        pair: planning_base_ms
         + _stable_u64(
-            "milp-scale-planning-link-v1",
+            planning_scheme,
             case.profile_seed,
             pair[0].stage,
             pair[0].replica,
             pair[1].stage,
             pair[1].replica,
         )
-        % 5000
+        % planning_span_millis
         / 1000.0
         for pair in pairs
     }
@@ -360,7 +371,7 @@ def build_synthetic_scale_experiment_profile(
         ),
         planning_link_mode=MILP_EXPLICIT_PLANNING_LINK_MODE,
         planning_link_source=(
-            f"{MILP_PHASE4_SYNTHETIC_PROFILE_VERSION}:"
+            f"{case.profile_version}:"
             f"profile-seed={case.profile_seed}"
         ),
         planning_link_contract_version=MILP_PLANNING_LINK_PROFILE_VERSION,

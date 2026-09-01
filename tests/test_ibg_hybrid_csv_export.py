@@ -8,6 +8,11 @@ import pytest
 from IBG_Hybrid.csv_storage import HybridCsvError
 from IBG_Hybrid.control_plane_footprint import HYBRID_CONTROL_PLANE_DATA_SCHEMA
 from IBG_Hybrid.header import create_belief_csv
+from IBG_Hybrid.contracts import ReplicaChoice
+from IBG_Hybrid.posterior_mirror import (
+    build_canonical_posterior_update,
+    posterior_mirror_provenance,
+)
 from IBG_Hybrid.report import (
     csv_gen_SLA,
     csv_gen_jain,
@@ -169,6 +174,62 @@ def _footprint(value):
         "payload_bytes": {**payload, "total": sum(payload.values())},
         "messages": {**messages, "total": sum(messages.values())},
     }
+
+
+def _mirror_snapshot(slot_id, beliefs, *, run_id="mirror-run"):
+    updates = []
+    vector_total = 0
+    body_total = 0
+    for raw_identity, posterior in sorted(beliefs.items()):
+        stage, replica = (int(value) for value in raw_identity.split(":"))
+        canonical = build_canonical_posterior_update(
+            run_id=run_id,
+            slot_id=slot_id,
+            choice=ReplicaChoice(stage, replica),
+            posterior=posterior,
+        )
+        receipt = canonical.receipt
+        updates.append(
+            {
+                "stage": stage,
+                "replica": replica,
+                "vector_payload_bytes": receipt.vector_payload_bytes,
+                "vector_sha256": receipt.vector_sha256,
+                "application_body_bytes": receipt.application_body_bytes,
+                "application_body_sha256": receipt.application_body_sha256,
+            }
+        )
+        vector_total += receipt.vector_payload_bytes
+        body_total += receipt.application_body_bytes
+    return {
+        "schema": "ibg-hybrid-posterior-mirror-v1",
+        "run_id": run_id,
+        "slot_id": slot_id,
+        "serialization": "canonical-compact-json-utf8-v1",
+        "scope": "completed-aggregated-posterior-per-sampled-replica",
+        "payload_bytes": {
+            "posterior_vectors": vector_total,
+            "application_bodies": body_total,
+        },
+        "messages": {"posterior_updates": len(updates)},
+        "updates": updates,
+    }
+
+
+def _enable_mirror(events, *, run_id="mirror-run"):
+    provenance = posterior_mirror_provenance(True)
+    for event in events:
+        event["posterior_mirror_configuration"] = provenance
+    for event in events[1:-1]:
+        event["slot_id"] = event["iteration"]
+        event["observations"] = [
+            {"stage": int(identity.split(":")[0]), "replica": int(identity.split(":")[1])}
+            for identity in event["beliefs_after"]
+        ]
+        event["posterior_mirror"] = _mirror_snapshot(
+            event["slot_id"], event["beliefs_after"], run_id=run_id
+        )
+    return events
 
 
 def test_export_hybrid_csv_writes_only_requested_legacy_reports(tmp_path):
@@ -435,5 +496,99 @@ def test_footprint_export_rejects_duplicate_run_hash_before_legacy_writes(tmp_pa
     footprint_path.write_text(f"{run_id}\n0\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="already exists"):
+        launcher.export_hybrid_csv(trace_path, output_dir)
+    assert not (output_dir / "time.csv").exists()
+
+
+def test_enabled_mirror_export_creates_three_wide_payload_tables(tmp_path):
+    events = _enable_mirror(_trace_events())
+    trace_path = tmp_path / "mirror.jsonl"
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "figures" / "IBG_hybrid"
+
+    paths = launcher.export_hybrid_csv(trace_path, output_dir)
+
+    mirror_dir = output_dir / "posterior_mirror"
+    expected_names = [item[0] for item in launcher.HYBRID_POSTERIOR_MIRROR_CSV_FIELDS]
+    assert mirror_dir.is_dir()
+    assert [path.name for path in paths[-3:]] == expected_names
+    assert sorted(path.name for path in mirror_dir.iterdir()) == sorted(expected_names)
+    vector_rows = _rows(mirror_dir / "posterior_vector_payload_bytes.csv")
+    run_hash = next(iter(vector_rows[0]))
+    assert [int(row[run_hash]) for row in vector_rows] == [
+        events[1]["posterior_mirror"]["payload_bytes"]["posterior_vectors"],
+        events[2]["posterior_mirror"]["payload_bytes"]["posterior_vectors"],
+    ]
+    assert [int(row[run_hash]) for row in _rows(
+        mirror_dir / "posterior_update_messages.csv"
+    )] == [2, 2]
+    assert not (output_dir / "results.csv").exists()
+
+
+def test_disabled_or_legacy_trace_creates_no_mirror_directory(tmp_path):
+    for name, events in (
+        ("legacy", _trace_events()),
+        ("disabled", _trace_events()),
+    ):
+        if name == "disabled":
+            provenance = posterior_mirror_provenance(False)
+            for event in events:
+                event["posterior_mirror_configuration"] = provenance
+        trace_path = tmp_path / f"{name}.jsonl"
+        trace_path.write_text(
+            "".join(json.dumps(event) + "\n" for event in events),
+            encoding="utf-8",
+        )
+        output_dir = tmp_path / name
+        launcher.export_hybrid_csv(trace_path, output_dir)
+        assert not (output_dir / "posterior_mirror").exists()
+
+
+def test_mirror_csv_preserves_blank_padding_and_rejects_duplicate_hash(tmp_path):
+    first = _enable_mirror(_trace_events(), run_id="mirror-one")
+    second = _enable_mirror(_trace_events(), run_id="mirror-two")
+    second[0]["experiment_seed"] = 54321
+    second[0]["series_run_index"] = 2
+    second.pop(2)
+    second[-1]["iterations"] = 1
+    first_path = tmp_path / "first.jsonl"
+    second_path = tmp_path / "second.jsonl"
+    first_path.write_text("".join(json.dumps(item) + "\n" for item in first))
+    second_path.write_text("".join(json.dumps(item) + "\n" for item in second))
+    output_dir = tmp_path / "output"
+
+    launcher.export_hybrid_csv(first_path, output_dir)
+    launcher.export_hybrid_csv(second_path, output_dir)
+    rows = _rows(
+        output_dir / "posterior_mirror" / "posterior_update_messages.csv"
+    )
+    first_hash, second_hash = rows[0]
+    assert rows == [
+        {first_hash: "2", second_hash: "2"},
+        {first_hash: "2", second_hash: ""},
+    ]
+    with pytest.raises(ValueError, match="already exists"):
+        launcher.export_hybrid_csv(first_path, output_dir)
+
+
+@pytest.mark.parametrize(
+    "contents",
+    ("abc,abc\n1,2\n", "abc\n1,2\n"),
+)
+def test_mirror_csv_rejects_malformed_existing_file_before_writing(
+    tmp_path, contents
+):
+    events = _enable_mirror(_trace_events())
+    trace_path = tmp_path / "mirror.jsonl"
+    trace_path.write_text("".join(json.dumps(item) + "\n" for item in events))
+    output_dir = tmp_path / "output"
+    mirror_path = output_dir / "posterior_mirror" / "posterior_vector_payload_bytes.csv"
+    mirror_path.parent.mkdir(parents=True)
+    mirror_path.write_text(contents)
+
+    with pytest.raises(HybridCsvError):
         launcher.export_hybrid_csv(trace_path, output_dir)
     assert not (output_dir / "time.csv").exists()

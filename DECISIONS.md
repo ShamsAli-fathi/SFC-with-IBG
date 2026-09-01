@@ -3352,3 +3352,99 @@ Accepted for planning and completed offline in Phase 8.1 on 2026-08-27.
   `assigned_flow_capacity=ceil(N/M)` as an unresolved comparison mismatch.
   A final same-input performance claim requires a separately accepted common
   physical/admission rule; frozen `IBG_Hybrid/` remains unchanged.
+## Planned Hybrid posterior-transmission measurement decisions
+
+Accepted for phased implementation: 2026-08-31.
+
+- Keep the controller-local belief state authoritative. The new receiver is a
+  measurement sink for duplicate posterior updates, not a distributed learner,
+  belief store, synchronization service, or decision input.
+- Make the feature explicit and default-off through one production option.
+  Disabled runs create no receiver, send no posterior copy, and retain the
+  current zero observed belief TX/RX footprint.
+- In enabled runs, use a separate worker-only receiver Pod and ClusterIP
+  Service so the mirrored application body genuinely crosses a Pod boundary.
+  The receiver validates and discards it; it must not return a belief vector or
+  affect the next timeslot.
+- Freeze one deterministic, versioned serialization contract before claiming
+  exact byte values. Report separately: canonical posterior-vector bytes,
+  complete mirrored application-body bytes, message count, and their sums per
+  completed timeslot. Do not combine them with Kubernetes discovery, route
+  commands, telemetry, protocol headers, or selected-route traffic.
+- Label the result as an instrumented posterior-transmission mirror. It is real
+  HTTP application-payload traffic, but it is not evidence that the operational
+  Hybrid algorithm requires distributed belief exchange.
+- Keep the existing observed control-plane observations and CSVs intact. Do
+  not replace their zero belief TX/RX fields with modeled or mirrored values
+  and do not rewrite historical traces.
+- Fail enabled measurement evidence closed on missing, rejected, duplicated,
+  malformed, or byte-inconsistent mirror messages. Never silently estimate a
+  missing transmission or allow receiver output to influence the algorithm.
+- Implement in three gates: source/manifests and focused contract tests; full
+  local verification and documentation; then a separately authorized live
+  enabled/disabled validation. No live mutation is authorized by this plan.
+
+## Hybrid posterior-mirror Phase 2 decisions completed
+
+Accepted and locally verified: 2026-08-31.
+
+- Retain local controller beliefs as authoritative; the receiver validates and
+  discards real HTTP copies and never participates in decisions.
+- Keep mirror accounting separate from the existing control-plane footprint.
+  In particular, observed `belief_tx`/`belief_rx` remain zero rather than being
+  overwritten with mirror measurements.
+- Export mirror CSVs only for the joint condition `--posterior-mirror 1` and
+  `--csv 1`, under `figures/IBG_hybrid/posterior_mirror/`, using the retained
+  six-character run-column layout and atomic file replacement.
+- Report canonical vector bytes and complete JSON application-body bytes as
+  distinct quantities. The latter includes the measurement envelope; neither
+  quantity includes protocol headers or other wire overhead.
+- Use the Hybrid-only `scripts/hybrid_posterior_mirror_summary.py` boundary for
+  per-timeslot values, totals, median, and p95. It fails closed on inconsistent
+  provenance, coverage, digests, byte totals, or receiver-run identity.
+- Make no NIC, line-rate, multi-host, wire-byte, or operational distributed-
+  learning claim. Phase 3 remains a separately authorized live gate.
+- IBG-Exact remained untouched and was not inspected or tested for this work.
+- Run the receiver from the existing Hybrid service image because that image
+  owns the pinned Uvicorn dependency. Do not add an ASGI-server dependency to
+  the finite controller image merely to host the separate measurement sink.
+- Preserve existing non-netem StatefulSet Pod-template annotations during
+  reconciliation. Do not merely ignore them in drift comparison, because
+  removing one during apply could cause an unintended additional rollout.
+
+## Greedy rollout timeout correction
+
+Accepted: 2026-09-01.
+
+- Treat 120 seconds as an inactivity/stall timeout, not the total allowance for
+  updating every replica in a topology. Reset it only when resource generation,
+  updated/Ready coverage, revision convergence, or a newly observed/Ready owned
+  Pod UID proves forward progress.
+- Retain an independent topology-bounded total deadline so repeated Pod churn
+  cannot reset the wait forever.
+- Continue to require exact StatefulSet and Deployment convergence plus exact
+  Running/Ready identity coverage before creating the finite controller Job.
+  Do not weaken readiness, add retries to experiment traffic, or accept partial
+  serving state.
+
+## Greedy pending service-rollout recovery
+
+Accepted: 2026-09-01.
+
+- Persist exact public service image/source provenance on serving Pod templates
+  rather than using a mutable image tag or an unrecorded restart timestamp as
+  proof of rollout completion.
+- Classify an exact retained target as template-update-required, progressing,
+  or converged. Resume a proven progressing rollout and reuse a proven
+  converged rollout; reject partial, mixed, foreign, or mismatched provenance.
+- Apply a required canonical template correction once and never follow that
+  apply with an unconditional `kubectl rollout restart`.
+- Remove historical `greedy.max-assigned-flows` from canonical retained
+  templates as part of that same necessary revision. Do not replace it with a
+  different capacity field or inferred value.
+- Validate exact Ready/revision/identity coverage and running node-local OCI
+  config image IDs before clearing the transition marker or creating the one
+  finite controller Job.
+- Keep the 120-second inactivity timer and independent topology-bounded total
+  deadline. Normal readiness observations are not progress, and repeated UID
+  churn cannot keep a rollout alive forever.

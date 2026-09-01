@@ -44,6 +44,11 @@ NAMESPACE = "milp-testbed"
 FORWARDER_WORKERS_PER_REPLICA = 2
 RUNTIME_PLANNER_PROFILE = "runtime"
 SYNTHETIC_SCALE_PLANNER_PROFILE = "synthetic-scale"
+MILP_PROFILE_FIELD_MANAGER = "milp-kernel-launcher"
+MILP_CONTROLLER_RESOURCES = {
+    "requests": {"cpu": "100m", "memory": "8Gi"},
+    "limits": {"cpu": "2", "memory": "16Gi"},
+}
 
 
 def _announce(message):
@@ -442,7 +447,7 @@ def _existing_replica_target(context, args):
 
 
 def _validate_existing_runtime_profiles(context, args, profiles, existing_replicas):
-    """Reject a scale-up that would silently change a running Pod's profile."""
+    """Reject any requested topology change that alters a retained Pod profile."""
 
     if existing_replicas is None or existing_replicas == 0:
         return
@@ -467,12 +472,13 @@ def _validate_existing_runtime_profiles(context, args, profiles, existing_replic
             "remove or repair milp-testbed before scaling"
         )
     existing_profiles = milp_runtime_profiles_from_document(json.loads(profile_json))
+    retained_replicas = min(existing_replicas, args.replica)
     for stage in range(1, args.stage + 1):
-        for replica_id in range(1, existing_replicas + 1):
+        for replica_id in range(1, retained_replicas + 1):
             key = (stage, replica_id)
             if existing_profiles.get(key) != profiles.get(key):
                 raise RuntimeError(
-                    "scale-up would change the runtime profile of existing "
+                    "topology change would alter the runtime profile of retained "
                     f"stage-{stage} replica-{replica_id}; refresh the topology "
                     "explicitly instead of silently restarting or leaving it stale"
                 )
@@ -492,7 +498,16 @@ def _apply_long_running(context, args, experiment_profile, runtime_profiles):
         },
     }
     _run(
-        ["kubectl", "--context", context, "apply", "--filename", "-"],
+        [
+            "kubectl",
+            "--context",
+            context,
+            "apply",
+            "--server-side",
+            f"--field-manager={MILP_PROFILE_FIELD_MANAGER}",
+            "--filename",
+            "-",
+        ],
         input_text=json.dumps(experiment_document),
     )
     existing_replicas = _existing_replica_target(context, args)
@@ -625,10 +640,7 @@ def _controller_job(args, name):
                                     "readOnly": True,
                                 },
                             ],
-                            "resources": {
-                                "requests": {"cpu": "100m", "memory": "256Mi"},
-                                "limits": {"cpu": "2", "memory": "1Gi"},
-                            },
+                            "resources": MILP_CONTROLLER_RESOURCES,
                         }
                     ],
                     "volumes": [

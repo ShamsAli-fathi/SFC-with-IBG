@@ -42,12 +42,16 @@ from Greedy.kernel_lifecycle import (
     GREEDY_NORMALIZED_CONTROLLER_IMAGE,
     GREEDY_NORMALIZED_SERVICE_IMAGE,
     GREEDY_PART_OF,
+    GREEDY_LEGACY_CAPACITY_LABEL,
     GREEDY_WORKER_NODE,
     SERVICE_SOURCE_FILES,
     GreedyLaunchConfiguration,
     GreedyLauncherState,
     GreedyLifecycleError,
+    _classify_service_rollout,
     _launcher_state_resource,
+    _service_rollout_resources,
+    _wait_ready,
     cleanup,
     image_source_fingerprints,
     launcher_state_from_mapping,
@@ -189,20 +193,29 @@ class FakeGreedyCluster:
         self.services = set()
         self.configmaps = {}
         self.flow_generator = False
+        self.flow_generator_resource = None
         self.job_exists = False
         self.jobs_created = 0
         self.extra_owned_resources = []
         self.uid_generation = 0
+        self.template_updates = []
+        self._initializing = True
         self.local_image_ids = {
             GREEDY_SERVICE_IMAGE: SERVICE_ID,
             GREEDY_CONTROLLER_IMAGE: CONTROLLER_ID,
         }
         self.node_image_ids = dict(self.local_image_ids)
+        self.running_service_image_id = None
         if existing:
             deployment = deployment_for(configuration, profile_seed)
-            for resource in render_long_running_resources(deployment):
-                self._store_resource(deepcopy(resource))
             fingerprints = image_source_fingerprints()
+            resources = _service_rollout_resources(
+                render_long_running_resources(deployment),
+                service_source_fingerprint=fingerprints["service"],
+                service_image_id=SERVICE_ID,
+            )
+            for resource in resources:
+                self._store_resource(deepcopy(resource))
             state = GreedyLauncherState(
                 stable_configuration=configuration,
                 target_configuration=configuration,
@@ -215,6 +228,7 @@ class FakeGreedyCluster:
                 transition_active=False,
             )
             self._store_resource(_launcher_state_resource(state))
+        self._initializing = False
 
     def wheelhouses(self, roles):
         self.events.append(("wheelhouses", tuple(roles)))
@@ -228,11 +242,28 @@ class FakeGreedyCluster:
         elif kind == "ConfigMap":
             self.configmaps[name] = resource
         elif kind == "StatefulSet":
+            previous = self.statefulsets.get(name)
+            if (
+                not self._initializing
+                and previous is not None
+                and previous["spec"]["template"] != resource["spec"]["template"]
+            ):
+                self.template_updates.append(name)
+                self.uid_generation += 1
             self.statefulsets[name] = resource
         elif kind == "Service":
             self.services.add(name)
         elif kind == "Deployment" and name == GREEDY_FLOW_GENERATOR:
+            if (
+                not self._initializing
+                and self.flow_generator_resource is not None
+                and self.flow_generator_resource["spec"]["template"]
+                != resource["spec"]["template"]
+            ):
+                self.template_updates.append(name)
+                self.uid_generation += 1
             self.flow_generator = True
+            self.flow_generator_resource = resource
         elif kind == "Job" and name == GREEDY_CONTROLLER_JOB:
             self.job_exists = True
             self.jobs_created += 1
@@ -329,6 +360,38 @@ class FakeGreedyCluster:
                 )
         return {"images": images}
 
+    def _running_service_containers(self):
+        identity = (
+            self.running_service_image_id
+            or self.node_image_ids[GREEDY_SERVICE_IMAGE]
+        )
+        containers = []
+        for pod in self._pods()["items"]:
+            pod_name = pod["metadata"]["name"]
+            names = (
+                ("flow-generator",)
+                if pod_name.startswith("greedy-flow-generator-")
+                else ("private-processor", "public-forwarder")
+            )
+            for name in names:
+                containers.append(
+                    {
+                        "metadata": {"name": name},
+                        "image": {
+                            "image": "sha256:" + identity,
+                            "userSpecifiedImage": GREEDY_SERVICE_IMAGE,
+                        },
+                        "imageId": "sha256:" + identity,
+                        "state": "CONTAINER_RUNNING",
+                        "labels": {
+                            "io.kubernetes.container.name": name,
+                            "io.kubernetes.pod.name": pod_name,
+                            "io.kubernetes.pod.namespace": GREEDY_NAMESPACE,
+                        },
+                    }
+                )
+        return {"containers": containers}
+
     def _owned_resources(self):
         items = list(self.statefulsets.values()) + list(self.configmaps.values())
         for service in sorted(self.services):
@@ -351,20 +414,7 @@ class FakeGreedyCluster:
                 }
             )
         if self.flow_generator:
-            items.append(
-                {
-                    "kind": "Deployment",
-                    "metadata": {
-                        "name": GREEDY_FLOW_GENERATOR,
-                        "namespace": GREEDY_NAMESPACE,
-                        "labels": {
-                            "app.kubernetes.io/name": GREEDY_FLOW_GENERATOR,
-                            "app.kubernetes.io/part-of": GREEDY_PART_OF,
-                            "app.kubernetes.io/component": "flow-generator",
-                        },
-                    },
-                }
-            )
+            items.append(deepcopy(self.flow_generator_resource))
         for kind, name in (
             ("ServiceAccount", "greedy-controller"),
             ("Role", "greedy-replica-discovery"),
@@ -456,6 +506,14 @@ class FakeGreedyCluster:
             "exec",
             GREEDY_WORKER_NODE,
         ):
+            if command[:5] == (
+                "docker",
+                "exec",
+                GREEDY_WORKER_NODE,
+                "crictl",
+                "ps",
+            ):
+                return json.dumps(self._running_service_containers())
             return json.dumps(self._node_images())
         if command[:4] == ("kubectl", "config", "view", "--context"):
             return json.dumps(self._context())
@@ -492,6 +550,44 @@ class FakeGreedyCluster:
             "json",
         ):
             return json.dumps(self._pods())
+        if command == (
+            "kubectl",
+            "--context",
+            GREEDY_CONTEXT,
+            "get",
+            "statefulsets,deployments",
+            "-n",
+            GREEDY_NAMESPACE,
+            "-o",
+            "json",
+        ):
+            items = []
+            for name, stored in sorted(self.statefulsets.items()):
+                item = deepcopy(stored)
+                replicas = item["spec"]["replicas"]
+                revision = f"{name}-revision"
+                item["metadata"]["generation"] = 1
+                item["status"] = {
+                    "observedGeneration": 1,
+                    "currentReplicas": replicas,
+                    "updatedReplicas": replicas,
+                    "readyReplicas": replicas,
+                    "availableReplicas": replicas,
+                    "currentRevision": revision,
+                    "updateRevision": revision,
+                }
+                items.append(item)
+            if self.flow_generator:
+                item = deepcopy(self.flow_generator_resource)
+                item["metadata"]["generation"] = 1
+                item["status"] = {
+                    "observedGeneration": 1,
+                    "updatedReplicas": 1,
+                    "readyReplicas": 1,
+                    "availableReplicas": 1,
+                }
+                items.append(item)
+            return json.dumps({"items": items})
         if command == (
             "kubectl",
             "--context",
@@ -579,11 +675,33 @@ class FakeGreedyCluster:
         if "rollout" in command and "restart" in command:
             self.uid_generation += 1
             return ""
-        if "rollout" in command and "status" in command:
-            return ""
         if "wait" in command:
             return ""
         return ""
+
+
+def mark_pending_service_rollout(
+    cluster: FakeGreedyCluster,
+    *,
+    stable_configuration: GreedyConfiguration | None = None,
+) -> None:
+    target = cluster.configuration
+    fingerprints = image_source_fingerprints()
+    transition = GreedyLauncherState(
+        stable_configuration=stable_configuration or target,
+        target_configuration=target,
+        profile_seed=cluster.profile_seed,
+        profile_fingerprint=materialize_runtime_profiles(
+            target, profile_seed=cluster.profile_seed
+        ).fingerprint,
+        service_source_fingerprint=fingerprints["service"],
+        controller_source_fingerprint=fingerprints["controller"],
+        service_image_id=SERVICE_ID,
+        controller_image_id=CONTROLLER_ID,
+        transition_active=True,
+        service_restart_required=True,
+    )
+    cluster._store_resource(_launcher_state_resource(transition))
 
 
 def command_index(commands, predicate):
@@ -826,7 +944,11 @@ def test_fresh_bootstrap_orders_offline_build_nodes_images_ready_and_one_job():
     assert resource_reads and resource_reads[-1] < first_apply
     assert load_index < first_apply
     job_apply = max(index for index, command in enumerate(commands) if "apply" in command)
-    last_ready = max(index for index, command in enumerate(commands) if "rollout" in command and "status" in command)
+    last_ready = max(
+        index
+        for index, command in enumerate(commands)
+        if "statefulsets,deployments" in command
+    )
     assert last_ready < job_apply
 
 
@@ -931,9 +1053,385 @@ def test_replica_scale_up_is_batched_all_stage_ready_before_job():
     last_ready = max(
         index
         for index, command in enumerate(cluster.commands)
-        if "rollout" in command and "status" in command
+        if "statefulsets,deployments" in command
     )
     assert last_ready < job_apply
+
+
+def test_rollout_wait_resets_stall_timeout_only_on_verified_progress():
+    cluster = FakeGreedyCluster(configuration=GreedyConfiguration(4, 2, 2))
+    clock_value = [0.0]
+    polls = [0]
+
+    def clock():
+        return clock_value[0]
+
+    def sleep(seconds):
+        clock_value[0] += seconds
+
+    def rollout_document(updated, ready, converged):
+        items = []
+        for name, stored in sorted(cluster.statefulsets.items()):
+            item = deepcopy(stored)
+            item["metadata"]["generation"] = 2
+            item["status"] = {
+                "observedGeneration": 2,
+                "currentReplicas": 2,
+                "updatedReplicas": updated,
+                "readyReplicas": ready,
+                "availableReplicas": ready,
+                "currentRevision": "new" if converged else "old",
+                "updateRevision": "new",
+            }
+            items.append(item)
+        items.append(
+            {
+                "kind": "Deployment",
+                "metadata": {
+                    "name": GREEDY_FLOW_GENERATOR,
+                    "namespace": GREEDY_NAMESPACE,
+                    "generation": 1,
+                },
+                "spec": {"replicas": 1},
+                "status": {
+                    "observedGeneration": 1,
+                    "updatedReplicas": 1,
+                    "readyReplicas": 1,
+                    "availableReplicas": 1,
+                },
+            }
+        )
+        return json.dumps({"items": items})
+
+    rollout_command = (
+        "kubectl", "--context", GREEDY_CONTEXT, "get",
+        "statefulsets,deployments", "-n", GREEDY_NAMESPACE, "-o", "json",
+    )
+
+    def progressing_execute(command, capture_output):
+        if command == rollout_command:
+            state = ((0, 0, False), (1, 1, False), (2, 2, True))[
+                min(polls[0], 2)
+            ]
+            polls[0] += 1
+            return rollout_document(*state)
+        return cluster.execute(command, capture_output)
+
+    _wait_ready(
+        progressing_execute,
+        num_flows=4,
+        num_stages=2,
+        num_replicas=2,
+        clock=clock,
+        sleep=sleep,
+        stall_timeout_seconds=120,
+        poll_seconds=70,
+    )
+    assert clock_value[0] == 140
+
+    clock_value[0] = 0
+
+    def stalled_execute(command, capture_output):
+        if command == rollout_command:
+            return rollout_document(0, 0, False)
+        return cluster.execute(command, capture_output)
+
+    with pytest.raises(GreedyLifecycleError, match="no verified progress"):
+        _wait_ready(
+            stalled_execute,
+            num_flows=4,
+            num_stages=2,
+            num_replicas=2,
+            clock=clock,
+            sleep=sleep,
+            stall_timeout_seconds=120,
+            poll_seconds=61,
+        )
+    assert clock_value[0] == 122
+
+
+def test_rollout_wait_readiness_noise_cannot_reset_stall_forever():
+    cluster = FakeGreedyCluster(configuration=GreedyConfiguration(4, 2, 2))
+    clock_value = [0.0]
+    polls = [0]
+    rollout_command = (
+        "kubectl", "--context", GREEDY_CONTEXT, "get",
+        "statefulsets,deployments", "-n", GREEDY_NAMESPACE, "-o", "json",
+    )
+
+    def execute(command, capture_output):
+        if command != rollout_command:
+            return cluster.execute(command, capture_output)
+        document = json.loads(cluster.execute(command, capture_output))
+        ready = polls[0] % 2
+        polls[0] += 1
+        for item in document["items"]:
+            item["status"]["updatedReplicas"] = 0
+            item["status"]["readyReplicas"] = ready
+            item["status"]["availableReplicas"] = ready
+            if item["kind"] == "StatefulSet":
+                item["status"]["currentRevision"] = "old"
+                item["status"]["updateRevision"] = "new"
+        return json.dumps(document)
+
+    with pytest.raises(GreedyLifecycleError, match="no verified progress"):
+        _wait_ready(
+            execute,
+            num_flows=4,
+            num_stages=2,
+            num_replicas=2,
+            clock=lambda: clock_value[0],
+            sleep=lambda seconds: clock_value.__setitem__(
+                0, clock_value[0] + seconds
+            ),
+            stall_timeout_seconds=120,
+            poll_seconds=61,
+        )
+    assert clock_value[0] == 183
+
+
+def test_rollout_wait_total_deadline_stops_endless_uid_churn():
+    cluster = FakeGreedyCluster(configuration=GreedyConfiguration(4, 2, 2))
+    clock_value = [0.0]
+    rollout_command = (
+        "kubectl", "--context", GREEDY_CONTEXT, "get",
+        "statefulsets,deployments", "-n", GREEDY_NAMESPACE, "-o", "json",
+    )
+    pod_command = (
+        "kubectl", "--context", GREEDY_CONTEXT, "get",
+        "pods", "-n", GREEDY_NAMESPACE, "-o", "json",
+    )
+
+    def execute(command, capture_output):
+        if command == rollout_command:
+            document = json.loads(cluster.execute(command, capture_output))
+            for item in document["items"]:
+                item["status"]["updatedReplicas"] = 0
+                item["status"]["readyReplicas"] = 0
+                item["status"]["availableReplicas"] = 0
+                if item["kind"] == "StatefulSet":
+                    item["status"]["currentRevision"] = "old"
+                    item["status"]["updateRevision"] = "new"
+            return json.dumps(document)
+        if command == pod_command:
+            cluster.uid_generation += 1
+        return cluster.execute(command, capture_output)
+
+    with pytest.raises(GreedyLifecycleError, match="total deadline"):
+        _wait_ready(
+            execute,
+            num_flows=4,
+            num_stages=2,
+            num_replicas=2,
+            clock=lambda: clock_value[0],
+            sleep=lambda seconds: clock_value.__setitem__(
+                0, clock_value[0] + seconds
+            ),
+            stall_timeout_seconds=120,
+            poll_seconds=1,
+            total_timeout_seconds=5,
+        )
+    assert clock_value[0] == 5
+
+
+def test_completed_pending_service_rollout_resumes_without_another_rollout():
+    cluster = FakeGreedyCluster()
+    mark_pending_service_rollout(cluster)
+    result = run_greedy_lifecycle(
+        make_launch(skip_build=True),
+        execute=cluster.execute,
+        validate_wheelhouses=lambda roles: pytest.fail("wheelhouse validation ran"),
+    )
+    assert result.serving_changed is False
+    assert cluster.template_updates == []
+    assert not any("rollout" in command for command in cluster.commands)
+    assert cluster.jobs_created == 1
+
+
+def test_incomplete_pending_service_rollout_is_waited_not_restarted():
+    cluster = FakeGreedyCluster()
+    mark_pending_service_rollout(cluster)
+    rollout_command = (
+        "kubectl", "--context", GREEDY_CONTEXT, "get",
+        "statefulsets,deployments", "-n", GREEDY_NAMESPACE, "-o", "json",
+    )
+    reads = [0]
+
+    def execute(command, capture_output):
+        output = cluster.execute(command, capture_output)
+        if command != rollout_command:
+            return output
+        reads[0] += 1
+        if reads[0] > 2:
+            return output
+        document = json.loads(output)
+        for item in document["items"]:
+            desired = item["spec"]["replicas"]
+            item["status"]["updatedReplicas"] = max(0, desired - 1)
+            item["status"]["readyReplicas"] = max(0, desired - 1)
+            item["status"]["availableReplicas"] = max(0, desired - 1)
+            if item["kind"] == "StatefulSet":
+                item["status"]["currentRevision"] = "old"
+                item["status"]["updateRevision"] = "new"
+        return json.dumps(document)
+
+    result = run_greedy_lifecycle(
+        make_launch(),
+        execute=execute,
+        validate_wheelhouses=cluster.wheelhouses,
+    )
+    assert result.serving_changed is True
+    assert reads[0] >= 3
+    assert cluster.template_updates == []
+    assert not any("rollout" in command for command in cluster.commands)
+    assert cluster.jobs_created == 1
+
+
+def test_pending_service_rollout_refuses_ambiguous_or_runtime_image_drift():
+    ambiguous = FakeGreedyCluster()
+    mark_pending_service_rollout(ambiguous)
+    ambiguous.statefulsets["greedy-stage-1"]["spec"]["template"][
+        "metadata"
+    ].pop("annotations")
+    with pytest.raises(GreedyLifecycleError, match="partial or ambiguous"):
+        run_greedy_lifecycle(
+            make_launch(),
+            execute=ambiguous.execute,
+            validate_wheelhouses=ambiguous.wheelhouses,
+        )
+    assert ambiguous.jobs_created == 0
+    assert not any("apply" in command for command in ambiguous.commands)
+
+    runtime_mismatch = FakeGreedyCluster()
+    mark_pending_service_rollout(runtime_mismatch)
+    runtime_mismatch.running_service_image_id = "e" * 64
+    with pytest.raises(GreedyLifecycleError, match="running service image"):
+        run_greedy_lifecycle(
+            make_launch(),
+            execute=runtime_mismatch.execute,
+            validate_wheelhouses=runtime_mismatch.wheelhouses,
+        )
+    assert runtime_mismatch.jobs_created == 0
+    assert not any("apply" in command for command in runtime_mismatch.commands)
+
+
+def test_legacy_capacity_template_is_reconciled_once_before_controller():
+    cluster = FakeGreedyCluster()
+    mark_pending_service_rollout(cluster)
+    for statefulset in cluster.statefulsets.values():
+        statefulset["metadata"]["labels"][GREEDY_LEGACY_CAPACITY_LABEL] = "2"
+        template_metadata = statefulset["spec"]["template"]["metadata"]
+        template_metadata["labels"][GREEDY_LEGACY_CAPACITY_LABEL] = "2"
+        template_metadata.pop("annotations")
+    cluster.flow_generator_resource["spec"]["template"]["metadata"].pop(
+        "annotations"
+    )
+
+    result = run_greedy_lifecycle(
+        make_launch(),
+        execute=cluster.execute,
+        validate_wheelhouses=cluster.wheelhouses,
+    )
+    assert result.serving_changed is True
+    assert sorted(cluster.template_updates) == [
+        GREEDY_FLOW_GENERATOR,
+        "greedy-stage-1",
+        "greedy-stage-2",
+        "greedy-stage-3",
+    ]
+    assert not any("rollout" in command for command in cluster.commands)
+    assert all(
+        GREEDY_LEGACY_CAPACITY_LABEL
+        not in statefulset["spec"]["template"]["metadata"]["labels"]
+        for statefulset in cluster.statefulsets.values()
+    )
+    assert all(
+        GREEDY_LEGACY_CAPACITY_LABEL not in pod["metadata"]["labels"]
+        for pod in cluster._pods()["items"]
+    )
+    assert cluster.jobs_created == 1
+    state = json.loads(
+        cluster.configmaps[GREEDY_LAUNCHER_STATE_CONFIG_MAP]["data"][
+            "launcher-state.json"
+        ]
+    )
+    assert state["transition_active"] is False
+    assert state["service_restart_required"] is False
+
+
+def test_controller_is_never_created_before_template_convergence(monkeypatch):
+    cluster = FakeGreedyCluster()
+    mark_pending_service_rollout(cluster)
+    for statefulset in cluster.statefulsets.values():
+        statefulset["spec"]["template"]["metadata"].pop("annotations")
+    cluster.flow_generator_resource["spec"]["template"]["metadata"].pop(
+        "annotations"
+    )
+
+    def refuse_readiness(*args, **kwargs):
+        assert cluster.job_exists is False
+        raise GreedyLifecycleError("synthetic convergence refusal")
+
+    monkeypatch.setattr("Greedy.kernel_lifecycle._wait_ready", refuse_readiness)
+    with pytest.raises(GreedyLifecycleError, match="synthetic convergence"):
+        run_greedy_lifecycle(
+            make_launch(),
+            execute=cluster.execute,
+            validate_wheelhouses=cluster.wheelhouses,
+        )
+    assert cluster.jobs_created == 0
+
+
+def test_existing_controller_job_is_deleted_before_exactly_one_replacement():
+    cluster = FakeGreedyCluster()
+    cluster.job_exists = True
+    run_greedy_lifecycle(
+        make_launch(skip_build=True),
+        execute=cluster.execute,
+        validate_wheelhouses=lambda roles: None,
+    )
+    delete_index = command_index(
+        cluster.commands,
+        lambda command: "delete" in command and "job" in command,
+    )
+    job_apply_index = max(
+        index
+        for index, command in enumerate(cluster.commands)
+        if "apply" in command
+    )
+    assert delete_index < job_apply_index
+    assert cluster.jobs_created == 1
+    assert cluster.job_exists is True
+
+
+def test_rollout_resource_decoration_is_immutable_and_deterministic():
+    deployment = deployment_for(GreedyConfiguration(4, 3, 2), 17)
+    resources = render_long_running_resources(deployment)
+    before = deepcopy(resources)
+    fingerprint = image_source_fingerprints()["service"]
+    first = _service_rollout_resources(
+        resources,
+        service_source_fingerprint=fingerprint,
+        service_image_id=SERVICE_ID,
+    )
+    second = _service_rollout_resources(
+        resources,
+        service_source_fingerprint=fingerprint,
+        service_image_id=SERVICE_ID,
+    )
+    assert resources == before
+    assert first == second
+    cluster = FakeGreedyCluster()
+    rollout_command = (
+        "kubectl", "--context", GREEDY_CONTEXT, "get",
+        "statefulsets,deployments", "-n", GREEDY_NAMESPACE, "-o", "json",
+    )
+    assert _classify_service_rollout(
+        json.loads(cluster.execute(rollout_command, True)),
+        replica_counts=(2, 2, 2),
+        service_source_fingerprint=fingerprint,
+        service_image_id=SERVICE_ID,
+    ) == "converged"
 
 
 def test_scale_down_and_stage_changes_remove_only_high_suffix_and_preserve_prefix():

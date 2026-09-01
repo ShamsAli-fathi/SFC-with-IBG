@@ -44,7 +44,12 @@ def controller_input_document_from_mapping(
         "source_identity",
         "contract_version",
     }
-    optional = {"first_slot_id", "controller_contract_version"}
+    optional = {
+        "first_slot_id",
+        "controller_contract_version",
+        "parity_replay_enabled",
+        "control_plane_footprint_enabled",
+    }
     missing = required - set(value)
     unexpected = set(value) - required - optional
     if missing:
@@ -73,6 +78,10 @@ def controller_input_document_from_mapping(
         runtime_profile_fingerprint=value["runtime_profile_fingerprint"],
         max_iterations=value["max_iterations"],
         first_slot_id=value.get("first_slot_id", 1),
+        parity_replay_enabled=value.get("parity_replay_enabled", False),
+        control_plane_footprint_enabled=value.get(
+            "control_plane_footprint_enabled", False
+        ),
         contract_version=value.get(
             "controller_contract_version",
             GreedyKernelControllerConfiguration.__dataclass_fields__["contract_version"].default,
@@ -106,6 +115,10 @@ def controller_input_document_to_mapping(
         "runtime_profile_fingerprint": controller.runtime_profile_fingerprint,
         "max_iterations": controller.max_iterations,
         "first_slot_id": controller.first_slot_id,
+        "parity_replay_enabled": controller.parity_replay_enabled,
+        "control_plane_footprint_enabled": (
+            controller.control_plane_footprint_enabled
+        ),
         "controller_contract_version": controller.contract_version,
     }
 

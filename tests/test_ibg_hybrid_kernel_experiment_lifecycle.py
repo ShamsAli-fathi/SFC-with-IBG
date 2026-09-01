@@ -9,6 +9,12 @@ from IBG_Hybrid import kernel_phase4_validation as lifecycle
 from IBG_Hybrid.console_output import format_hybrid_replica_beliefs
 from IBG_Hybrid.contracts import ReplicaChoice
 from IBG_Hybrid.control_plane_footprint import HYBRID_CONTROL_PLANE_DATA_SCHEMA
+from IBG_Hybrid.posterior_mirror import (
+    HYBRID_POSTERIOR_MIRROR_SCHEMA,
+    HYBRID_POSTERIOR_SCOPE,
+    HYBRID_POSTERIOR_SERIALIZATION,
+    build_canonical_posterior_update,
+)
 from scripts import run_hybrid_kernel_phase4 as host_runner
 
 
@@ -494,6 +500,51 @@ def _trace_slot(slot_id, *, equilibrium=False, root_seed=2050, footprint=False):
     return item
 
 
+def _posterior_mirror_snapshot(
+    slot_id,
+    beliefs,
+    *,
+    run_id="controller-pod-uid",
+):
+    updates = []
+    vector_total = 0
+    body_total = 0
+    for identity in sorted(beliefs):
+        stage, replica = (int(value) for value in identity.split(":"))
+        canonical = build_canonical_posterior_update(
+            run_id=run_id,
+            slot_id=slot_id,
+            choice=ReplicaChoice(stage, replica),
+            posterior=beliefs[identity],
+        )
+        receipt = canonical.receipt
+        updates.append(
+            {
+                "stage": stage,
+                "replica": replica,
+                "vector_payload_bytes": receipt.vector_payload_bytes,
+                "vector_sha256": receipt.vector_sha256,
+                "application_body_bytes": receipt.application_body_bytes,
+                "application_body_sha256": receipt.application_body_sha256,
+            }
+        )
+        vector_total += receipt.vector_payload_bytes
+        body_total += receipt.application_body_bytes
+    return {
+        "schema": HYBRID_POSTERIOR_MIRROR_SCHEMA,
+        "run_id": run_id,
+        "slot_id": slot_id,
+        "serialization": HYBRID_POSTERIOR_SERIALIZATION,
+        "scope": HYBRID_POSTERIOR_SCOPE,
+        "payload_bytes": {
+            "posterior_vectors": vector_total,
+            "application_bodies": body_total,
+        },
+        "messages": {"posterior_updates": len(updates)},
+        "updates": updates,
+    }
+
+
 def test_production_trace_persists_lifecycle_and_each_flow_pair(tmp_path):
     output = "\n".join(
         json.dumps(item) for item in (_trace_slot(4), _trace_slot(5, equilibrium=True))
@@ -539,6 +590,10 @@ def test_production_trace_persists_lifecycle_and_each_flow_pair(tmp_path):
     } == {1: 4.25, 2: 7.5}
     assert events[-1]["reached_equilibrium"] is True
     assert events[-1]["iterations"] == 2
+    assert all(
+        event["posterior_mirror_configuration"]["enabled"] is False
+        for event in events
+    )
 
 
 def test_production_trace_records_enabled_parity_replay(tmp_path):
@@ -773,6 +828,114 @@ def test_trace_footprint_activation_is_strict_and_persists_only_when_enabled(tmp
     assert "control_plane" not in events[-1]
 
 
+def test_trace_posterior_mirror_activation_and_exact_payload_are_strict(tmp_path):
+    enabled_slot = _trace_slot(1, equilibrium=True)
+    for observation in enabled_slot["observations"]:
+        observation["replica"] = 1
+    beliefs = {
+        "1:1": [0.4, 0.3, 0.2, 0.1],
+        "3:1": [0.1, 0.2, 0.3, 0.4],
+    }
+    enabled_slot["beliefs_after"] = beliefs
+    enabled_slot["posterior_mirror"] = _posterior_mirror_snapshot(1, beliefs)
+    disabled_slot = _trace_slot(1, equilibrium=True)
+
+    with pytest.raises(RuntimeError, match="contains disabled posterior"):
+        host_runner._persist_hybrid_experiment_trace(
+            json.dumps(enabled_slot),
+            trace_dir=tmp_path,
+            requested_flows=2,
+            requested_stages=3,
+            requested_replicas=1,
+            max_iterations=1,
+        )
+    with pytest.raises(RuntimeError, match="lacks enabled posterior"):
+        host_runner._persist_hybrid_experiment_trace(
+            json.dumps(disabled_slot),
+            trace_dir=tmp_path,
+            requested_flows=2,
+            requested_stages=3,
+            requested_replicas=1,
+            max_iterations=1,
+            posterior_mirror_enabled=True,
+        )
+    assert not list(tmp_path.iterdir())
+
+    trace_path = host_runner._persist_hybrid_experiment_trace(
+        json.dumps(enabled_slot),
+        trace_dir=tmp_path,
+        requested_flows=2,
+        requested_stages=3,
+        requested_replicas=1,
+        max_iterations=1,
+        posterior_mirror_enabled=True,
+    )
+    events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert all(
+        event["posterior_mirror_configuration"]["enabled"] is True
+        for event in events
+    )
+    assert events[1]["posterior_mirror"] == enabled_slot["posterior_mirror"]
+    assert "posterior_mirror" not in events[0]
+    assert "posterior_mirror" not in events[-1]
+
+
+def test_trace_rejects_posterior_mirror_total_drift(tmp_path):
+    slot = _trace_slot(1, equilibrium=True)
+    for observation in slot["observations"]:
+        observation["replica"] = 1
+    beliefs = {
+        "1:1": [0.4, 0.3, 0.2, 0.1],
+        "3:1": [0.1, 0.2, 0.3, 0.4],
+    }
+    slot["beliefs_after"] = beliefs
+    slot["posterior_mirror"] = _posterior_mirror_snapshot(1, beliefs)
+    slot["posterior_mirror"]["payload_bytes"]["posterior_vectors"] += 1
+
+    with pytest.raises(RuntimeError, match="payload totals"):
+        host_runner._persist_hybrid_experiment_trace(
+            json.dumps(slot),
+            trace_dir=tmp_path,
+            requested_flows=2,
+            requested_stages=3,
+            requested_replicas=1,
+            max_iterations=1,
+            posterior_mirror_enabled=True,
+        )
+    assert not list(tmp_path.iterdir())
+
+
+def test_trace_rejects_posterior_mirror_run_identity_drift(tmp_path):
+    beliefs = {
+        "1:1": [0.4, 0.3, 0.2, 0.1],
+        "3:1": [0.1, 0.2, 0.3, 0.4],
+    }
+    slots = []
+    for slot_id, run_id in ((1, "controller-a"), (2, "controller-b")):
+        slot = _trace_slot(slot_id, equilibrium=slot_id == 2)
+        for observation in slot["observations"]:
+            observation["replica"] = 1
+        slot["beliefs_after"] = beliefs
+        slot["posterior_mirror"] = _posterior_mirror_snapshot(
+            slot_id,
+            beliefs,
+            run_id=run_id,
+        )
+        slots.append(slot)
+
+    with pytest.raises(RuntimeError, match="run identity changed"):
+        host_runner._persist_hybrid_experiment_trace(
+            "\n".join(json.dumps(slot) for slot in slots),
+            trace_dir=tmp_path,
+            requested_flows=2,
+            requested_stages=3,
+            requested_replicas=1,
+            max_iterations=2,
+            posterior_mirror_enabled=True,
+        )
+    assert not list(tmp_path.iterdir())
+
+
 def test_production_main_saves_trace_and_prints_path(monkeypatch, tmp_path, capsys):
     slot = _trace_slot(1, equilibrium=True, footprint=True)
     slot["pure_kernel_replay_performed"] = True
@@ -984,11 +1147,13 @@ def test_production_main_routes_runs_to_automatic_series(monkeypatch, tmp_path):
             "--max-iterations", "5",
             "--trace-dir", str(tmp_path),
             "--csv", "1",
+            "--posterior-mirror", "1",
         ]
     ) == 0
     assert captured["runs"] == 4
     assert captured["trace_dir"] == tmp_path
     assert captured["csv_enabled"] is True
+    assert captured["posterior_mirror_enabled"] is True
     assert "profile_seed" not in captured
 
 
@@ -1009,10 +1174,12 @@ def test_run_experiment_forwards_optional_instrumentation_to_job_lifecycle(
         max_iterations=2,
         control_plane_footprint_enabled=True,
         parity_replay_enabled=True,
+        posterior_mirror_enabled=True,
     ) == "evidence"
     assert captured["production_experiment"] is True
     assert captured["control_plane_footprint_enabled"] is True
     assert captured["parity_replay_enabled"] is True
+    assert captured["posterior_mirror_enabled"] is True
 
 def test_production_job_receives_iteration_limit_without_gate_deadline(tmp_path):
     applied = {}

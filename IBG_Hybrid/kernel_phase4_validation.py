@@ -38,6 +38,14 @@ from .kernel_kubernetes_discovery import (
 )
 from .phase0_contract import DEFAULT_HYBRID_POLICY_PARAMETERS
 from .policy import IBGHybridPolicy
+from .posterior_mirror import (
+    HYBRID_CONTROLLER_POD_UID_ENV,
+    HYBRID_POSTERIOR_MIRROR_DEFAULT_URL,
+    HYBRID_POSTERIOR_MIRROR_ENV,
+    HYBRID_POSTERIOR_MIRROR_URL_ENV,
+    HybridPosteriorMirrorHttpClient,
+    validate_hybrid_posterior_mirror_snapshot,
+)
 from .runner import (
     DEFAULT_HYBRID_MC_WORKERS,
     HYBRID_SLOT_POLICY_LOOKAHEAD,
@@ -311,6 +319,17 @@ def _slot_evidence(
     if control_plane is not None:
         validate_hybrid_control_plane_data_snapshot(control_plane)
         item["control_plane"] = control_plane
+    posterior_mirror = getattr(outcome, "posterior_mirror", None)
+    if posterior_mirror is not None:
+        validate_hybrid_posterior_mirror_snapshot(
+            posterior_mirror,
+            expected_slot_id=slot.slot_id,
+            expected_beliefs=dict(slot.beliefs_after),
+            expected_updated_choices=tuple(
+                sorted({observation.choice for observation in slot.observations})
+            ),
+        )
+        item["posterior_mirror"] = posterior_mirror
     return item
 
 
@@ -503,6 +522,9 @@ def _controller_from_environment(
     footprint_setting = values.get(HYBRID_CONTROL_PLANE_DATA_ENV, "0")
     if footprint_setting not in {"0", "1"}:
         raise ValueError(f"{HYBRID_CONTROL_PLANE_DATA_ENV} must be 0 or 1")
+    posterior_mirror_setting = values.get(HYBRID_POSTERIOR_MIRROR_ENV, "0")
+    if posterior_mirror_setting not in {"0", "1"}:
+        raise ValueError(f"{HYBRID_POSTERIOR_MIRROR_ENV} must be 0 or 1")
     control_plane_meter = (
         HybridControlPlaneDataMeter() if footprint_setting == "1" else None
     )
@@ -533,6 +555,22 @@ def _controller_from_environment(
             control_plane_meter=control_plane_meter,
         )
         pending_resources.callback(flow_generator.close)
+        posterior_mirror = None
+        if posterior_mirror_setting == "1":
+            run_id = values.get(HYBRID_CONTROLLER_POD_UID_ENV)
+            if not isinstance(run_id, str) or not run_id:
+                raise ValueError(
+                    f"{HYBRID_CONTROLLER_POD_UID_ENV} is required when "
+                    f"{HYBRID_POSTERIOR_MIRROR_ENV}=1"
+                )
+            posterior_mirror = HybridPosteriorMirrorHttpClient(
+                values.get(
+                    HYBRID_POSTERIOR_MIRROR_URL_ENV,
+                    HYBRID_POSTERIOR_MIRROR_DEFAULT_URL,
+                ),
+                run_id=run_id,
+            )
+            pending_resources.callback(posterior_mirror.close)
         uniform = (0.25, 0.25, 0.25, 0.25)
         controller = HybridKernelControllerAdapter(
             controller_inputs=inputs,
@@ -543,6 +581,7 @@ def _controller_from_environment(
             policy_mode=policy_mode,
             mc_workers=mc_workers,
             control_plane_meter=control_plane_meter,
+            posterior_mirror=posterior_mirror,
         )
         # Ownership transfers to the finite controller only after its complete
         # construction. Earlier failures close every already-created client.

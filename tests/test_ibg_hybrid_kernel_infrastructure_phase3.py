@@ -27,6 +27,7 @@ SERVICE_COPY_MAP = {
     "deploy/hybrid-kubernetes/service-package-init.py": "IBG_Hybrid/__init__.py",
     "deploy/hybrid-kubernetes/image-stage-budget.py": "IBG_Hybrid/budgeted.py",
     "IBG_Hybrid/contracts.py": "IBG_Hybrid/contracts.py",
+    "IBG_Hybrid/posterior_mirror.py": "IBG_Hybrid/posterior_mirror.py",
     "IBG_Hybrid/kernel_infrastructure_contract.py": (
         "IBG_Hybrid/kernel_infrastructure_contract.py"
     ),
@@ -65,6 +66,7 @@ CONTROLLER_COPY_MAP = {
     "IBG_Hybrid/control_plane_footprint.py": (
         "IBG_Hybrid/control_plane_footprint.py"
     ),
+    "IBG_Hybrid/posterior_mirror.py": "IBG_Hybrid/posterior_mirror.py",
     "IBG_Hybrid/expected_utility.py": "IBG_Hybrid/expected_utility.py",
     "IBG_Hybrid/phase0_contract.py": "IBG_Hybrid/phase0_contract.py",
     "IBG_Hybrid/policy.py": "IBG_Hybrid/policy.py",
@@ -269,6 +271,7 @@ def test_service_image_package_imports_are_isolated_safe_and_file_free(tmp_path)
             "IBG_Hybrid.kernel_processor_service",
             "IBG_Hybrid.kernel_route_forwarder_service",
             "IBG_Hybrid.kernel_flow_generator",
+            "IBG_Hybrid.posterior_mirror",
         ),
         (
             "assert all(name not in sys.modules for name in "
