@@ -7,6 +7,7 @@ from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass
 from math import isclose
 import multiprocessing
+import sys
 from typing import Mapping, Protocol, Sequence
 
 import httpx
@@ -136,7 +137,22 @@ class HybridKernelFlowGeneratorHttpClient:
         )
         if self.control_plane_meter is not None:
             self.control_plane_meter.mark_telemetry_received()
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            # The flow generator returns the whole downstream failure chain in
+            # its body, including the originating ``RouteForwardingError``.
+            # ``raise_for_status`` discards it, leaving only a bare 502.  Report
+            # it on stderr and re-raise the original error unchanged: the
+            # no-rejection route contract still fails the slot, with no retry
+            # and no imputation.
+            print(
+                "Hybrid flow-generator slot request failed: HTTP "
+                f"{error.response.status_code} {error.response.text}",
+                file=sys.stderr,
+                flush=True,
+            )
+            raise
         if self.control_plane_meter is not None:
             self.control_plane_meter.record_exchange(
                 request_field="route_command_tx",

@@ -61,7 +61,10 @@ from .slot_contracts import (
 
 EXACT_BELIEF_RETENTION = 0.8
 EXACT_EQUILIBRIUM_THRESHOLD = 0.04
-HYBRID_SLA_LATENCY_THRESHOLD_MS = 80.0
+HYBRID_SLA_LATENCY_THRESHOLD_MS = 130.0
+# Version-bounded history, newest first.  Traces recorded under an
+# earlier threshold stay readable; new writers never emit these.
+HISTORICAL_HYBRID_SLA_LATENCY_THRESHOLDS_MS = (100.0, 80.0)
 
 
 # These names intentionally describe orchestration only.  They do not select

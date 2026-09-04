@@ -334,7 +334,8 @@ def test_active_jitter_likelihood_learning_outcome_sla_fairness_and_equilibrium_
     pair = {1: 10.0, 2: 20.0}
     assert GREEDY_OUTCOME_LATENCY_MODE == "physical-only-v1"
     assert outcome_latency_ms_per_flow(physical, pair) == physical
-    raw = {1: 80.0, 2: 80.000001, 3: 83.25}
+    threshold = GREEDY_SLA_LATENCY_THRESHOLD_MS
+    raw = {1: threshold, 2: threshold + 1e-6, 3: threshold + 3.25}
     assert SLA_v(raw, GREEDY_SLA_LATENCY_THRESHOLD_MS) == 2
     assert raw_end_to_end_sla_fixture(raw) == pytest.approx((2, 3.250001))
 

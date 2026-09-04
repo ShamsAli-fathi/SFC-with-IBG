@@ -448,7 +448,10 @@ def test_observation_jitter_is_excluded_from_end_to_end_sla():
         physical_latency,
         HYBRID_SLA_LATENCY_THRESHOLD_MS,
     )
-    assert result.metrics.sla_latency_threshold_ms == 80.0
+    assert (
+        result.metrics.sla_latency_threshold_ms
+        == HYBRID_SLA_LATENCY_THRESHOLD_MS
+    )
     assert exact_latency.DEFAULT_SLA_LATENCY_MS == 110.0
     assert dict(result.metrics.raw_end_to_end_latency_ms_per_flow) == raw_end_to_end
 
@@ -597,7 +600,10 @@ def test_physical_utility_fairness_and_sla_match_exact_helpers():
         dict(result.metrics.raw_end_to_end_latency_ms_per_flow),
         HYBRID_SLA_LATENCY_THRESHOLD_MS,
     )
-    assert result.metrics.sla_latency_threshold_ms == 80.0
+    assert (
+        result.metrics.sla_latency_threshold_ms
+        == HYBRID_SLA_LATENCY_THRESHOLD_MS
+    )
 
 
 def test_repeated_slots_are_deterministic_and_beliefs_carry_forward():

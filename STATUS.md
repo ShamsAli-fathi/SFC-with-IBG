@@ -4899,3 +4899,47 @@ acceptance run under the v3 contracts, preferably at a small `M`: the completed
 `40x3x20` runs reached a maximum replica load of four, left 24 of 60 replicas
 unobserved in the final slot, and never approached the 0.04 equilibrium
 threshold. Phase 9 remains blocked.
+
+## End-to-end SLA threshold raised to 130 ms
+
+Updated: 2026-09-02.
+
+The end-to-end reporting SLA threshold is now 130 ms for both Greedy and Hybrid
+(`GREEDY_SLA_LATENCY_THRESHOLD_MS`, `HYBRID_SLA_LATENCY_THRESHOLD_MS`), chosen
+from trace evidence after 100 ms proved to sit at the steady-state median. Both
+80 ms and 100 ms are now version-bounded history. The
+selected-processing SLA stays 110 ms and realized utility is unchanged. See the
+`DECISIONS.md` entry for the reasoning and the version-bounded compatibility path
+that keeps existing 80-ms traces readable.
+
+Verified: `PYTHONPATH=. .venv/bin/pytest tests/ -q` — 1037 passed, 6 failed. All
+six failures are pre-existing and unrelated, confirmed by stashing the change and
+reproducing the identical set: five `Chart/` CSV-discovery tests
+(`test_chart_belief_all.py`, `test_chart_jain.py`) and
+`test_greedy_phase7.py::test_phase7_comparison_envelope_matches_current_active_hybrid_sources`,
+whose pinned blob hash for `IBG_Hybrid/kernel_controller.py` is stale — the
+worktree and HEAD both hash to `81d0d35`, while the test still expects
+`b940874` from before commit `1bb3407`. That stale pin is left for the user to
+decide on, since it is a real drift signal rather than a threshold issue.
+
+Also added: the Hybrid controller now reports the flow-generator response body
+on stderr before re-raising, at `IBG_Hybrid/kernel_controller.py`. A bare 502
+previously hid the originating `RouteForwardingError`. The original exception is
+re-raised unchanged, so the no-rejection route contract still fails the slot with
+no retry and no imputation.
+
+Note for reruns: `IBG_Hybrid/runner.py` and `IBG_Hybrid/kernel_controller.py` are
+both copied into the controller image only (`Dockerfile.controller`), not the
+service image. Neither the 130-ms threshold nor the stderr diagnostic takes
+effect under `--skip-build`.
+
+Known failing test, unresolved by choice:
+`test_greedy_phase7.py::test_phase7_comparison_envelope_matches_current_active_hybrid_sources`
+whole-file-pins `IBG_Hybrid/kernel_controller.py` from `Greedy/comparison.py:102`.
+It was already failing before this work because the posterior-mirror feature
+(`HybridPosteriorMirrorPort`, the `posterior_mirror` field, changed cleanup
+ordering) landed without re-running the Greedy Phase 3 audit. The stderr
+diagnostic adds a second, behavior-neutral reason: the audited invariants — one
+POST per slot, fail-before-belief-commit, close-once ownership — all still hold.
+The pin was deliberately left stale so the posterior-mirror drift gets re-audited
+rather than silently re-baselined.

@@ -16,6 +16,10 @@ from .control_plane_footprint import validate_greedy_control_plane_snapshot
 from .evidence_replay import replay_greedy_evidence_slot
 from .kernel_contracts import GreedyKernelControllerSlotResult
 from .metrics import clamped_end_to_end_fairness
+from .phase0_contract import (
+    GREEDY_SLA_LATENCY_THRESHOLD_MS,
+    HISTORICAL_GREEDY_SLA_LATENCY_THRESHOLDS_MS,
+)
 from .runtime_resources import validate_controller_resource_mapping
 from .simulation import GREEDY_FLOW_ORDER_SEED_SCHEME
 from .slot_contracts import (
@@ -555,7 +559,13 @@ def validate_greedy_slot_evidence(
         name="raw end-to-end latency", flows=flows,
     )
     threshold = metrics.get("sla_latency_threshold_ms")
-    if threshold != 80.0:
+    # Accept the active threshold or any version-bounded historical one.
+    # Violations and excess are recomputed from the recorded value below, so
+    # each trace is checked for consistency against its own threshold.
+    if threshold not in {
+        GREEDY_SLA_LATENCY_THRESHOLD_MS,
+        *HISTORICAL_GREEDY_SLA_LATENCY_THRESHOLDS_MS,
+    }:
         raise ValueError("Greedy evidence SLA threshold drifted")
     violations = sum(raw[flow] > threshold for flow in sorted(raw))
     excess = sum(max(0.0, raw[flow] - threshold) for flow in sorted(raw))

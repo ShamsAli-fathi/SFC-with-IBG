@@ -64,6 +64,10 @@ from IBG_Hybrid.posterior_mirror import (
     validate_hybrid_posterior_mirror_snapshot,
     validate_posterior_mirror_provenance,
 )
+from IBG_Hybrid.runner import (
+    HISTORICAL_HYBRID_SLA_LATENCY_THRESHOLDS_MS,
+    HYBRID_SLA_LATENCY_THRESHOLD_MS,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2315,7 +2319,10 @@ def _persist_hybrid_experiment_trace(
             or excess_ms < 0
             or isinstance(threshold, bool)
             or not isinstance(threshold, (int, float))
-            or float(threshold) != 80.0
+            or float(threshold) not in {
+                HYBRID_SLA_LATENCY_THRESHOLD_MS,
+                *HISTORICAL_HYBRID_SLA_LATENCY_THRESHOLDS_MS,
+            }
             or not isinstance(raw_end_to_end, list)
             or len(raw_end_to_end) != requested_flows
         ):

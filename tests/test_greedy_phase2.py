@@ -22,6 +22,7 @@ from Greedy.expected_utility import expected_stage_utility_from_belief
 from Greedy.learning import apply_selected_learning, maximum_belief_change
 from Greedy.metrics import compute_slot_metrics, jain_fairness
 from Greedy.oracle import capture_greedy_slot, replay_captured_slot
+from Greedy.phase0_contract import GREEDY_SLA_LATENCY_THRESHOLD_MS
 from Greedy.policy import GreedyPolicy
 from Greedy.runner import run_greedy_experiment, run_greedy_slot
 from Greedy.simulation import (
@@ -311,7 +312,7 @@ def test_physical_realized_utility_and_raw_pair_reference_remain_separate():
     )
 
 
-def test_raw_end_to_end_sla_is_strict_at_80_and_excess_is_unrounded():
+def test_raw_end_to_end_sla_is_strict_at_threshold_and_excess_is_unrounded():
     baseline_input = make_input(
         flows=1,
         stages=2,
@@ -321,7 +322,7 @@ def test_raw_end_to_end_sla_is_strict_at_80_and_excess_is_unrounded():
     )
     baseline = run_greedy_slot(baseline_input, clock=lambda: 0.0)
     physical = dict(baseline.metrics.physical_processing_latency_ms_per_flow)[1]
-    pair_to_boundary = 80.0 - physical
+    pair_to_boundary = GREEDY_SLA_LATENCY_THRESHOLD_MS - physical
     boundary = run_greedy_slot(
         replace(
             baseline_input,
@@ -343,7 +344,9 @@ def test_raw_end_to_end_sla_is_strict_at_80_and_excess_is_unrounded():
         clock=lambda: 0.0,
     )
 
-    assert dict(boundary.metrics.raw_end_to_end_latency_ms_per_flow)[1] == pytest.approx(80.0)
+    assert dict(boundary.metrics.raw_end_to_end_latency_ms_per_flow)[1] == pytest.approx(
+        GREEDY_SLA_LATENCY_THRESHOLD_MS
+    )
     assert boundary.metrics.end_to_end_sla_violations == 0
     assert boundary.metrics.end_to_end_sla_excess_ms == pytest.approx(0.0)
     assert above.metrics.end_to_end_sla_violations == 1

@@ -3583,3 +3583,77 @@ unit-mass tolerance`.
   still re-read from the finished Job, so a dropped, truncated, or reordered
   follow cannot shorten or alter a persisted trace. The lifecycle hook defaults
   to absent, so every non-launcher caller keeps the previous behavior.
+
+## End-to-end SLA threshold raised to 130 ms
+
+Accepted: 2026-09-02.
+
+The end-to-end reporting SLA threshold moved from 80 ms to 130 ms at the user's
+direction, for **both** Greedy and Hybrid together. It passed briefly through
+100 ms, which trace evidence showed was too tight (see the calibration below);
+100 ms therefore also became version-bounded history rather than an active
+value. Changing only one policy
+would have made their `end_to_end_sla_violations` and `end_to_end_sla_excess_ms`
+series incomparable, which the cross-policy comparison honesty rule forbids
+stating as a same-input result.
+
+- `Greedy/phase0_contract.py` — `GREEDY_SLA_LATENCY_THRESHOLD_MS = 130.0`
+- `IBG_Hybrid/runner.py` — `HYBRID_SLA_LATENCY_THRESHOLD_MS = 130.0`
+
+This threshold is the raw end-to-end reporting metric only. It is distinct from
+`IBG/latency_model.py`'s `DEFAULT_SLA_LATENCY_MS = 110.0`, which remains the
+selected-processing SLA under `physical-only-v1` and continues to drive realized
+utility. Neither the 110-ms SLA, the physical `half-normal-additive-v1` scales,
+nor the `half-normal-observation-v1` observation scales were touched.
+
+Historical traces stay readable rather than being migrated or rewritten. Both
+validators accept the active value or any version-bounded historical one, held
+newest-first in `HISTORICAL_GREEDY_SLA_LATENCY_THRESHOLDS_MS` and
+`HISTORICAL_HYBRID_SLA_LATENCY_THRESHOLDS_MS`, currently `(100.0, 80.0)`. New
+writers never emit a historical value:
+
+- `Greedy/evidence.py` — `validate_greedy_slot_evidence`
+- `scripts/run_hybrid_kernel_phase4.py` — Hybrid trace slot-metric validation
+
+No evidence contract version was bumped. The recorded metric field
+`sla_latency_threshold_ms` does not change shape, and both validators already
+recompute violations and excess from each trace's own recorded threshold, so a
+trace is always checked for internal consistency against the value it declares.
+Any third value is still rejected as drift, preserving the original intent of
+the check. Mixed-generation CSV remains refused rather than implicitly migrated.
+
+Greedy Phase 2 and Phase 3 boundary tests now derive the boundary from the
+constant instead of pinning 80 ms, so a future threshold change does not silently
+invalidate the strict-inequality coverage.
+
+### 130 ms calibration evidence
+
+Chosen from `runs/ibg-hybrid-experiment-20260902T123510.217103Z.jsonl` — a
+50x3x10 deterministic-lookahead run, `netem` disabled, 11 slots to equilibrium,
+550 flow samples, `profile-seed=50`.
+
+Steady state (last 5 slots, n=250): p50 94.9 ms, p90 123.2 ms, p95 130.2 ms,
+max 161.9 ms. Latency decomposes as physical processing p50 71.5 ms and measured
+pair p50 26.5 ms, so roughly three-quarters of end-to-end is processing.
+
+Violation rate by candidate threshold:
+
+| Threshold | All 11 slots | Last 5 slots |
+|---|---|---|
+| 80 ms | 79.1% | — |
+| 100 ms | 53.6% | 43.2% |
+| 110 ms | 41.8% | 29.2% |
+| 120 ms | 29.6% | 13.2% |
+| 130 ms | 19.5% | 5.6% |
+| 150 ms | 8.4% | 1.2% |
+
+100 ms sat at the steady-state median, so it failed ~43% of flows after beliefs
+converged. A threshold at the median reports the centre of the distribution
+rather than its tail and compresses any Greedy-versus-Hybrid difference toward a
+coin flip. 130 ms sits just past the steady-state p90/p95, giving 5.6% steady
+violations while still exposing the learning transient at 19.5% across all
+slots.
+
+Caveats recorded rather than resolved: this is a single run at one profile seed,
+and the choice is conditioned on `netem` being disabled. Enabling replica-Pod
+egress delay grows the pair component and invalidates this calibration.

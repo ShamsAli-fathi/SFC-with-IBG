@@ -48,6 +48,7 @@ from Greedy.kernel_controller_config import (
 )
 from Greedy.kernel_flow_generator import create_app as create_generator_app
 from Greedy.kernel_processor_service import create_app as create_processor_app
+from Greedy.phase0_contract import GREEDY_SLA_LATENCY_THRESHOLD_MS
 from Greedy.kernel_kubernetes_discovery import (
     GreedyKubernetesApi,
     GreedyKubernetesReplicaDiscovery,
@@ -999,25 +1000,35 @@ def test_telemetry_cannot_change_completed_selection_and_learning_is_selected_on
     second.close()
 
 
-def test_kernel_metrics_keep_physical_utility_pair_reference_and_strict_80ms_sla():
+def test_kernel_metrics_keep_physical_utility_pair_reference_and_strict_sla():
+    # Two stages of 20 ms physical each, so this pair latency lands the raw
+    # end-to-end value exactly on the active threshold.
+    physical_ms = 20.0
+    boundary_pair_ms = GREEDY_SLA_LATENCY_THRESHOLD_MS - 2 * physical_ms
     boundary = controller(
         flows=1,
         stages=2,
         replicas=1,
-        generator=FakeFlowGenerator(physical_ms=20.0, pair_ms=40.0),
+        generator=FakeFlowGenerator(physical_ms=physical_ms, pair_ms=boundary_pair_ms),
     )
     above = controller(
         flows=1,
         stages=2,
         replicas=1,
-        generator=FakeFlowGenerator(physical_ms=20.0, pair_ms=40.000001),
+        generator=FakeFlowGenerator(
+            physical_ms=physical_ms, pair_ms=boundary_pair_ms + 1e-6
+        ),
     )
     boundary_result = boundary.run_slot(1).slot
     above_result = above.run_slot(1).slot
 
     assert boundary_result.metrics.physical_realized_aggregate_utility == pytest.approx(158.0)
-    assert boundary_result.metrics.raw_end_to_end_reference_utility == pytest.approx(118.0)
-    assert dict(boundary_result.metrics.raw_end_to_end_latency_ms_per_flow)[1] == pytest.approx(80.0)
+    assert boundary_result.metrics.raw_end_to_end_reference_utility == pytest.approx(
+        158.0 - boundary_pair_ms
+    )
+    assert dict(boundary_result.metrics.raw_end_to_end_latency_ms_per_flow)[1] == pytest.approx(
+        GREEDY_SLA_LATENCY_THRESHOLD_MS
+    )
     assert boundary_result.metrics.end_to_end_sla_violations == 0
     assert boundary_result.metrics.end_to_end_sla_excess_ms == 0
     assert above_result.metrics.end_to_end_sla_violations == 1
